@@ -21,10 +21,10 @@ class OccurrenceIndex:
         self.expr_reading_to_count: Dict[Tuple[str, str], int] = {}
 
     def add(self, expression: str, reading: Optional[str], count: int) -> None:
-        if reading:
-            self.expr_reading_to_count[(expression, reading)] = count
-        else:
-            self.expr_to_count[expression] = count
+        count_dict = self.expr_reading_to_count if reading else self.expr_to_count
+        key = (expression, reading) if reading else expression
+        if key not in count_dict or count < count_dict[key]:
+            count_dict[key] = count
 
     def get(self, expression: str, reading: str) -> int:
         if (expression, reading) in self.expr_reading_to_count:
