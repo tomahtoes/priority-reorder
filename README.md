@@ -13,7 +13,7 @@ This addon ensures you learn the cards you think are most important first. Inste
 <details>
   <summary>View Example</summary>
   <br>
-  <img src="example.png" alt="Example of priority reorder" width="800">
+  <img src="example.png" alt="Example of priority reorder">
 
   <details>
     <summary>View My Config</summary>
