@@ -1,158 +1,148 @@
 # Priority Reorder Addon
 
-A new anki addon that reorders your cards, allowing you to prioritize certain cards. The main goal for this addon is to not only have frequency reordering but also allowing you to focus more specifically on certain cards you want to learn earlier.
+Reorder your Anki cards to prioritize what matters most to you. 
 
-For example: you could focus on recent cards (which you will have fresher memory of), cards with certain tags (maybe you tag based on the games/shows/book/etc you mined from), and also by using Yomitan occurrence dictionaries to focus on cards from media you're currently consuming or plan to in the future (to learn words that you know for sure you will be seeing more often).
+## Overview
+This addon ensures you learn the cards you think are most important first. Instead of seeing new cards in just frequency order, you can create a "Priority Queue" based on lots of different criteria:
+- **Frequency**: Learn common words before rare ones (using frequency lists).
+- **Immersion**: Prioritize words that appear in the VN/Book/Game/Show you are currently/planning on enjoying (using occurrence dictionaries).
+- **Recency**: Learn cards you added recently rather than older cards.
+- **Kanji**: Prioritize words based on your Kanji knowledge.
+- **Content**: Prioritize specific decks, tags, or card types.
 
-**Install from [AnkiWeb](https://ankiweb.net/shared/info/857040600).**
+<details>
+  <summary>View Example</summary>
+  <br>
+  <img src="example.png" alt="Example of priority reorder" width="600">
 
-## Usage
-The addon will run automatically before sync if enabled. You can also manually trigger the reordering with Ctrl+Alt+` or Tools → Reorder Cards.
-
-The addon divides your cards into two (or more) sorted queues: **Priority** and **Normal**.
-![Basic Priority System](diagrams/priority_diagram.svg)
-
-## Configuration
-
-> **Note**: Either of the search fields may be left empty and cards will still be sorted normally just based on their sort field. The addon automatically adds `is:new` to all searches to ensure only new cards are affected.
-
-### Basic Settings
-
-- **`priority_search`**: Anki search string(s) for priority queue cards. Can be a single string or a list of strings for multiple priority searches (e.g., "deck:Japanese added:4" or ["deck:Japanese added:3", "deck:Japanese added:7"])
-- **`priority_search_mode`**: Options: `sequential` or `mix`. Determines how to handle multiple priority searches (default: `sequential`)
-    - `sequential`: each priority search will be sorted individually and ordered sequentially
-    - `mix`: combines all priority searches before sorting
-- **`normal_search`**: Anki search string for normal queue cards (e.g., "deck:Japanese -added:4")
-    - **Note**: The addon will remove duplicates cards if included in multiple searches (keeping it only in the high priority section it appears), so you shouldn't have to actually make this search this precise to avoid conflicts.
-- **`sort_field`**: Field name to sort by (e.g., "FreqSort", "Frequency")
-    - **Note**: This addon requires you to use a notetype with frequencies in it to function, I recommend [Lapis](https://github.com/donkuri/lapis) if you need one. If you need to backfill cards frequencies, I recommend [backfill-anki-yomitan](https://github.com/Manhhao/backfill-anki-yomitan).
-- **`sort_reverse`**: Whether to sort in descending order (default: false = ascending)
-
-### Advanced Settings
-- **`priority_cutoff`**: If a priority card's field value exceeds this (or is less than for reverse), it moves to normal queue
-- **`normal_prioritization`**: If a normal card's field value is below this (or above for reverse), it moves to priority queue
-- **`priority_limit`**: Maximum number of cards in the priority queue (excess cards move to normal queue)
-- **`shift_existing`**: Whether to shift existing cards when repositioning (default: true)
-- **`reorder_before_sync`**: Whether to automatically reorder before sync operations (default: true)
-
-### Search Options Settings
-> This section is used for configuring the addon for advanced search functionality, for now only occurrence-based searching from Yomitan dictionaries. If you don't intend on using this functionality this section can be ignored.
-- **`search_fields`**:
-  - **`expression_field`**: Field name containing the expression/word to match against dictionaries (default: "Expression")
-  - **`expression_reading_field`**: Field name containing the reading/pronunciation to match against dictionaries (default: "ExpressionReading")
-
-## Usage
-> **Testing Search Fields**
->
-> You can test your search strings in the Anki card browser to verify that they work before using them in the addon. While you can't test the occurrence logic in there, as long as you know the rest works you can verify the occurrence by initiating a manual reorder.
-
-A simple default configuration shows an example prioritizing recently added cards:
-- **Priority Queue**: `deck:日本語::Mining added:3` (cards added in the last 3 days)
-- **Normal Queue**: `deck:日本語::Mining -added:3` (older cards)
-
-Cards could instead be prioritized based on tags to prioritize certain types of content, for example:
-- **Priority Queue**: `deck:日本語::Mining tag:ノベルゲーム::銀色、遥か` (specific content)
-- **Normal Queue**: `deck:日本語::Mining -tag:ノベルゲーム::銀色、遥か` (other content)
-
-### Occurrence-Based Prioritization
-Cards can be prioritized based on occurrence counts from Yomitan dictionaries:
-- **Priority Queue**: `deck:日本語::Mining occurrences:銀色、遥か>=50` (high frequency words)
-- **Normal Queue**: `deck:日本語::Mining occurrences:銀色、遥か<50` (lower frequency words)
-
-**Occurrence Search Patterns:**
-- `occurrences:銀色、遥か>=50` - Cards with occurrence count >= 50 in dictionary `銀色、遥か`
-- `occurrences:銀色、遥か<50` - Cards with occurrence count < 50 in dictionary `銀色、遥か`
-- `occurrences:銀色、遥か=0` - Cards with no occurrences in dictionary `銀色、遥か`
-
-## Examples
-
-### Basic Usage
-```json
-{
-    "priority_search": "deck:日本語::Mining added:3",
-    "normal_search": "deck:日本語::Mining -added:3",
-    "sort_field": "FreqSort",
-    "sort_reverse": false
-}
-```
-![Priority Queue](diagrams/priority_diagram.svg)
-
-### With Multiple Priorities
-```json
-{
-    "priority_search": ["deck:日本語::Mining added:3", "deck:日本語::Mining added:7"],
-    "priority_search_mode": "sequential",
-    "normal_search": "deck:日本語::Mining -added:7",
-    "sort_field": "FreqSort",
-    "sort_reverse": false
-}
-```
-![Sequential Priorities](diagrams/sequential_priorities_diagram.svg)
-
-### With Cutoff And Prioritization Rules
-```json
-{
-    "priority_search": "deck:日本語::Mining added:4",
-    "normal_search": "deck:日本語::Mining -added:4",
-    "sort_field": "FreqSort",
-    "sort_reverse": false,
-    "priority_cutoff": 10000,
-    "normal_prioritization": 1000
-}
-```
-![Cutoff and Prioritization](diagrams/cutoff_prioritization_diagram.svg)
-
-This configuration means:
-- Recently added cards (added:4) with frequency > 10000 move to normal queue
-- Older cards (-added:4) with frequency < 1000 move to priority queue
-
-### With Priority Limit
-```json
-{
-    "priority_search": "deck:日本語::Mining added:4",
-    "normal_search": "deck:日本語::Mining -added:4",
-    "sort_field": "FreqSort",
-    "sort_reverse": false,
-    "priority_limit": 50
-}
-```
-![Priority Limit](diagrams/priority_limit_diagram.svg)
-
-This configuration ensures that only the top 50 highest-priority cards (based on FreqSort) will be in the priority queue, regardless of how many cards match the priority search criteria.
-
-### With Occurrence Search
-```json
-{
-    "priority_search": "deck:日本語::Mining occurrences:銀色、遥か>=50",
-    "normal_search": "deck:日本語::Mining occurrences:銀色、遥か<50",
-    "sort_field": "FreqSort",
-    "sort_reverse": false,
-    "search_fields": {
+  <details>
+    <summary>View My Config</summary>
+    <br>
+  
+    ```json
+    {
+      "normal_prioritization": null,
+      "normal_search": "deck:日本語::Mining",
+      "priority_cutoff": null,
+      "priority_limit": null,
+      "priority_search": [
+        "deck:日本語::Mining occurrences:[9-nine-ここのつここのかここのいろ,9-nine-そらいろそらうたそらのおと,9-nine-はるいろはるこいはるのかぜ,9-nine-ゆきいろゆきはなゆきのあと]>=10",
+        "deck:日本語::Mining occurrences:[9-nine-ここのつここのかここのいろ,9-nine-そらいろそらうたそらのおと,9-nine-はるいろはるこいはるのかぜ,9-nine-ゆきいろゆきはなゆきのあと]>=3",
+        "deck:日本語::Mining occurrences:この世の果てで恋を唄う少女YU-NO>=3 added:14",
+        "deck:日本語::Mining occurrences:穢翼のユースティア>=10 added:14",
+        "deck:日本語::Mining occurrences:魔法少女ノ魔女裁判>=10 added:14",
+        "deck:日本語::Mining occurrences:[うたわれるもの,うたわれるもの2,うたわれるもの3]>=20 added:14",
+        "deck:日本語::Mining kanji:new=1 added:2 occurrences:[この世の果てで恋を唄う少女YU-NO,穢翼のユースティア]>=5",
+        "deck:日本語::Mining occurrences:この世の果てで恋を唄う少女YU-NO>=7",
+        "deck:日本語::Mining occurrences:この世の果てで恋を唄う少女YU-NO>=5"
+      ],
+      "priority_search_mode": "sequential",
+      "reorder_before_sync": true,
+      "search_fields": {
         "expression_field": "Expression",
         "expression_reading_field": "ExpressionReading"
+      },
+      "shift_existing": true,
+      "sort_field": "FreqSort",
+      "sort_reverse": false
     }
-}
-```
-![Occurrence Search](diagrams/occurrence_search_diagram.svg)
+    ```
+  </details>
 
-This configuration prioritizes cards based on occurrence frequency from a Yomitan occurrence dictionary.
+  As you can see, my current setup has several priority queues. I generally focus on my highest priorities being focused on frequent words from VN I'm currently reading. Later priority queues are more frequent cards in future VNs I want to read by the frequent cards.
+</details>
 
-## Occurrence Dictionary Setup
 
-> **Downloading occurrence dictionaries**
->
-> To use the occurrence searching you will need Yomitan occurrence dictionaries. I highly recommend downloading them from [Jiten](https://jiten.moe/). In addition to having lots of useful stats on various pieces of media, they have the option of downloading occurrence dictionaries for any media they have catalogued under `Download deck -> Yomitan (occurrences)` on each piece of media's page.
+## Installation
+1. Install from [AnkiWeb](https://ankiweb.net/shared/info/857040600).
+2. Restart Anki.
 
-To use occurrence search, you need to:
-1. **Create the `user_files` directory** in your addon folder (Tools -> Addons -> Priority Reorder -> View Files)
-2. **Add dictionary directories** for each dictionary you want to use:
+> This addon requires you to use a notetype with frequency data to function. I recommend [Lapis](https://github.com/donkuri/lapis) if you need one. If you need to backfill frequency data into existing cards, check out [backfill-anki-yomitan](https://github.com/Manhhao/backfill-anki-yomitan).
+
+## Quick Start
+By default, the addon ships with a default config that prioritizes cards added in the last 3 days, but you will need to customize it to your own deck and needs. To edit the config, follow these steps:
+
+1. Go to **Tools** -> **Add-ons** -> **Priority Reorder** -> **Config**.
+2. Edit your config (let's say you want to prioritize cards added in the last 5 days instead):
+   ```json
+   {
+        "priority_search": [
+            "deck:日本語::Mining added:5"
+        ],
+        "normal_search": "deck:日本語::Mining",
+        "sort_field": "FreqSort",
+        "sort_reverse": false
+   }
+   ```
+   > Note: If you have spaces in deck names or occurrence dictionary folder names, you will need to escape them like `"\"deck:日本語::Mining Deck\" added:5"`.
+3. Change `"FreqSort"` to the actual name of the sort field in your note type (e.g., `"FreqSort"`, `"Frequency"`).
+4. Press **OK**. 
+5. The addon will automatically reorder your new cards **after** each sync completes. You can also press ``Ctrl+Alt+` `` to reorder manually.
+
+> **Multi-device users**: Reordering runs *after* sync, so your desktop will always have fresh ordering. If you review on your phone, keep this in mind and either run a manual reorder (``Ctrl+Alt+` ``) before syncing or sync a second time to ensure your phone has the updated order.
+
+## How it Works
+The addon splits your **New Cards** into two groups:
+1.  **Priority Queue**: Cards matching your `priority_search`. These will be shown *first*.
+2.  **Normal Queue**: Cards matching your `normal_search`. These will be shown *after* the priority cards.
+
+Both queues are sorted internally by your `sort_field`. If there are duplicates, those in the highest priority queue matching the card will take precedence. So in the example above, cards added in the last 3 days will be shown first and then even though those cards are also in the normal queue, the priority queue will have already scheduled them first.
+
+## Features Guide
+The addon supports several custom filters that you can mix in with standard Anki searches:
+- **`f<10000`**: Filter by the value in your frequency sort field.
+- **`occurrences:DictionaryName>5`**: Filter by word occurrences in a dictionary.
+- **`limit=20`**: Limit the number of results from a specific search.
+- **`kanji:num=1`**: Filter by the total number of Kanji.
+- **`kanji:new=1`**: Filter by the number of unknown Kanji.
+
+### 1. Frequency Sorting (`f`)
+You can prioritize cards based on the numeric value in their sort field. This is most useful in combination with other filters, if you want to prioritize common words in an occurrence search for example.
+- **Syntax**: `f<10000` or `f>=30000`. Supports all comparison operators: `=`, `!=`, `<`, `<=`, `>`, `>=`.
+
+### 2. Occurrence Mining (`occurrences:`)
+Prioritize words found in specific media (requires Yomitan dictionaries).
+- **Syntax**: `occurrences:DictionaryName>=5` or `occurrences:[Dict1,Dict2]>=5`
+- **Example**: `occurrences:銀色、遥か>=5` matches cards where the word appears 5 or more times in `銀色、遥か`.
+- **Combined**: `occurrences:[銀色、遥か,この世の果てで恋を唄う少女YU-NO]>=10` matches cards where the combined frequency across both dictionaries is 10 or more.
+
+#### Setup for Occurrence Dictionaries
+> To use occurrence searching, you need Yomitan occurrence dictionaries. I highly recommend downloading them from [Jiten](https://jiten.moe/). They offer occurrence dictionaries for any media they have cataloged under `Download deck -> Yomitan (occurrences)` on each media page.
+
+1. Go to **Tools** -> **Add-ons** -> **Priority Reorder** -> **View Files**.
+2. Open the `user_files` folder.
+3. Create a folder for your dictionary (e.g., `銀色、遥か`).
+4. Inside that folder, place your `term_meta_bank_1.json` file (exported from [Jiten](https://jiten.moe/)), so that your folder structure looks like this:
    ```
    user_files/
    ├── 銀色、遥か/
    │   └── term_meta_bank_1.json
-   ├── 君と彼女と彼女の恋。/
-   │   └── term_meta_bank_1.json
-   └── たねつみの歌/
+   └── この世の果てで恋を唄う少女YU-NO/
        └── term_meta_bank_1.json
    ```
-3. **Configure field names** to match your note type's expression and reading fields
+5. In your config, set `search_fields` to match your note type, which for [Lapis](https://github.com/donkuri/lapis) would be:
+   ```json
+   "search_fields": {
+       "expression_field": "Expression",
+       "expression_reading_field": "ExpressionReading"
+   }
+   ```
+   
+### 3. Kanji Prioritization (`kanji:`)
+Prioritize words based on your existing Kanji knowledge (scanned from your Review cards).
+- **`kanji:new=0`**: Matches words where you *already know* all the characters.
+- **`kanji:new=1`**: Matches words with exactly 1 unknown character.
+- **`kanji:new>=2`**: Matches words with 2 or more unknown characters.
+- **`kanji:num=1`**: Matches words with exactly 1 Kanji.
+- **`kanji:num>=3`**: Matches words with 3 or more Kanji.
+
+### 4. Multiple Priorities
+Match multiple unrelated criteria by using a list.
+- **Sequential**: First match `added:3`, THEN match `tag:ノベルゲーム::銀色、遥か`.
+- **Mix**: Match `added:3` OR `tag:ノベルゲーム::銀色、遥か` and sort them all together.
+
+### 5. Limits and Cutoffs
+- **`limit=X`**: Use in a search string to take only the top X cards.
+  - Example: `added:3 limit=20` (Only the top 20 most frequent recent cards).
+- **`priority_limit`**: Global limit for the priority queue.
+- **`priority_cutoff`**: Send high-frequency words back to the normal queue even if they matched priority.

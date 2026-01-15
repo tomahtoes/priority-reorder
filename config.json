@@ -1,5 +1,7 @@
 {
-    "priority_search": ["deck:日本語::Mining added:3"],
+    "priority_search": [
+        "deck:日本語::Mining added:3"
+    ],
     "priority_search_mode": "sequential",
     "normal_search": "deck:日本語::Mining -added:3",
     "sort_field": "FreqSort",
@@ -8,7 +10,7 @@
     "normal_prioritization": null,
     "priority_limit": null,
     "shift_existing": true,
-    "reorder_before_sync": true,
+    "reorder_on_sync": true,
     "search_fields": {
         "expression_field": "Expression",
         "expression_reading_field": "ExpressionReading"

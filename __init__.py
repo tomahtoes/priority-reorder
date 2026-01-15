@@ -8,22 +8,22 @@ from aqt.qt import QAction, QKeySequence
 from aqt import gui_hooks
 from aqt.operations import CollectionOp
 
-from . import config
-from . import cards
+from .reorderer import run_reorder
+from .config_manager import get_config
 
-def run_in_background():
+def run_in_background() -> None:
     """Run the reordering operation in the background"""
-    operation = CollectionOp(parent=mw, op=cards.reorder_cards_with_priority_queue).failure(
+    operation = CollectionOp(parent=mw, op=run_reorder).failure(
         lambda err: showInfo(f"Error during reordering: {err}")
     )
     operation.run_in_background()
 
-def setup_sync_hook():
+def setup_sync_hook() -> None:
     """Set up sync hook if enabled in config"""
-    if config.get_current_config().reorder_before_sync:
-        gui_hooks.sync_will_start.append(lambda: cards.reorder_cards_with_priority_queue(mw.col))
+    if get_config().reorder_on_sync:
+        gui_hooks.sync_did_finish.append(lambda: run_reorder(mw.col))
 
-def setup_menu():
+def setup_menu() -> None:
     """Set up menu entries and shortcuts"""
     action = QAction("Reorder Cards", mw)
     action.setShortcut(QKeySequence("Ctrl+Alt+`"))
@@ -31,6 +31,5 @@ def setup_menu():
     mw.form.menuTools.addAction(action)
 
 # Initialize the addon
-config.reload_config()
 setup_sync_hook()
 setup_menu()
