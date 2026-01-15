@@ -13,13 +13,13 @@ This addon ensures you learn the cards you think are most important first. Inste
 <details>
   <summary>View Example</summary>
   <br>
-  <img src="example.png" alt="Example of priority reorder" width="600">
+  <img src="example.png" alt="Example of priority reorder" width="800">
 
   <details>
     <summary>View My Config</summary>
     <br>
   
-    ```json
+    ```
     {
       "normal_prioritization": null,
       "normal_search": "deck:日本語::Mining",
@@ -63,15 +63,14 @@ This addon ensures you learn the cards you think are most important first. Inste
 By default, the addon ships with a default config that prioritizes cards added in the last 3 days, but you will need to customize it to your own deck and needs. To edit the config, follow these steps:
 
 1. Go to **Tools** -> **Add-ons** -> **Priority Reorder** -> **Config**.
-2. Edit your config (let's say you want to prioritize cards added in the last 5 days instead):
+2. Edit your config with the fields you want to update (let's say you want to prioritize cards added in the last 5 days instead):
    ```json
    {
         "priority_search": [
             "deck:日本語::Mining added:5"
         ],
         "normal_search": "deck:日本語::Mining",
-        "sort_field": "FreqSort",
-        "sort_reverse": false
+        "sort_field": "FreqSort"
    }
    ```
    > Note: If you have spaces in deck names or occurrence dictionary folder names, you will need to escape them like `"\"deck:日本語::Mining Deck\" added:5"`.
