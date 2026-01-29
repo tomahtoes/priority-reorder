@@ -102,8 +102,7 @@ class PriorityReorderer:
                     final_normal.append(card)
                 else:
                     kept.append(card)
-            if kept:
-                final_priority.append(kept)
+            final_priority.append(kept)
 
         # Filter normal list (Prioritization)
         new_normal = []
@@ -130,18 +129,22 @@ class PriorityReorderer:
             all_priority_cards = {c.card_id: c for b in buckets for c in b}
             
             for i, bucket in enumerate(buckets):
-                sorted_bucket = self._sort_cards(bucket)
+                # Filter to cards that match this bucket and haven't been placed yet
+                eligible = [c for c in bucket if c.card_id not in seen]
+                sorted_bucket = self._sort_cards(eligible)
                 
                 limit = defs[i][2] if i < len(defs) else None
                 if limit is not None:
-                    sorted_bucket = sorted_bucket[:limit]
-                    
-                for card in sorted_bucket:
-                    if card.card_id not in seen:
+                    # Take only up to limit; rest can fall through to later buckets
+                    for card in sorted_bucket[:limit]:
+                        queue.append(card)
+                        seen.add(card.card_id)
+                else:
+                    for card in sorted_bucket:
                         queue.append(card)
                         seen.add(card.card_id)
             
-            # Cards that matched priority but didn't make it into the queue go to overflow
+            # Cards that matched priority but didn't make it into any bucket go to overflow
             for cid, card in all_priority_cards.items():
                 if cid not in seen:
                     overflow.append(card)
