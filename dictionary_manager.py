@@ -11,7 +11,11 @@ class OccurrenceIndex:
     def add(self, expression: str, reading: Optional[str], count: int) -> None:
         if reading:
             self.expr_reading_to_count[(expression, reading)] = count
-        else:
+            
+        # Always fallback to expression alone to account for reading mismatches
+        # If multiple entries have the same expression but different readings, 
+        # the fallback just assumes the highest frequency reading.
+        if expression not in self.expr_to_count or count > self.expr_to_count[expression]:
             self.expr_to_count[expression] = count
 
     def get(self, expression: str, reading: str) -> int:
@@ -58,14 +62,25 @@ def _parse_term_meta_bank(path: str) -> OccurrenceIndex:
         if not isinstance(entry, list) or len(entry) < 3:
             continue
         expression = entry[0]
-        meta = entry[2] if isinstance(entry[2], dict) else {}
-        reading = meta.get("reading") if isinstance(meta.get("reading"), str) else None
+        meta = entry[2]
+        reading = None
         count = 0
-        freq_obj = meta.get("frequency")
-        if isinstance(freq_obj, dict) and isinstance(freq_obj.get("value"), int):
-            count = int(freq_obj["value"])
-        elif isinstance(meta.get("value"), int):
-            count = int(meta["value"])
+
+        if isinstance(meta, dict):
+            reading = meta.get("reading") if isinstance(meta.get("reading"), str) else None
+            freq_obj = meta.get("frequency")
+            if isinstance(freq_obj, dict) and isinstance(freq_obj.get("value"), int):
+                count = int(freq_obj["value"])
+            elif isinstance(meta.get("value"), int):
+                count = int(meta["value"])
+        elif isinstance(meta, int):
+            count = meta
+        elif isinstance(meta, str):
+            try:
+                count = int(meta)
+            except ValueError:
+                pass
+
         if isinstance(expression, str) and count > 0:
             index.add(expression, reading, count)
     return index
