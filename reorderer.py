@@ -171,6 +171,9 @@ class PriorityReorderer:
         if not final_ids:
             return OpChangesWithCount(count=0)
 
+        if not self._needs_reorder(final_ids):
+            return OpChangesWithCount(count=0)
+
         return mw.col.sched.reposition_new_cards(
             card_ids=final_ids,
             starting_from=0,
@@ -178,6 +181,22 @@ class PriorityReorderer:
             randomize=False,
             shift_existing=self.config.shift_existing
         )
+
+    def _needs_reorder(self, new_ids: List[int]) -> bool:
+        if not new_ids:
+            return False
+
+        try:
+            # type = 0 is "new" cards only
+            current_ids = mw.col.db.list("select id from cards where type = 0 order by due")
+        except Exception:
+            # Even though we can't know for sure, default to reordering to match historical behavior
+            return True
+
+        if len(current_ids) < len(new_ids):
+            return True
+
+        return current_ids[:len(new_ids)] != new_ids
 
     def _get_sort_key(self, card: Card) -> float:
         return card.data.sort_field_value
