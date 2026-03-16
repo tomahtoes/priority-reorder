@@ -54,6 +54,21 @@ def _load_index_file(dict_dir: str) -> Optional[str]:
             return os.path.join(dict_dir, name)
     return None
 
+def get_all_dict_names() -> List[str]:
+    """Returns a sorted list of all dictionary names in user_files, ignoring 'all'."""
+    user_files_dir = os.path.join(os.path.dirname(__file__), "user_files")
+    if not os.path.isdir(user_files_dir):
+        return []
+    
+    dict_names = []
+    for item in os.listdir(user_files_dir):
+        if item == "all":
+            continue
+        item_path = os.path.join(user_files_dir, item)
+        if os.path.isdir(item_path):
+            dict_names.append(item)
+    return sorted(dict_names)
+
 def _parse_term_meta_bank(path: str) -> OccurrenceIndex:
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)

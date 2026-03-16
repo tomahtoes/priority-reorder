@@ -3,7 +3,7 @@ from typing import List, Tuple
 import re
 from .models import Card
 from .utils import parse_comparator
-from .dictionary_manager import get_occurrence_index, get_combined_occurrence_index
+from .dictionary_manager import get_occurrence_index, get_combined_occurrence_index, get_all_dict_names
 from .kanji_manager import KanjiManager
 
 OCC_PATTERN = re.compile(r"occurrences:(?P<dict>[^=<>!]+)(?P<op>>=|<=|!=|=|<|>)(?P<thresh>\d+)")
@@ -86,11 +86,20 @@ def parse_rule_string(rule_string: str, kanji_manager: KanjiManager = None) -> T
             op = m_occ.group("op")
             thresh = int(m_occ.group("thresh"))
             
-            dict_names = []
             if dict_str.startswith('[') and dict_str.endswith(']'):
-                dict_names = [d.strip() for d in dict_str[1:-1].split(',')]
+                raw_names = [d.strip() for d in dict_str[1:-1].split(',')]
             else:
-                dict_names = [dict_str]
+                raw_names = [dict_str]
+                
+            dict_names = []
+            for name in raw_names:
+                if name == "all":
+                    dict_names.extend(get_all_dict_names())
+                else:
+                    dict_names.append(name)
+            
+            # Remove duplicates to act as true combinator
+            dict_names = list(dict.fromkeys(dict_names))
                 
             rules.append(OccurrenceRule(dict_names, op, thresh))
             continue
