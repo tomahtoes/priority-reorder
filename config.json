@@ -11,6 +11,7 @@
     "priority_limit": null,
     "shift_existing": true,
     "reorder_on_sync": true,
+    "auto_update_dicts": false,
     "search_fields": {
         "expression_field": "Expression",
         "expression_reading_field": "ExpressionReading"

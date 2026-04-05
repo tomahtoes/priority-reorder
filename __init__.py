@@ -3,13 +3,16 @@ Priority Reorder Addon - Main entry point.
 """
 
 from aqt import mw
-from aqt.utils import showInfo, qconnect
+import threading
+from aqt.utils import showInfo, tooltip, qconnect
 from aqt.qt import QAction, QKeySequence
 from aqt import gui_hooks
-from aqt.operations import CollectionOp
+from aqt.operations import CollectionOp, QueryOp
 
 from .reorderer import run_reorder
 from .config_manager import get_config
+
+from .updater import JitenUpdater
 
 def run_in_background() -> None:
     """Run the reordering operation in the background"""
@@ -18,17 +21,84 @@ def run_in_background() -> None:
     )
     operation.run_in_background()
 
+def show_updater_results(results: tuple[int, int]) -> None:
+    updated_count, failed_count = results
+    
+    if updated_count > 0:
+        msg = f"Updated {updated_count} dictionaries."
+        if failed_count > 0:
+            msg += f" (Failed: {failed_count})"
+        tooltip(msg)
+    elif failed_count > 0:
+        tooltip(f"Failed to update {failed_count} dictionaries.")
+    else:
+        tooltip("All dictionaries are already up to date.")
+
+def run_updater_background(manual: bool) -> None:
+    """Runs the updater purely in the background via threading to avoid Anki's locking task manager."""
+    updater = JitenUpdater()
+    total_dicts = updater.get_dictionary_count()
+    
+    try:
+        next_day_cutoff = getattr(mw.col.sched, "day_cutoff", getattr(mw.col.sched, "dayCutoff", 0))
+    except Exception:
+        import time
+        next_day_cutoff = int(time.time()) + 86400
+        
+    def worker() -> None:
+        def show_checking() -> None:
+            mw.taskman.run_on_main(lambda: tooltip(f"Checking updates for {total_dicts} dictionaries..."))
+            
+        timer = threading.Timer(0.3, show_checking)
+        if total_dicts > 0:
+            timer.start()
+            
+        try:
+            results = updater.update_dictionaries(manual=manual, next_day_cutoff=next_day_cutoff)
+            timer.cancel()
+            mw.taskman.run_on_main(lambda: show_updater_results(results))
+            
+            # Chain the reorder process on sync completion if not manual
+            if not manual and get_config().reorder_on_sync:
+                mw.taskman.run_on_main(run_in_background)
+        except Exception as e:
+            timer.cancel()
+            mw.taskman.run_on_main(lambda: showInfo(f"Error during dictionary update: {e}"))
+
+    threading.Thread(target=worker, daemon=True).start()
+
+def update_jiten_dicts() -> None:
+    """Manually triggered update"""
+    run_updater_background(manual=True)
+
+def handle_sync_did_finish() -> None:
+    """Run on sync finish to update dicts and run reorder"""
+    config = get_config()
+    
+    if config.auto_update_dicts:
+        run_updater_background(manual=False)
+    elif config.reorder_on_sync:
+        run_in_background()
+
 def setup_sync_hook() -> None:
     """Set up sync hook if enabled in config"""
-    if get_config().reorder_on_sync:
-        gui_hooks.sync_did_finish.append(lambda: run_reorder(mw.col))
+    gui_hooks.sync_did_finish.append(handle_sync_did_finish)
 
 def setup_menu() -> None:
     """Set up menu entries and shortcuts"""
-    action = QAction("Reorder Cards", mw)
-    action.setShortcut(QKeySequence("Ctrl+Alt+`"))
-    qconnect(action.triggered, run_in_background)
-    mw.form.menuTools.addAction(action)
+    from aqt.qt import QMenu
+    menu = QMenu("Priority Reorder", mw)
+    
+    reorder_action = QAction("Reorder Cards", mw)
+    reorder_action.setShortcut(QKeySequence("Ctrl+Alt+`"))
+    qconnect(reorder_action.triggered, run_in_background)
+    menu.addAction(reorder_action)
+    
+    update_dicts_action = QAction("Update Jiten Occurrence Dictionaries", mw)
+    qconnect(update_dicts_action.triggered, update_jiten_dicts)
+    menu.addAction(update_dicts_action)
+    
+    mw.form.menuTools.addMenu(menu)
 
 # Initialize the addon
 setup_sync_hook()

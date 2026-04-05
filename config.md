@@ -62,6 +62,10 @@
 - **Description**: When enabled, the addon will automatically run the reordering logic after each sync completes.
 - **Default**: `true`
 
+### `auto_update_dicts` (bool)
+- **Description**: When enabled, the addon will automatically check your Jiten-sourced occurrence dictionaries and download any updates exactly once per day on sync.
+- **Default**: `false`
+
 ---
 
 ## Search Syntax Cheat Sheet

@@ -19,6 +19,7 @@ class Config:
     priority_limit: Optional[int] = None
     shift_existing: bool = True
     reorder_on_sync: bool = True
+    auto_update_dicts: bool = False
     search_config: SearchConfig = field(default_factory=SearchConfig)
 
     @classmethod
@@ -40,6 +41,7 @@ class Config:
             priority_limit=data.get("priority_limit"),
             shift_existing=data.get("shift_existing", True),
             reorder_on_sync=data.get("reorder_on_sync", data.get("reorder_after_sync", data.get("reorder_before_sync", True))),
+            auto_update_dicts=data.get("auto_update_dicts", False),
             search_config=search_config
         )
 

@@ -28,13 +28,12 @@ This addon ensures you learn the cards you think are most important first. Inste
       "priority_search": [
         "deck:日本語::Mining occurrences:[9-nine-ここのつここのかここのいろ,9-nine-そらいろそらうたそらのおと,9-nine-はるいろはるこいはるのかぜ,9-nine-ゆきいろゆきはなゆきのあと]>=10",
         "deck:日本語::Mining occurrences:[9-nine-ここのつここのかここのいろ,9-nine-そらいろそらうたそらのおと,9-nine-はるいろはるこいはるのかぜ,9-nine-ゆきいろゆきはなゆきのあと]>=3",
-        "deck:日本語::Mining occurrences:この世の果てで恋を唄う少女YU-NO>=3 added:14",
+        "deck:日本語::Mining occurrences:穢翼のユースティア>=3 added:14",
         "deck:日本語::Mining occurrences:穢翼のユースティア>=10 added:14",
         "deck:日本語::Mining occurrences:魔法少女ノ魔女裁判>=10 added:14",
         "deck:日本語::Mining occurrences:[うたわれるもの,うたわれるもの2,うたわれるもの3]>=20 added:14",
-        "deck:日本語::Mining kanji:new=1 added:2 occurrences:[この世の果てで恋を唄う少女YU-NO,穢翼のユースティア]>=5",
-        "deck:日本語::Mining occurrences:この世の果てで恋を唄う少女YU-NO>=7",
-        "deck:日本語::Mining occurrences:この世の果てで恋を唄う少女YU-NO>=5"
+        "deck:日本語::Mining occurrences:穢翼のユースティア>=7",
+        "deck:日本語::Mining occurrences:穢翼のユースティア>=5"
       ],
       "priority_search_mode": "sequential",
       "reorder_before_sync": true,
@@ -103,7 +102,8 @@ You can prioritize cards based on the numeric value in their sort field. This is
 Prioritize words found in specific media (requires Yomitan dictionaries).
 - **Syntax**: `occurrences:DictionaryName>=5` or `occurrences:[Dict1,Dict2]>=5`
 - **Example**: `occurrences:銀色、遥か>=5` matches cards where the word appears 5 or more times in `銀色、遥か`.
-- **Combined**: `occurrences:[銀色、遥か,この世の果てで恋を唄う少女YU-NO]>=10` matches cards where the combined frequency across both dictionaries is 10 or more.
+- **Combined**: `occurrences:[銀色、遥か,穢翼のユースティア]>=10` matches cards where the combined frequency across both dictionaries is 10 or more.
+- **All Dictionaries**: `occurrences:all>=10` is a special keyword that combines the occurrence counts from every dictionary in your `user_files` folder. Useful if you want to prioritize words that are common across all of your media.
 
 #### Setup for Occurrence Dictionaries
 > To use occurrence searching, you need Yomitan occurrence dictionaries. I highly recommend downloading them from [Jiten](https://jiten.moe/). They offer occurrence dictionaries for any media they have cataloged under `Download deck -> Yomitan (occurrences)` on each media page.
@@ -116,7 +116,7 @@ Prioritize words found in specific media (requires Yomitan dictionaries).
    user_files/
    ├── 銀色、遥か/
    │   └── term_meta_bank_1.json
-   └── この世の果てで恋を唄う少女YU-NO/
+   └── 穢翼のユースティア/
        └── term_meta_bank_1.json
    ```
 5. In your config, set `search_fields` to match your note type, which for [Lapis](https://github.com/donkuri/lapis) would be:
@@ -126,6 +126,14 @@ Prioritize words found in specific media (requires Yomitan dictionaries).
        "expression_reading_field": "ExpressionReading"
    }
    ```
+
+#### Updating Occurrence Dictionaries
+If your occurrence dictionaries were downloaded from [Jiten](https://jiten.moe/), the addon can keep them up to date automatically or on demand.
+
+- **Manual Update**: Go to **Tools** -> **Priority Reorder** -> **Update Jiten Occurrence Dictionaries** to force-check all dictionaries for updates.
+- **Auto Update**: Set `"auto_update_dicts": true` in your config to automatically attempt to update dictionaries once per day after syncing.
+
+> **⚠️ Note for users with many dictionaries**: Jiten's API has a rate limit of roughly 10 requests per minute at the time of writing. If you have more than 10 occurrence dictionaries, updates will take extra time as the addon waits for the rate limit to reset. In this case, auto-updating on sync may not be recommended since it will delay your sync by over a minute. Use the manual update option instead if this bothers you.
    
 ### 3. Kanji Prioritization (`kanji:`)
 Prioritize words based on your existing Kanji knowledge (scanned from your Review cards).
