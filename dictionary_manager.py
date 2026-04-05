@@ -10,13 +10,12 @@ class OccurrenceIndex:
 
     def add(self, expression: str, reading: Optional[str], count: int) -> None:
         if reading:
-            self.expr_reading_to_count[(expression, reading)] = count
+            key = (expression, reading)
+            self.expr_reading_to_count[key] = self.expr_reading_to_count.get(key, 0) + count
             
         # Always fallback to expression alone to account for reading mismatches
-        # If multiple entries have the same expression but different readings, 
-        # the fallback just assumes the highest frequency reading.
-        if expression not in self.expr_to_count or count > self.expr_to_count[expression]:
-            self.expr_to_count[expression] = count
+        # Accumulate counts for the same expression
+        self.expr_to_count[expression] = self.expr_to_count.get(expression, 0) + count
 
     def get(self, expression: str, reading: str) -> int:
         if (expression, reading) in self.expr_reading_to_count:
@@ -80,13 +79,23 @@ def _parse_term_meta_bank(path: str) -> OccurrenceIndex:
         meta = entry[2]
         reading = None
         count = 0
+        is_kana_occurrences = False
 
         if isinstance(meta, dict):
             reading = meta.get("reading") if isinstance(meta.get("reading"), str) else None
+            
+            # Check for '㋕' (kana-only indicator) in display values
+            display_val = str(meta.get("displayValue", ""))
             freq_obj = meta.get("frequency")
-            if isinstance(freq_obj, dict) and isinstance(freq_obj.get("value"), int):
-                count = int(freq_obj["value"])
-            elif isinstance(meta.get("value"), int):
+            if isinstance(freq_obj, dict):
+                display_val += str(freq_obj.get("displayValue", ""))
+                if isinstance(freq_obj.get("value"), int):
+                    count = int(freq_obj["value"])
+            
+            if "㋕" in display_val:
+                is_kana_occurrences = True
+            
+            if count == 0 and isinstance(meta.get("value"), int):
                 count = int(meta["value"])
         elif isinstance(meta, int):
             count = meta
@@ -97,7 +106,9 @@ def _parse_term_meta_bank(path: str) -> OccurrenceIndex:
                 pass
 
         if isinstance(expression, str) and count > 0:
-            index.add(expression, reading, count)
+            # If specifically marked as kana occurrences, attribute to the reading
+            effective_expression = reading if (is_kana_occurrences and reading) else expression
+            index.add(effective_expression, reading, count)
     return index
 
 @lru_cache(maxsize=32)
