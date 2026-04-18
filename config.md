@@ -66,6 +66,21 @@
 - **Description**: When enabled, the addon will automatically check your Jiten-sourced occurrence dictionaries and download any updates exactly once per day on sync.
 - **Default**: `false`
 
+### `kana_normalization` (bool)
+- **Description**: When enabled, katakana is folded to hiragana on both the card side and the dictionary index side before matching, so words that differ only by kana script are treated as equivalent.
+- **Behavior**: Applied to both the expression and reading fields. Examples of pairs that match with this flag on:
+    - Card `ギリギリ` / `ギリギリ` ↔ dict `ぎりぎり` / `ぎりぎり`
+    - Card `南京` / `ナンキン` ↔ dict `南京` / `なんきん`
+    - Card `南京錠` / `ナンキンじょう` ↔ dict `南京錠` / `なんきんじょう`
+    - Card `ネタ帳` / `ネタちょう` ↔ dict `ねた帳` / `ねたちょう`
+- **Default**: `false`
+
+### `combine_word_forms` (bool)
+- **Description**: When enabled, occurrence lookups sum *all* readings stored under the card's expression plus any kana-only entries (㋕) attributed to the card's reading, instead of returning the count for the exact `(expression, reading)` pair only.
+- **Behavior**: For a card with expression `南京` and reading `なんきん`, the count returned is the sum of every `南京` entry in the dictionary regardless of reading, plus every kana-only `なんきん` entry. Pure kana cards (where expression == reading) are not double-counted.
+- **Note**: Independent of `kana_normalization` — both flags can be enabled together. Normalization is applied first, then the combined lookup runs against the normalized keys.
+- **Default**: `false`
+
 ---
 
 ## Search Syntax Cheat Sheet

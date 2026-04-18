@@ -3,6 +3,8 @@ import os
 from functools import lru_cache
 from typing import Dict, Optional, Tuple, List
 
+from .utils import to_hiragana
+
 class OccurrenceIndex:
     def __init__(self) -> None:
         self.expr_to_count: Dict[str, int] = {}
@@ -22,23 +24,34 @@ class OccurrenceIndex:
             return self.expr_reading_to_count[(expression, reading)]
         return self.expr_to_count.get(expression, 0)
 
-class CombinedOccurrenceIndex:    
-    def __init__(self, dict_names: List[str]) -> None:
+    def get_combined(self, expression: str, reading: str) -> int:
+        total = self.expr_to_count.get(expression, 0)
+        if reading and reading != expression:
+            total += self.expr_to_count.get(reading, 0)
+        return total
+
+class CombinedOccurrenceIndex:
+    def __init__(self, dict_names: List[str], normalize_kana: bool = False, combine_word_forms: bool = False) -> None:
         self.dict_names = sorted(dict_names)
+        self.normalize_kana = normalize_kana
+        self.combine_word_forms = combine_word_forms
         self.expr_to_count: Dict[str, int] = {}
         self.expr_reading_to_count: Dict[Tuple[str, str], int] = {}
-    
+
     def get(self, expression: str, reading: str) -> int:
         key = (expression, reading)
         if key in self.expr_reading_to_count:
             return self.expr_reading_to_count[key]
-        
+
         total_count = 0
         for dict_name in self.dict_names:
-            index = get_occurrence_index(dict_name)
-            count = index.get(expression, reading)
+            index = get_occurrence_index(dict_name, self.normalize_kana)
+            if self.combine_word_forms:
+                count = index.get_combined(expression, reading)
+            else:
+                count = index.get(expression, reading)
             total_count += count
-        
+
         self.expr_reading_to_count[key] = total_count
         return total_count
 
@@ -68,7 +81,7 @@ def get_all_dict_names() -> List[str]:
             dict_names.append(item)
     return sorted(dict_names)
 
-def _parse_term_meta_bank(path: str) -> OccurrenceIndex:
+def _parse_term_meta_bank(path: str, normalize_kana: bool = False) -> OccurrenceIndex:
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
     index = OccurrenceIndex()
@@ -83,7 +96,7 @@ def _parse_term_meta_bank(path: str) -> OccurrenceIndex:
 
         if isinstance(meta, dict):
             reading = meta.get("reading") if isinstance(meta.get("reading"), str) else None
-            
+
             # Check for '㋕' (kana-only indicator) in display values
             display_val = str(meta.get("displayValue", ""))
             freq_obj = meta.get("frequency")
@@ -91,10 +104,10 @@ def _parse_term_meta_bank(path: str) -> OccurrenceIndex:
                 display_val += str(freq_obj.get("displayValue", ""))
                 if isinstance(freq_obj.get("value"), int):
                     count = int(freq_obj["value"])
-            
+
             if "㋕" in display_val:
                 is_kana_occurrences = True
-            
+
             if count == 0 and isinstance(meta.get("value"), int):
                 count = int(meta["value"])
         elif isinstance(meta, int):
@@ -108,22 +121,26 @@ def _parse_term_meta_bank(path: str) -> OccurrenceIndex:
         if isinstance(expression, str) and count > 0:
             # If specifically marked as kana occurrences, attribute to the reading
             effective_expression = reading if (is_kana_occurrences and reading) else expression
+            if normalize_kana:
+                effective_expression = to_hiragana(effective_expression)
+                if reading:
+                    reading = to_hiragana(reading)
             index.add(effective_expression, reading, count)
     return index
 
 @lru_cache(maxsize=32)
-def get_occurrence_index(dict_name: str) -> OccurrenceIndex:
+def get_occurrence_index(dict_name: str, normalize_kana: bool = False) -> OccurrenceIndex:
     dir_path = _dict_dir(dict_name)
     index_path = _load_index_file(dir_path)
     if not index_path:
         return OccurrenceIndex()
-    
+
     try:
-        return _parse_term_meta_bank(index_path)
+        return _parse_term_meta_bank(index_path, normalize_kana)
     except Exception:
         return OccurrenceIndex()
 
 @lru_cache(maxsize=16)
-def get_combined_occurrence_index(dict_names_tuple: Tuple[str, ...]) -> CombinedOccurrenceIndex:
+def get_combined_occurrence_index(dict_names_tuple: Tuple[str, ...], normalize_kana: bool = False, combine_word_forms: bool = False) -> CombinedOccurrenceIndex:
     sorted_dict_names = tuple(sorted(dict_names_tuple))
-    return CombinedOccurrenceIndex(list(sorted_dict_names))
+    return CombinedOccurrenceIndex(list(sorted_dict_names), normalize_kana, combine_word_forms)

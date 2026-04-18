@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from typing import List, Tuple
 import re
 from .models import Card
-from .utils import parse_comparator
+from .utils import parse_comparator, to_hiragana
 from .dictionary_manager import get_occurrence_index, get_combined_occurrence_index, get_all_dict_names
 from .kanji_manager import KanjiManager
 
@@ -17,25 +17,34 @@ class Rule(ABC):
         pass
 
 class OccurrenceRule(Rule):
-    def __init__(self, dict_names: List[str], operator_str: str, threshold: int) -> None:
+    def __init__(self, dict_names: List[str], operator_str: str, threshold: int, normalize_kana: bool = False, combine_word_forms: bool = False) -> None:
         self.dict_names = dict_names
         self.comparator = parse_comparator(operator_str)
         self.threshold = threshold
+        self.normalize_kana = normalize_kana
+        self.combine_word_forms = combine_word_forms
 
     def matches(self, card: Card) -> bool:
         expression = card.data.expression
         reading = card.data.reading
         if not expression or not reading:
             return False
-            
+
+        if self.normalize_kana:
+            expression = to_hiragana(expression)
+            reading = to_hiragana(reading)
+
         count = 0
         if len(self.dict_names) == 1:
-            index = get_occurrence_index(self.dict_names[0])
-            count = index.get(expression, reading)
+            index = get_occurrence_index(self.dict_names[0], self.normalize_kana)
+            if self.combine_word_forms:
+                count = index.get_combined(expression, reading)
+            else:
+                count = index.get(expression, reading)
         else:
-            combined_index = get_combined_occurrence_index(tuple(self.dict_names))
+            combined_index = get_combined_occurrence_index(tuple(self.dict_names), self.normalize_kana, self.combine_word_forms)
             count = combined_index.get(expression, reading)
-            
+
         return self.comparator(count, self.threshold)
 
 class FrequencyRule(Rule):
@@ -67,7 +76,7 @@ class KanjiRule(Rule):
             return self.comparator(count, self.threshold)
         return False
 
-def parse_rule_string(rule_string: str, kanji_manager: KanjiManager = None) -> Tuple[List[Rule], str, int | None]:
+def parse_rule_string(rule_string: str, kanji_manager: KanjiManager = None, normalize_kana: bool = False, combine_word_forms: bool = False) -> Tuple[List[Rule], str, int | None]:
     rules = []
     limit = None
     
@@ -101,7 +110,7 @@ def parse_rule_string(rule_string: str, kanji_manager: KanjiManager = None) -> T
             # Remove duplicates to act as true combinator
             dict_names = list(dict.fromkeys(dict_names))
                 
-            rules.append(OccurrenceRule(dict_names, op, thresh))
+            rules.append(OccurrenceRule(dict_names, op, thresh, normalize_kana=normalize_kana, combine_word_forms=combine_word_forms))
             continue
             
         m_freq = FREQ_PATTERN.match(token)

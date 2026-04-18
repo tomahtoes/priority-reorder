@@ -41,8 +41,10 @@ class PriorityReorderer:
             for s in searches:
                 if s.strip():
                     priority_defs.append(parse_rule_string(
-                        s, 
-                        kanji_manager=self.kanji_manager
+                        s,
+                        kanji_manager=self.kanji_manager,
+                        normalize_kana=self.config.kana_normalization,
+                        combine_word_forms=self.config.combine_word_forms
                     ))
         except Exception:
             return []

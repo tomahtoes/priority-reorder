@@ -20,6 +20,8 @@ class Config:
     shift_existing: bool = True
     reorder_on_sync: bool = True
     auto_update_dicts: bool = False
+    kana_normalization: bool = False
+    combine_word_forms: bool = False
     search_config: SearchConfig = field(default_factory=SearchConfig)
 
     @classmethod
@@ -42,6 +44,8 @@ class Config:
             shift_existing=data.get("shift_existing", True),
             reorder_on_sync=data.get("reorder_on_sync", data.get("reorder_after_sync", data.get("reorder_before_sync", True))),
             auto_update_dicts=data.get("auto_update_dicts", False),
+            kana_normalization=data.get("kana_normalization", False),
+            combine_word_forms=data.get("combine_word_forms", False),
             search_config=search_config
         )
 
