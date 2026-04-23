@@ -1,4 +1,4 @@
-from typing import List, Set, Tuple, Dict
+from typing import List, Optional, Set, Tuple, Dict
 from aqt import mw
 from anki.collection import OpChangesWithCount
 
@@ -7,6 +7,8 @@ from .config_manager import Config, get_config
 from .data_manager import DataManager
 from .kanji_manager import get_kanji_manager
 from .rules import parse_rule_string, Rule
+
+PriorityDef = Tuple[List[Rule], str, Optional[int]]
 
 class PriorityReorderer:
     def __init__(self, config: Config) -> None:
@@ -33,8 +35,8 @@ class PriorityReorderer:
         # Merge, deduplicate, and reposition
         return self._apply_reordering(final_priority_queue, final_normal_list)
 
-    def _parse_definitions(self) -> List[Tuple[List[Rule], str, int | None]]:
-        priority_defs = []
+    def _parse_definitions(self) -> List[PriorityDef]:
+        priority_defs: List[PriorityDef] = []
         try:
             raw = self.config.priority_search
             searches = [raw] if isinstance(raw, str) else (raw or [])
@@ -47,11 +49,14 @@ class PriorityReorderer:
                         combine_word_forms=self.config.combine_word_forms,
                         prefix_matching=self.config.prefix_matching
                     ))
-        except Exception:
+        except (ValueError, AttributeError) as e:
+            import traceback
+            print(f"[priority-reorder] Failed to parse priority_search: {e}")
+            traceback.print_exc()
             return []
         return priority_defs
 
-    def _find_matches(self, priority_defs: List[Tuple]) -> Tuple[Dict[int, Set[int]], Set[int]]:
+    def _find_matches(self, priority_defs: List[PriorityDef]) -> Tuple[Dict[int, Set[int]], Set[int]]:
         priority_matches = {}
         all_ids = set()
         
@@ -67,7 +72,7 @@ class PriorityReorderer:
         
         return priority_matches, all_ids
 
-    def _assign_initial_buckets(self, defs: List[Tuple], matches: Dict[int, Set[int]], all_ids: Set[int], card_map: Dict[int, Card]) -> Tuple[List[List[Card]], List[Card]]:
+    def _assign_initial_buckets(self, defs: List[PriorityDef], matches: Dict[int, Set[int]], all_ids: Set[int], card_map: Dict[int, Card]) -> Tuple[List[List[Card]], List[Card]]:
         priority_buckets = []
         
         if self.config.priority_search_mode == "mix":
@@ -120,7 +125,7 @@ class PriorityReorderer:
                 
         return final_priority, new_normal
 
-    def _finalize_priority_queue(self, defs, buckets) -> Tuple[List[Card], List[Card]]:
+    def _finalize_priority_queue(self, defs: List[PriorityDef], buckets: List[List[Card]]) -> Tuple[List[Card], List[Card]]:
         queue = []
         overflow = []
         

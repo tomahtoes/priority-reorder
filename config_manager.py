@@ -1,6 +1,48 @@
 from dataclasses import dataclass, field
-from typing import List, Optional, Union, Dict
+from typing import Any, List, Optional, Union
 from aqt import mw
+
+_VALID_SEARCH_MODES = ("sequential", "mix")
+
+def _warn(field_name: str, value: Any, reason: str) -> None:
+    print(f"[priority-reorder] config: ignoring {field_name}={value!r} ({reason})")
+
+def _coerce_bool(data: dict, key: str, default: bool) -> bool:
+    if key not in data:
+        return default
+    value = data[key]
+    if isinstance(value, bool):
+        return value
+    _warn(key, value, "expected bool")
+    return default
+
+def _coerce_str(data: dict, key: str, default: str) -> str:
+    if key not in data:
+        return default
+    value = data[key]
+    if isinstance(value, str):
+        return value
+    _warn(key, value, "expected string")
+    return default
+
+def _coerce_optional_int(data: dict, key: str) -> Optional[int]:
+    if key not in data:
+        return None
+    value = data[key]
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        _warn(key, value, "expected int or null")
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            pass
+    _warn(key, value, "expected int or null")
+    return None
 
 @dataclass
 class SearchConfig:
@@ -27,27 +69,43 @@ class Config:
 
     @classmethod
     def from_dict(cls, data: dict) -> 'Config':
-        search_config_data = data.get("search_fields", {})
+        search_config_data = data.get("search_fields", {}) or {}
         search_config = SearchConfig(
-            expression_field=search_config_data.get("expression_field", "Expression"),
-            expression_reading_field=search_config_data.get("expression_reading_field", "ExpressionReading")
+            expression_field=_coerce_str(search_config_data, "expression_field", "Expression") or "Expression",
+            expression_reading_field=_coerce_str(search_config_data, "expression_reading_field", "ExpressionReading") or "ExpressionReading"
         )
-        
+
+        priority_search = data.get("priority_search", "")
+        if not isinstance(priority_search, (str, list)):
+            _warn("priority_search", priority_search, "expected string or list")
+            priority_search = ""
+        if isinstance(priority_search, list):
+            priority_search = [s for s in priority_search if isinstance(s, str)]
+
+        mode = _coerce_str(data, "priority_search_mode", "sequential")
+        if mode not in _VALID_SEARCH_MODES:
+            _warn("priority_search_mode", mode, f"expected one of {_VALID_SEARCH_MODES}")
+            mode = "sequential"
+
+        sort_field = _coerce_str(data, "sort_field", "FreqSort") or "FreqSort"
+
         return cls(
-            priority_search=data.get("priority_search", ""),
-            priority_search_mode=data.get("priority_search_mode", "sequential"),
-            normal_search=data.get("normal_search", ""),
-            sort_field=data.get("sort_field", "FreqSort"),
-            sort_reverse=data.get("sort_reverse", False),
-            priority_cutoff=data.get("priority_cutoff"),
-            normal_prioritization=data.get("normal_prioritization"),
-            priority_limit=data.get("priority_limit"),
-            shift_existing=data.get("shift_existing", True),
-            reorder_on_sync=data.get("reorder_on_sync", data.get("reorder_after_sync", data.get("reorder_before_sync", True))),
-            auto_update_dicts=data.get("auto_update_dicts", False),
-            kana_normalization=data.get("kana_normalization", False),
-            combine_word_forms=data.get("combine_word_forms", False),
-            prefix_matching=data.get("prefix_matching", False),
+            priority_search=priority_search,
+            priority_search_mode=mode,
+            normal_search=_coerce_str(data, "normal_search", ""),
+            sort_field=sort_field,
+            sort_reverse=_coerce_bool(data, "sort_reverse", False),
+            priority_cutoff=_coerce_optional_int(data, "priority_cutoff"),
+            normal_prioritization=_coerce_optional_int(data, "normal_prioritization"),
+            priority_limit=_coerce_optional_int(data, "priority_limit"),
+            shift_existing=_coerce_bool(data, "shift_existing", True),
+            reorder_on_sync=_coerce_bool(data, "reorder_on_sync",
+                _coerce_bool(data, "reorder_after_sync",
+                    _coerce_bool(data, "reorder_before_sync", True))),
+            auto_update_dicts=_coerce_bool(data, "auto_update_dicts", False),
+            kana_normalization=_coerce_bool(data, "kana_normalization", False),
+            combine_word_forms=_coerce_bool(data, "combine_word_forms", False),
+            prefix_matching=_coerce_bool(data, "prefix_matching", False),
             search_config=search_config
         )
 

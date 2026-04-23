@@ -11,7 +11,12 @@ def get_kanji_manager(config: Config) -> 'KanjiManager':
     if _kanji_manager_instance is None:
         _kanji_manager_instance = KanjiManager(config)
     else:
+        prev_field = _kanji_manager_instance.config.search_config.expression_field
+        new_field = config.search_config.expression_field
         _kanji_manager_instance.config = config
+        if prev_field != new_field:
+            _kanji_manager_instance.initialized = False
+            _kanji_manager_instance.known_kanji_counts.clear()
     return _kanji_manager_instance
 
 class KanjiManager:
@@ -45,15 +50,17 @@ class KanjiManager:
                 if expression_field in flds_map:
                     idx = flds_map[expression_field][0]
                     mid = model['id']
-                    
+
                     rows = mw.col.db.list(f"select n.flds from notes n join cards c on c.nid = n.id where n.mid = {mid} and c.queue != 0 group by n.id")
-                    
+
                     for flds_str in rows:
                         fields = flds_str.split('\x1f')
                         if idx < len(fields):
                             self.known_kanji_counts.update(self._extract_kanji(fields[idx]))
-        except Exception:
-            pass
+        except Exception as e:
+            import traceback
+            print(f"[priority-reorder] kanji scan failed: {e}")
+            traceback.print_exc()
 
     def _incremental_update(self) -> None:
         expression_field = self.config.search_config.expression_field
@@ -63,19 +70,22 @@ class KanjiManager:
         try:
             query = f'introduced:3 "{expression_field}:_*"'
             note_ids = mw.col.find_notes(query)
-            
-            if not note_ids:
-                return
+        except Exception as e:
+            import traceback
+            print(f"[priority-reorder] kanji incremental find_notes failed: {e}")
+            traceback.print_exc()
+            return
 
-            for nid in note_ids:
-                try:
-                    note = mw.col.get_note(nid)
-                    if expression_field in note:
-                        self.known_kanji_counts.update(self._extract_kanji(note[expression_field]))
-                except Exception:
-                    continue
-        except Exception:
-            pass
+        if not note_ids:
+            return
+
+        for nid in note_ids:
+            try:
+                note = mw.col.get_note(nid)
+            except Exception:
+                continue
+            if expression_field in note:
+                self.known_kanji_counts.update(self._extract_kanji(note[expression_field]))
 
     def get_unknown_kanji_count(self, text: str) -> int:
         if not self.initialized:

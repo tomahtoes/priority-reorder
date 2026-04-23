@@ -6,6 +6,7 @@ from typing import Dict, Optional, Tuple, List
 from .utils import to_hiragana
 
 _MIN_PREFIX_LENGTH = 2
+_COMBINED_MEMO_CAP = 50_000
 
 class OccurrenceIndex:
     def __init__(self) -> None:
@@ -72,6 +73,8 @@ class CombinedOccurrenceIndex:
                 count = index.get_with_prefix(expression, reading) if use_prefix else index.get(expression, reading)
             total_count += count
 
+        if len(self.expr_reading_to_count) >= _COMBINED_MEMO_CAP:
+            self.expr_reading_to_count.clear()
         self.expr_reading_to_count[key] = total_count
         return total_count
 
@@ -91,7 +94,7 @@ def get_all_dict_names() -> List[str]:
     user_files_dir = os.path.join(os.path.dirname(__file__), "user_files")
     if not os.path.isdir(user_files_dir):
         return []
-    
+
     dict_names = []
     for item in os.listdir(user_files_dir):
         if item == "all":
@@ -101,9 +104,22 @@ def get_all_dict_names() -> List[str]:
             dict_names.append(item)
     return sorted(dict_names)
 
-def _parse_term_meta_bank(path: str, normalize_kana: bool = False, prefix_matching: bool = False) -> OccurrenceIndex:
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+@lru_cache(maxsize=32)
+def _load_term_meta_raw(dict_name: str) -> Optional[list]:
+    dir_path = _dict_dir(dict_name)
+    index_path = _load_index_file(dir_path)
+    if not index_path:
+        return None
+    try:
+        with open(index_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        import traceback
+        print(f"[priority-reorder] Failed to load {index_path}: {e}")
+        traceback.print_exc()
+        return None
+
+def _build_index_from_raw(data: list, normalize_kana: bool = False, prefix_matching: bool = False) -> OccurrenceIndex:
     index = OccurrenceIndex()
     for entry in data:
         if not isinstance(entry, list) or len(entry) < 3:
@@ -140,6 +156,7 @@ def _parse_term_meta_bank(path: str, normalize_kana: bool = False, prefix_matchi
 
         if isinstance(expression, str) and count > 0:
             # If specifically marked as kana occurrences, attribute to the reading
+            # (requires combine_word_forms at lookup time to credit kanji-bearing cards)
             effective_expression = reading if (is_kana_occurrences and reading) else expression
             if normalize_kana:
                 effective_expression = to_hiragana(effective_expression)
@@ -150,19 +167,14 @@ def _parse_term_meta_bank(path: str, normalize_kana: bool = False, prefix_matchi
                 index.add_prefixes(effective_expression, count)
     return index
 
-@lru_cache(maxsize=32)
+@lru_cache(maxsize=64)
 def get_occurrence_index(dict_name: str, normalize_kana: bool = False, prefix_matching: bool = False) -> OccurrenceIndex:
-    dir_path = _dict_dir(dict_name)
-    index_path = _load_index_file(dir_path)
-    if not index_path:
+    data = _load_term_meta_raw(dict_name)
+    if data is None:
         return OccurrenceIndex()
+    return _build_index_from_raw(data, normalize_kana, prefix_matching)
 
-    try:
-        return _parse_term_meta_bank(index_path, normalize_kana, prefix_matching)
-    except Exception:
-        return OccurrenceIndex()
-
-@lru_cache(maxsize=16)
+@lru_cache(maxsize=32)
 def get_combined_occurrence_index(dict_names_tuple: Tuple[str, ...], normalize_kana: bool = False, combine_word_forms: bool = False, prefix_matching: bool = False) -> CombinedOccurrenceIndex:
     sorted_dict_names = tuple(sorted(dict_names_tuple))
     return CombinedOccurrenceIndex(list(sorted_dict_names), normalize_kana, combine_word_forms, prefix_matching)
