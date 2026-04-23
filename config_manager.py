@@ -22,6 +22,7 @@ class Config:
     auto_update_dicts: bool = False
     kana_normalization: bool = False
     combine_word_forms: bool = False
+    prefix_matching: bool = False
     search_config: SearchConfig = field(default_factory=SearchConfig)
 
     @classmethod
@@ -46,6 +47,7 @@ class Config:
             auto_update_dicts=data.get("auto_update_dicts", False),
             kana_normalization=data.get("kana_normalization", False),
             combine_word_forms=data.get("combine_word_forms", False),
+            prefix_matching=data.get("prefix_matching", False),
             search_config=search_config
         )
 

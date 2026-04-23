@@ -81,6 +81,11 @@
 - **Note**: Independent of `kana_normalization` — both flags can be enabled together. Normalization is applied first, then the combined lookup runs against the normalized keys.
 - **Default**: `false`
 
+### `prefix_matching` (bool)
+- **Description**: When enabled, an occurrence lookup for a card's expression additionally credits the counts of every dictionary entry for which the expression is a **proper written prefix** (length ≥ 2).
+- **Behavior**: Final count is `exact_count + Σ(counts of dict entries starting with card.expression)`. Example: a card `彫刻` (exact count 5) sees `彫刻家` (100) and `彫刻品` (30) as prefix matches and resolves to `5 + 100 + 30 = 135`. Single-character expressions are excluded (minimum length is 2, hardcoded). Stacks additively with `combine_word_forms`.
+- **Default**: `false`
+
 ---
 
 ## Search Syntax Cheat Sheet

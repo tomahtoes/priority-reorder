@@ -44,7 +44,8 @@ class PriorityReorderer:
                         s,
                         kanji_manager=self.kanji_manager,
                         normalize_kana=self.config.kana_normalization,
-                        combine_word_forms=self.config.combine_word_forms
+                        combine_word_forms=self.config.combine_word_forms,
+                        prefix_matching=self.config.prefix_matching
                     ))
         except Exception:
             return []

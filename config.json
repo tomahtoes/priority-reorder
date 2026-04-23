@@ -14,6 +14,7 @@
     "auto_update_dicts": false,
     "kana_normalization": false,
     "combine_word_forms": false,
+    "prefix_matching": false,
     "search_fields": {
         "expression_field": "Expression",
         "expression_reading_field": "ExpressionReading"

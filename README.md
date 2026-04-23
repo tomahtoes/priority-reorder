@@ -127,6 +127,14 @@ Prioritize words found in specific media (requires Yomitan dictionaries).
    }
    ```
 
+#### Prefix Matching
+Set `"prefix_matching": true` in your config to allow a card to match with the counts of longer dictionary entries that start with the card's expression. This is useful when a short word shows up in the dictionary primarily as part of longer compounds.
+
+- **Semantics**: `final_count = exact_count + Σ(counts of dict entries where card.expression is a proper written prefix)`.
+- **Example**: With `彫刻` as the card expression in your deck, ocurrence dict entries `彫刻家` (100) and `彫刻品` (30) both start with `彫刻`, so `彫刻`'s effective count becomes `exact + 100 + 30`. A threshold like `occurrences:MyDict>=50` can now pick up `彫刻` even if it only appears as a standalone entry a handful of times.
+- **Minimum length**: 2 characters. Single-character cards (e.g. `大`) are never credited via prefix matches, since the relationship is considered too loose to be meaningful.
+- **Default**: `false`. Note that enabling this flag increases initial index startup time of the addon a bit, but not substantially.
+
 #### Updating Occurrence Dictionaries
 If your occurrence dictionaries were downloaded from [Jiten](https://jiten.moe/), the addon can keep them up to date automatically or on demand.
 

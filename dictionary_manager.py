@@ -5,19 +5,27 @@ from typing import Dict, Optional, Tuple, List
 
 from .utils import to_hiragana
 
+_MIN_PREFIX_LENGTH = 2
+
 class OccurrenceIndex:
     def __init__(self) -> None:
         self.expr_to_count: Dict[str, int] = {}
         self.expr_reading_to_count: Dict[Tuple[str, str], int] = {}
+        self.prefix_to_count: Dict[str, int] = {}
 
     def add(self, expression: str, reading: Optional[str], count: int) -> None:
         if reading:
             key = (expression, reading)
             self.expr_reading_to_count[key] = self.expr_reading_to_count.get(key, 0) + count
-            
+
         # Always fallback to expression alone to account for reading mismatches
         # Accumulate counts for the same expression
         self.expr_to_count[expression] = self.expr_to_count.get(expression, 0) + count
+
+    def add_prefixes(self, expression: str, count: int) -> None:
+        for i in range(_MIN_PREFIX_LENGTH, len(expression)):
+            prefix = expression[:i]
+            self.prefix_to_count[prefix] = self.prefix_to_count.get(prefix, 0) + count
 
     def get(self, expression: str, reading: str) -> int:
         if (expression, reading) in self.expr_reading_to_count:
@@ -30,11 +38,22 @@ class OccurrenceIndex:
             total += self.expr_to_count.get(reading, 0)
         return total
 
+    def get_with_prefix(self, expression: str, reading: str) -> int:
+        return self.get(expression, reading) + self.prefix_to_count.get(expression, 0)
+
+    def get_combined_with_prefix(self, expression: str, reading: str) -> int:
+        total = self.get_combined(expression, reading)
+        total += self.prefix_to_count.get(expression, 0)
+        if reading and reading != expression:
+            total += self.prefix_to_count.get(reading, 0)
+        return total
+
 class CombinedOccurrenceIndex:
-    def __init__(self, dict_names: List[str], normalize_kana: bool = False, combine_word_forms: bool = False) -> None:
+    def __init__(self, dict_names: List[str], normalize_kana: bool = False, combine_word_forms: bool = False, prefix_matching: bool = False) -> None:
         self.dict_names = sorted(dict_names)
         self.normalize_kana = normalize_kana
         self.combine_word_forms = combine_word_forms
+        self.prefix_matching = prefix_matching
         self.expr_to_count: Dict[str, int] = {}
         self.expr_reading_to_count: Dict[Tuple[str, str], int] = {}
 
@@ -44,12 +63,13 @@ class CombinedOccurrenceIndex:
             return self.expr_reading_to_count[key]
 
         total_count = 0
+        use_prefix = self.prefix_matching and len(expression) >= _MIN_PREFIX_LENGTH
         for dict_name in self.dict_names:
-            index = get_occurrence_index(dict_name, self.normalize_kana)
+            index = get_occurrence_index(dict_name, self.normalize_kana, self.prefix_matching)
             if self.combine_word_forms:
-                count = index.get_combined(expression, reading)
+                count = index.get_combined_with_prefix(expression, reading) if use_prefix else index.get_combined(expression, reading)
             else:
-                count = index.get(expression, reading)
+                count = index.get_with_prefix(expression, reading) if use_prefix else index.get(expression, reading)
             total_count += count
 
         self.expr_reading_to_count[key] = total_count
@@ -81,7 +101,7 @@ def get_all_dict_names() -> List[str]:
             dict_names.append(item)
     return sorted(dict_names)
 
-def _parse_term_meta_bank(path: str, normalize_kana: bool = False) -> OccurrenceIndex:
+def _parse_term_meta_bank(path: str, normalize_kana: bool = False, prefix_matching: bool = False) -> OccurrenceIndex:
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
     index = OccurrenceIndex()
@@ -126,21 +146,23 @@ def _parse_term_meta_bank(path: str, normalize_kana: bool = False) -> Occurrence
                 if reading:
                     reading = to_hiragana(reading)
             index.add(effective_expression, reading, count)
+            if prefix_matching and len(effective_expression) > _MIN_PREFIX_LENGTH:
+                index.add_prefixes(effective_expression, count)
     return index
 
 @lru_cache(maxsize=32)
-def get_occurrence_index(dict_name: str, normalize_kana: bool = False) -> OccurrenceIndex:
+def get_occurrence_index(dict_name: str, normalize_kana: bool = False, prefix_matching: bool = False) -> OccurrenceIndex:
     dir_path = _dict_dir(dict_name)
     index_path = _load_index_file(dir_path)
     if not index_path:
         return OccurrenceIndex()
 
     try:
-        return _parse_term_meta_bank(index_path, normalize_kana)
+        return _parse_term_meta_bank(index_path, normalize_kana, prefix_matching)
     except Exception:
         return OccurrenceIndex()
 
 @lru_cache(maxsize=16)
-def get_combined_occurrence_index(dict_names_tuple: Tuple[str, ...], normalize_kana: bool = False, combine_word_forms: bool = False) -> CombinedOccurrenceIndex:
+def get_combined_occurrence_index(dict_names_tuple: Tuple[str, ...], normalize_kana: bool = False, combine_word_forms: bool = False, prefix_matching: bool = False) -> CombinedOccurrenceIndex:
     sorted_dict_names = tuple(sorted(dict_names_tuple))
-    return CombinedOccurrenceIndex(list(sorted_dict_names), normalize_kana, combine_word_forms)
+    return CombinedOccurrenceIndex(list(sorted_dict_names), normalize_kana, combine_word_forms, prefix_matching)
