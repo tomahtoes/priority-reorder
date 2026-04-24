@@ -3,7 +3,7 @@ from typing import List, Tuple
 import re
 from .models import Card
 from .utils import parse_comparator, to_hiragana
-from .dictionary_manager import get_occurrence_index, get_combined_occurrence_index, get_all_dict_names, _MIN_PREFIX_LENGTH
+from .dictionary_manager import get_occurrence_index, get_combined_occurrence_index, get_all_dict_names
 from .kanji_manager import KanjiManager
 
 OCC_PATTERN = re.compile(r"occurrences:(?P<dict>[^=<>!]+)(?P<op>>=|<=|!=|=|<|>)(?P<thresh>\d+)")
@@ -17,13 +17,14 @@ class Rule(ABC):
         pass
 
 class OccurrenceRule(Rule):
-    def __init__(self, dict_names: List[str], operator_str: str, threshold: int, normalize_kana: bool = False, combine_word_forms: bool = False, prefix_matching: bool = False) -> None:
+    def __init__(self, dict_names: List[str], operator_str: str, threshold: int, normalize_kana: bool = False, combine_word_forms: bool = False, prefix_matching: bool = False, honorific_folding: bool = False) -> None:
         self.dict_names = dict_names
         self.comparator = parse_comparator(operator_str)
         self.threshold = threshold
         self.normalize_kana = normalize_kana
         self.combine_word_forms = combine_word_forms
         self.prefix_matching = prefix_matching
+        self.honorific_folding = honorific_folding
 
     def matches(self, card: Card) -> bool:
         expression = card.data.expression
@@ -35,17 +36,17 @@ class OccurrenceRule(Rule):
             expression = to_hiragana(expression)
             reading = to_hiragana(reading)
 
-        use_prefix = self.prefix_matching and len(expression) >= _MIN_PREFIX_LENGTH
-
-        count = 0
         if len(self.dict_names) == 1:
-            index = get_occurrence_index(self.dict_names[0], self.normalize_kana, self.prefix_matching)
-            if self.combine_word_forms:
-                count = index.get_combined_with_prefix(expression, reading) if use_prefix else index.get_combined(expression, reading)
-            else:
-                count = index.get_with_prefix(expression, reading) if use_prefix else index.get(expression, reading)
+            index = get_occurrence_index(self.dict_names[0], self.normalize_kana, self.prefix_matching, self.honorific_folding)
+            count = index.get_total(
+                expression,
+                reading,
+                combine_word_forms=self.combine_word_forms,
+                prefix_matching=self.prefix_matching,
+                honorific_folding=self.honorific_folding,
+            )
         else:
-            combined_index = get_combined_occurrence_index(tuple(self.dict_names), self.normalize_kana, self.combine_word_forms, self.prefix_matching)
+            combined_index = get_combined_occurrence_index(tuple(self.dict_names), self.normalize_kana, self.combine_word_forms, self.prefix_matching, self.honorific_folding)
             count = combined_index.get(expression, reading)
 
         return self.comparator(count, self.threshold)
@@ -79,7 +80,7 @@ class KanjiRule(Rule):
             return self.comparator(count, self.threshold)
         return False
 
-def parse_rule_string(rule_string: str, kanji_manager: KanjiManager = None, normalize_kana: bool = False, combine_word_forms: bool = False, prefix_matching: bool = False) -> Tuple[List[Rule], str, int | None]:
+def parse_rule_string(rule_string: str, kanji_manager: KanjiManager = None, normalize_kana: bool = False, combine_word_forms: bool = False, prefix_matching: bool = False, honorific_folding: bool = False) -> Tuple[List[Rule], str, int | None]:
     rules = []
     limit = None
     
@@ -113,7 +114,7 @@ def parse_rule_string(rule_string: str, kanji_manager: KanjiManager = None, norm
             # Remove duplicates to act as true combinator
             dict_names = list(dict.fromkeys(dict_names))
                 
-            rules.append(OccurrenceRule(dict_names, op, thresh, normalize_kana=normalize_kana, combine_word_forms=combine_word_forms, prefix_matching=prefix_matching))
+            rules.append(OccurrenceRule(dict_names, op, thresh, normalize_kana=normalize_kana, combine_word_forms=combine_word_forms, prefix_matching=prefix_matching, honorific_folding=honorific_folding))
             continue
             
         m_freq = FREQ_PATTERN.match(token)

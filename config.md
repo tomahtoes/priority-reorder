@@ -86,6 +86,13 @@
 - **Behavior**: Final count is `exact_count + Σ(counts of dict entries starting with card.expression)`. Example: a card `彫刻` (exact count 5) sees `彫刻家` (100) and `彫刻品` (30) as prefix matches and resolves to `5 + 100 + 30 = 135`. Single-character expressions are excluded (minimum length is 2, hardcoded). Stacks additively with `combine_word_forms`.
 - **Default**: `false`
 
+### `honorific_folding` (bool)
+- **Description**: When enabled, dictionary entries that begin with an honorific morpheme (`お`, `ご`, `御`) also credit their count onto the bare form. Intended for cases where the stripped remainder is functionally the same word, e.g. `お茶` → `茶`, `お金` → `金`, `御社` → `社`.
+- **Behavior**: Dict-side only — the alias adds to the *bare* form's lookup, not the other way around. A card `茶` with dict `お茶` (50) and `茶` (10) resolves to `10 + 50 = 60`. A card `お茶` resolves unchanged. The alias is only registered when the stripped remainder is itself an entry in the same dict; this filters non-words like `おはよう → はよう` or `御覧 → 覧` that would otherwise credit junk.
+- **Known limitation**: if a dict contains `お金` but not bare `金`, a card for `金` will not be credited — the safety gate refuses to alias onto a form the dict doesn't independently recognize. Workaround: combine with a supplementary dict via `occurrences:[A,B]` that does index the bare form.
+- **Note**: Independent of `kana_normalization`, `combine_word_forms`, and `prefix_matching`. All four flags compose additively.
+- **Default**: `false`
+
 ---
 
 ## Search Syntax Cheat Sheet

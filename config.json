@@ -15,6 +15,7 @@
     "kana_normalization": false,
     "combine_word_forms": false,
     "prefix_matching": false,
+    "honorific_folding": false,
     "search_fields": {
         "expression_field": "Expression",
         "expression_reading_field": "ExpressionReading"

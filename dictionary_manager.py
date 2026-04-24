@@ -6,6 +6,7 @@ from typing import Dict, Optional, Tuple, List
 from .utils import to_hiragana
 
 _MIN_PREFIX_LENGTH = 2
+_HONORIFIC_PREFIXES = ("お", "ご", "御")
 _COMBINED_MEMO_CAP = 50_000
 
 class OccurrenceIndex:
@@ -13,6 +14,7 @@ class OccurrenceIndex:
         self.expr_to_count: Dict[str, int] = {}
         self.expr_reading_to_count: Dict[Tuple[str, str], int] = {}
         self.prefix_to_count: Dict[str, int] = {}
+        self.honorific_to_count: Dict[str, int] = {}
 
     def add(self, expression: str, reading: Optional[str], count: int) -> None:
         if reading:
@@ -33,28 +35,36 @@ class OccurrenceIndex:
             return self.expr_reading_to_count[(expression, reading)]
         return self.expr_to_count.get(expression, 0)
 
-    def get_combined(self, expression: str, reading: str) -> int:
-        total = self.expr_to_count.get(expression, 0)
-        if reading and reading != expression:
+    def get_total(
+        self,
+        expression: str,
+        reading: str,
+        *,
+        combine_word_forms: bool = False,
+        prefix_matching: bool = False,
+        honorific_folding: bool = False,
+    ) -> int:
+        total = self.get(expression, reading)
+        reading_is_distinct = bool(reading) and reading != expression
+        if combine_word_forms and reading_is_distinct:
             total += self.expr_to_count.get(reading, 0)
-        return total
-
-    def get_with_prefix(self, expression: str, reading: str) -> int:
-        return self.get(expression, reading) + self.prefix_to_count.get(expression, 0)
-
-    def get_combined_with_prefix(self, expression: str, reading: str) -> int:
-        total = self.get_combined(expression, reading)
-        total += self.prefix_to_count.get(expression, 0)
-        if reading and reading != expression:
-            total += self.prefix_to_count.get(reading, 0)
+        if prefix_matching and len(expression) >= _MIN_PREFIX_LENGTH:
+            total += self.prefix_to_count.get(expression, 0)
+            if combine_word_forms and reading_is_distinct:
+                total += self.prefix_to_count.get(reading, 0)
+        if honorific_folding:
+            total += self.honorific_to_count.get(expression, 0)
+            if combine_word_forms and reading_is_distinct:
+                total += self.honorific_to_count.get(reading, 0)
         return total
 
 class CombinedOccurrenceIndex:
-    def __init__(self, dict_names: List[str], normalize_kana: bool = False, combine_word_forms: bool = False, prefix_matching: bool = False) -> None:
+    def __init__(self, dict_names: List[str], normalize_kana: bool = False, combine_word_forms: bool = False, prefix_matching: bool = False, honorific_folding: bool = False) -> None:
         self.dict_names = sorted(dict_names)
         self.normalize_kana = normalize_kana
         self.combine_word_forms = combine_word_forms
         self.prefix_matching = prefix_matching
+        self.honorific_folding = honorific_folding
         self.expr_to_count: Dict[str, int] = {}
         self.expr_reading_to_count: Dict[Tuple[str, str], int] = {}
 
@@ -64,14 +74,15 @@ class CombinedOccurrenceIndex:
             return self.expr_reading_to_count[key]
 
         total_count = 0
-        use_prefix = self.prefix_matching and len(expression) >= _MIN_PREFIX_LENGTH
         for dict_name in self.dict_names:
-            index = get_occurrence_index(dict_name, self.normalize_kana, self.prefix_matching)
-            if self.combine_word_forms:
-                count = index.get_combined_with_prefix(expression, reading) if use_prefix else index.get_combined(expression, reading)
-            else:
-                count = index.get_with_prefix(expression, reading) if use_prefix else index.get(expression, reading)
-            total_count += count
+            index = get_occurrence_index(dict_name, self.normalize_kana, self.prefix_matching, self.honorific_folding)
+            total_count += index.get_total(
+                expression,
+                reading,
+                combine_word_forms=self.combine_word_forms,
+                prefix_matching=self.prefix_matching,
+                honorific_folding=self.honorific_folding,
+            )
 
         if len(self.expr_reading_to_count) >= _COMBINED_MEMO_CAP:
             self.expr_reading_to_count.clear()
@@ -119,7 +130,7 @@ def _load_term_meta_raw(dict_name: str) -> Optional[list]:
         traceback.print_exc()
         return None
 
-def _build_index_from_raw(data: list, normalize_kana: bool = False, prefix_matching: bool = False) -> OccurrenceIndex:
+def _build_index_from_raw(data: list, normalize_kana: bool = False, prefix_matching: bool = False, honorific_folding: bool = False) -> OccurrenceIndex:
     index = OccurrenceIndex()
     for entry in data:
         if not isinstance(entry, list) or len(entry) < 3:
@@ -165,16 +176,27 @@ def _build_index_from_raw(data: list, normalize_kana: bool = False, prefix_match
             index.add(effective_expression, reading, count)
             if prefix_matching and len(effective_expression) > _MIN_PREFIX_LENGTH:
                 index.add_prefixes(effective_expression, count)
+
+    if honorific_folding:
+        for expr, count in list(index.expr_to_count.items()):
+            if not expr.startswith(_HONORIFIC_PREFIXES):
+                continue
+            # strip one-character honorific prefix (all entries in the tuple are single chars)
+            stripped = expr[1:]
+            if not stripped or stripped not in index.expr_to_count:
+                continue
+            index.honorific_to_count[stripped] = index.honorific_to_count.get(stripped, 0) + count
+
     return index
 
 @lru_cache(maxsize=64)
-def get_occurrence_index(dict_name: str, normalize_kana: bool = False, prefix_matching: bool = False) -> OccurrenceIndex:
+def get_occurrence_index(dict_name: str, normalize_kana: bool = False, prefix_matching: bool = False, honorific_folding: bool = False) -> OccurrenceIndex:
     data = _load_term_meta_raw(dict_name)
     if data is None:
         return OccurrenceIndex()
-    return _build_index_from_raw(data, normalize_kana, prefix_matching)
+    return _build_index_from_raw(data, normalize_kana, prefix_matching, honorific_folding)
 
 @lru_cache(maxsize=32)
-def get_combined_occurrence_index(dict_names_tuple: Tuple[str, ...], normalize_kana: bool = False, combine_word_forms: bool = False, prefix_matching: bool = False) -> CombinedOccurrenceIndex:
+def get_combined_occurrence_index(dict_names_tuple: Tuple[str, ...], normalize_kana: bool = False, combine_word_forms: bool = False, prefix_matching: bool = False, honorific_folding: bool = False) -> CombinedOccurrenceIndex:
     sorted_dict_names = tuple(sorted(dict_names_tuple))
-    return CombinedOccurrenceIndex(list(sorted_dict_names), normalize_kana, combine_word_forms, prefix_matching)
+    return CombinedOccurrenceIndex(list(sorted_dict_names), normalize_kana, combine_word_forms, prefix_matching, honorific_folding)

@@ -65,6 +65,7 @@ class Config:
     kana_normalization: bool = False
     combine_word_forms: bool = False
     prefix_matching: bool = False
+    honorific_folding: bool = False
     search_config: SearchConfig = field(default_factory=SearchConfig)
 
     @classmethod
@@ -106,6 +107,7 @@ class Config:
             kana_normalization=_coerce_bool(data, "kana_normalization", False),
             combine_word_forms=_coerce_bool(data, "combine_word_forms", False),
             prefix_matching=_coerce_bool(data, "prefix_matching", False),
+            honorific_folding=_coerce_bool(data, "honorific_folding", False),
             search_config=search_config
         )
 

@@ -47,7 +47,8 @@ class PriorityReorderer:
                         kanji_manager=self.kanji_manager,
                         normalize_kana=self.config.kana_normalization,
                         combine_word_forms=self.config.combine_word_forms,
-                        prefix_matching=self.config.prefix_matching
+                        prefix_matching=self.config.prefix_matching,
+                        honorific_folding=self.config.honorific_folding
                     ))
         except (ValueError, AttributeError) as e:
             import traceback
