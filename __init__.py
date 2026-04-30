@@ -11,6 +11,7 @@ from aqt.operations import CollectionOp, QueryOp
 
 from .reorderer import run_reorder
 from .config_manager import get_config
+from .stats_window import show_stats_window
 
 from .updater import JitenUpdater
 
@@ -93,7 +94,11 @@ def setup_menu() -> None:
     reorder_action.setShortcut(QKeySequence("Ctrl+Alt+`"))
     qconnect(reorder_action.triggered, run_in_background)
     menu.addAction(reorder_action)
-    
+
+    stats_action = QAction("Show Stats", mw)
+    qconnect(stats_action.triggered, show_stats_window)
+    menu.addAction(stats_action)
+
     update_dicts_action = QAction("Update Jiten Occurrence Dictionaries", mw)
     qconnect(update_dicts_action.triggered, update_jiten_dicts)
     menu.addAction(update_dicts_action)
