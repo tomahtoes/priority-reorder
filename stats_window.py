@@ -1,14 +1,13 @@
 from typing import List, Optional
 
-from aqt import mw
+from aqt import mw, dialogs
 from aqt.qt import (
-    QApplication,
     QDialog,
+    QFont,
+    QFontMetrics,
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
-    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     Qt,
@@ -17,7 +16,6 @@ from aqt.qt import (
     qconnect,
 )
 from aqt.theme import theme_manager
-from aqt.utils import tooltip
 
 from .reorder_log import PrioritySearchStats, ReorderReport, get_last_report
 
@@ -49,19 +47,21 @@ def _nid_search(note_ids: List[int]) -> str:
     return "nid:" + ",".join(str(n) for n in note_ids) if note_ids else ""
 
 
-def _copy_to_clipboard(text: str, label: str) -> None:
-    QApplication.clipboard().setText(text)
-    tooltip(f"Copied {label}")
+def _open_in_browser(note_ids: List[int]) -> None:
+    if not note_ids:
+        return
+    browser = dialogs.open("Browser", mw)
+    browser.search_for(_nid_search(note_ids))
 
 
-class StatRow(QWidget):
-    """A single label+value pair, label dimmed, value bold."""
+class StatCell(QWidget):
+    """A single label+value pair laid out tightly: dimmed label, bold value."""
 
     def __init__(self, label: str, value: str, *, accent: Optional[str] = None, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
+        layout.setSpacing(5)
 
         lbl = QLabel(label)
         lbl.setStyleSheet(f"color: {_muted_color()};")
@@ -74,15 +74,24 @@ class StatRow(QWidget):
         if accent:
             val.setStyleSheet(f"color: {accent}; font-weight: bold;")
         layout.addWidget(val)
-        layout.addStretch(1)
 
 
 class SearchCard(QFrame):
     """Collapsible card for a single priority search."""
 
-    def __init__(self, entry: PrioritySearchStats, mode: str, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self,
+        entry: PrioritySearchStats,
+        mode: str,
+        *,
+        cutoff_active: bool,
+        global_limit_active: bool,
+        parent: Optional[QWidget] = None,
+    ) -> None:
         super().__init__(parent)
         self.entry = entry
+        self._cutoff_active = cutoff_active
+        self._global_limit_active = global_limit_active
         self.setObjectName("searchCard")
         self.setStyleSheet(
             f"#searchCard {{"
@@ -96,10 +105,11 @@ class SearchCard(QFrame):
         outer.setContentsMargins(10, 8, 10, 10)
         outer.setSpacing(8)
 
-        # Header: collapse toggle + title
+        # Header: collapse toggle + title. Start collapsed when nothing matched.
+        start_expanded = entry.refined_match_count > 0
         self._header_btn = QPushButton()
         self._header_btn.setCheckable(True)
-        self._header_btn.setChecked(True)
+        self._header_btn.setChecked(start_expanded)
         self._header_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._header_btn.setStyleSheet(
             "QPushButton {"
@@ -111,7 +121,7 @@ class SearchCard(QFrame):
             "}"
         )
         self._title_text = f"[{entry.index + 1}]   {entry.query}"
-        self._update_header_text(True)
+        self._update_header_text(start_expanded)
         qconnect(self._header_btn.toggled, self._on_collapse_toggle)
         outer.addWidget(self._header_btn)
 
@@ -120,6 +130,7 @@ class SearchCard(QFrame):
         body_layout = QVBoxLayout(self._body)
         body_layout.setContentsMargins(0, 0, 0, 0)
         body_layout.setSpacing(8)
+        self._body.setVisible(start_expanded)
         outer.addWidget(self._body)
 
         self._populate_body(body_layout, entry, mode)
@@ -135,14 +146,10 @@ class SearchCard(QFrame):
     def _populate_body(self, body_layout: QVBoxLayout, entry: PrioritySearchStats, mode: str) -> None:
         is_mix = mode == "mix"
 
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(24)
-        grid.setVerticalSpacing(4)
-
-        cells: List[StatRow] = []
+        cells: List[StatCell] = []
 
         def add_cell(label: str, value: str, accent: Optional[str] = None) -> None:
-            cells.append(StatRow(label, value, accent=accent))
+            cells.append(StatCell(label, value, accent=accent))
 
         add_cell("matched", str(entry.refined_match_count))
         if entry.has_custom_rules and entry.raw_match_count != entry.refined_match_count:
@@ -150,17 +157,29 @@ class SearchCard(QFrame):
 
         if not is_mix:
             add_cell("kept", str(entry.kept_count))
-            discarded_total = entry.limit_discarded + entry.global_limit_discarded
-            accent = _accent_red() if discarded_total > 0 else None
-            limit_str = f" / limit {entry.limit}" if entry.limit is not None else ""
-            add_cell("discarded", f"{discarded_total}{limit_str}", accent=accent)
-            add_cell("cutoff-dropped", str(entry.cutoff_dropped))
 
+            can_be_discarded = entry.limit is not None or self._global_limit_active
+            if can_be_discarded:
+                discarded_total = entry.limit_discarded + entry.global_limit_discarded
+                accent = _accent_red() if discarded_total > 0 else None
+                limit_str = f" / limit {entry.limit}" if entry.limit is not None else ""
+                add_cell("discarded", f"{discarded_total}{limit_str}", accent=accent)
+
+            if self._cutoff_active:
+                add_cell("cutoff-dropped", str(entry.cutoff_dropped))
+
+        stats_row = QHBoxLayout()
+        stats_row.setContentsMargins(0, 0, 0, 0)
+        stats_row.setSpacing(0)
         for i, cell in enumerate(cells):
-            grid.addWidget(cell, i // 2, i % 2)
-        grid.setColumnStretch(0, 1)
-        grid.setColumnStretch(1, 1)
-        body_layout.addLayout(grid)
+            if i > 0:
+                sep = QLabel("·")
+                sep.setStyleSheet(f"color: {_muted_color()};")
+                sep.setContentsMargins(10, 0, 10, 0)
+                stats_row.addWidget(sep)
+            stats_row.addWidget(cell)
+        stats_row.addStretch(1)
+        body_layout.addLayout(stats_row)
 
         if is_mix:
             note = QLabel("(mix mode — kept/discarded combined in totals)")
@@ -176,72 +195,35 @@ class SearchCard(QFrame):
         any_btn = False
 
         if entry.kept_note_ids:
-            btn = QPushButton(f"Copy kept nids ({len(entry.kept_note_ids)})")
-            qconnect(btn.clicked, lambda: _copy_to_clipboard(
-                _nid_search(entry.kept_note_ids), f"{len(entry.kept_note_ids)} kept note IDs"
-            ))
+            kept_ids = list(entry.kept_note_ids)
+            btn = QPushButton(f"Open kept in browser ({len(kept_ids)})")
+            qconnect(btn.clicked, lambda _=False, ids=kept_ids: _open_in_browser(ids))
             btn_row.addWidget(btn)
             any_btn = True
 
         if entry.discarded_note_ids:
-            btn = QPushButton(f"Copy discarded ({len(entry.discarded_note_ids)})")
-            qconnect(btn.clicked, lambda: _copy_to_clipboard(
-                _nid_search(entry.discarded_note_ids), f"{len(entry.discarded_note_ids)} discarded note IDs"
-            ))
+            disc_ids = list(entry.discarded_note_ids)
+            btn = QPushButton(f"Open discarded in browser ({len(disc_ids)})")
+            qconnect(btn.clicked, lambda _=False, ids=disc_ids: _open_in_browser(ids))
             btn_row.addWidget(btn)
-            any_btn = True
-
-        if entry.cutoff_note_ids:
-            btn = QPushButton(f"Copy cutoff ({len(entry.cutoff_note_ids)})")
-            qconnect(btn.clicked, lambda: _copy_to_clipboard(
-                _nid_search(entry.cutoff_note_ids), f"{len(entry.cutoff_note_ids)} cutoff note IDs"
-            ))
-            btn_row.addWidget(btn)
-            any_btn = True
-
-        self._toggle_nids_btn: Optional[QPushButton] = None
-        self._nid_view: Optional[QPlainTextEdit] = None
-        if entry.kept_note_ids:
-            self._toggle_nids_btn = QPushButton("Show note IDs")
-            self._toggle_nids_btn.setCheckable(True)
-            qconnect(self._toggle_nids_btn.toggled, self._on_nid_toggle)
-            btn_row.addWidget(self._toggle_nids_btn)
             any_btn = True
 
         btn_row.addStretch(1)
         if any_btn:
             body_layout.addLayout(btn_row)
 
-        if entry.kept_note_ids:
-            view = QPlainTextEdit()
-            view.setReadOnly(True)
-            view.setPlainText("\n".join(str(n) for n in entry.kept_note_ids))
-            view.setMaximumHeight(140)
-            view.setVisible(False)
-            mono = view.font()
-            mono.setStyleHint(mono.StyleHint.Monospace)
-            mono.setFamily("monospace")
-            view.setFont(mono)
-            body_layout.addWidget(view)
-            self._nid_view = view
-
-    def _on_nid_toggle(self, checked: bool) -> None:
-        if self._nid_view is not None:
-            self._nid_view.setVisible(checked)
-        if self._toggle_nids_btn is not None:
-            self._toggle_nids_btn.setText("Hide note IDs" if checked else "Show note IDs")
-
 
 class StatsDialog(QDialog):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Priority Reorder Stats")
-        self.resize(660, 560)
         self._root = QVBoxLayout(self)
         self._root.setContentsMargins(12, 12, 12, 12)
         self._root.setSpacing(10)
         self._cards: List[SearchCard] = []
+        self._scroll_inner: Optional[QWidget] = None
         self.refresh()
+        self.resize(self._initial_width(), self._initial_height())
 
     def refresh(self) -> None:
         while self._root.count():
@@ -324,13 +306,21 @@ class StatsDialog(QDialog):
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
             inner_layout.addWidget(empty)
         else:
+            cutoff_active = report.priority_cutoff is not None
+            global_limit_active = report.global_priority_limit is not None
             for entry in report.entries:
-                card = SearchCard(entry, report.mode)
+                card = SearchCard(
+                    entry,
+                    report.mode,
+                    cutoff_active=cutoff_active,
+                    global_limit_active=global_limit_active,
+                )
                 inner_layout.addWidget(card)
                 self._cards.append(card)
             inner_layout.addStretch(1)
 
         scroll.setWidget(inner)
+        self._scroll_inner = inner
         self._root.addWidget(scroll, 1)
 
         # Footer totals + close
@@ -353,6 +343,47 @@ class StatsDialog(QDialog):
     def _set_all_expanded(self, expanded: bool) -> None:
         for card in self._cards:
             card._header_btn.setChecked(expanded)
+
+    def _initial_height(self) -> int:
+        # QScrollArea reports a tiny sizeHint regardless of its inner content,
+        # so measure the inner widget directly and add chrome around it.
+        content_h = 0
+        if self._scroll_inner is not None:
+            self._scroll_inner.adjustSize()
+            content_h = self._scroll_inner.sizeHint().height()
+
+        # Chrome: dialog vertical margins (24) + header label (~26)
+        # + ctrl row (~30) + layout spacing between sections (~30)
+        # + footer row (~30) + a small buffer.
+        chrome = 150
+        ideal = content_h + chrome
+
+        screen = self.screen()
+        screen_h = screen.availableGeometry().height() if screen is not None else 1200
+        cap = int(screen_h * 0.8)
+
+        return max(560, min(ideal, cap))
+
+    def _initial_width(self) -> int:
+        report = get_last_report()
+        if report is None or not report.entries:
+            return 720
+
+        f = QFont()
+        f.setBold(True)
+        fm = QFontMetrics(f)
+        max_text_w = 0
+        for entry in report.entries:
+            text = f"▼   [{entry.index + 1}]   {entry.query}"
+            w = fm.horizontalAdvance(text)
+            if w > max_text_w:
+                max_text_w = w
+
+        # Account for: dialog margins (24) + card horizontal padding (20)
+        # + card border (2) + scroll-area vertical scrollbar reserve (~24)
+        # + a small breathing buffer.
+        chrome = 90
+        return max(720, max_text_w + chrome)
 
 
 _dialog: Optional[StatsDialog] = None
