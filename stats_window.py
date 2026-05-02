@@ -1,7 +1,8 @@
 from typing import List, Optional
 
-from aqt import mw, dialogs
-from aqt.qt import (
+from aqt import mw, dialogs # type: ignore
+from aqt.operations import CollectionOp # type: ignore
+from aqt.qt import ( # type: ignore
     QDialog,
     QFont,
     QFontMetrics,
@@ -15,9 +16,11 @@ from aqt.qt import (
     QWidget,
     qconnect,
 )
-from aqt.theme import theme_manager
+from aqt.theme import theme_manager # type: ignore
+from aqt.utils import showInfo # type: ignore
 
 from .reorder_log import PrioritySearchStats, ReorderReport, get_last_report
+from .reorderer import run_reorder
 
 
 def _is_dark() -> bool:
@@ -105,8 +108,12 @@ class SearchCard(QFrame):
         outer.setContentsMargins(10, 8, 10, 10)
         outer.setSpacing(8)
 
-        # Header: collapse toggle + title. Start collapsed when nothing matched.
-        start_expanded = entry.refined_match_count > 0
+        # Header: collapse toggle + title. Start collapsed when nothing was kept
+        # (in mix mode, kept_count isn't meaningful so fall back to matches).
+        if mode == "mix":
+            start_expanded = entry.refined_match_count > 0
+        else:
+            start_expanded = entry.kept_count > 0
         self._header_btn = QPushButton()
         self._header_btn.setCheckable(True)
         self._header_btn.setChecked(start_expanded)
@@ -151,13 +158,14 @@ class SearchCard(QFrame):
         def add_cell(label: str, value: str, accent: Optional[str] = None) -> None:
             cells.append(StatCell(label, value, accent=accent))
 
+        if not is_mix:
+            add_cell("kept", str(entry.kept_count))
+
         add_cell("matched", str(entry.refined_match_count))
         if entry.has_custom_rules and entry.raw_match_count != entry.refined_match_count:
             add_cell("raw", str(entry.raw_match_count))
 
         if not is_mix:
-            add_cell("kept", str(entry.kept_count))
-
             can_be_discarded = entry.limit is not None or self._global_limit_active
             if can_be_discarded:
                 discarded_total = entry.limit_discarded + entry.global_limit_discarded
@@ -222,6 +230,8 @@ class StatsDialog(QDialog):
         self._root.setSpacing(10)
         self._cards: List[SearchCard] = []
         self._scroll_inner: Optional[QWidget] = None
+        # ConfigEditor expects parent.mgr to be the addon manager.
+        self.mgr = mw.addonManager
         self.refresh()
         self.resize(self._initial_width(), self._initial_height())
 
@@ -268,13 +278,33 @@ class StatsDialog(QDialog):
         self._root.addLayout(close_row)
 
     def _build_report(self, report: ReorderReport) -> None:
-        # Header
+        # Header row: timestamp + edit config + run reorder
+        header_row = QHBoxLayout()
+        header_row.setSpacing(10)
+
         header = QLabel(f"Last reorder:  {report.timestamp}")
         f = header.font()
         f.setPointSize(f.pointSize() + 1)
         f.setBold(True)
         header.setFont(f)
-        self._root.addWidget(header)
+        header_row.addWidget(header)
+
+        edit_cfg_btn = QPushButton("Edit config")
+        edit_cfg_btn.setAutoDefault(False)
+        edit_cfg_btn.setDefault(False)
+        edit_cfg_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        qconnect(edit_cfg_btn.clicked, self._open_addon_config)
+        header_row.addWidget(edit_cfg_btn)
+
+        self._reorder_btn = QPushButton("Run reorder now")
+        self._reorder_btn.setAutoDefault(False)
+        self._reorder_btn.setDefault(False)
+        self._reorder_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        qconnect(self._reorder_btn.clicked, self._run_reorder_now)
+        header_row.addWidget(self._reorder_btn)
+
+        header_row.addStretch(1)
+        self._root.addLayout(header_row)
 
         # Expand/collapse all controls
         ctrl_row = QHBoxLayout()
@@ -343,6 +373,31 @@ class StatsDialog(QDialog):
     def _set_all_expanded(self, expanded: bool) -> None:
         for card in self._cards:
             card._header_btn.setChecked(expanded)
+
+    def _open_addon_config(self) -> None:
+        from aqt.addons import ConfigEditor # type: ignore
+
+        pkg = __name__.split(".")[0]
+        try:
+            conf = mw.addonManager.getConfig(pkg)
+            ConfigEditor(self, pkg, conf)
+        except Exception as e:
+            showInfo(f"Could not open config: {e}")
+
+    def _run_reorder_now(self) -> None:
+        self._reorder_btn.setEnabled(False)
+        self._reorder_btn.setText("Reordering...")
+
+        def on_success(_changes) -> None:
+            self.refresh()
+
+        def on_failure(err) -> None:
+            self._reorder_btn.setEnabled(True)
+            self._reorder_btn.setText("Run reorder now")
+            showInfo(f"Error during reordering: {err}")
+
+        op = CollectionOp(parent=self, op=run_reorder).success(on_success).failure(on_failure)
+        op.run_in_background()
 
     def _initial_height(self) -> int:
         # QScrollArea reports a tiny sizeHint regardless of its inner content,
