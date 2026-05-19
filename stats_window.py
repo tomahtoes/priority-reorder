@@ -176,6 +176,9 @@ class SearchCard(QFrame):
             if self._cutoff_active:
                 add_cell("cutoff-dropped", str(entry.cutoff_dropped))
 
+            if entry.final_start_index is not None:
+                add_cell("starts at", str(entry.final_start_index))
+
         stats_row = QHBoxLayout()
         stats_row.setContentsMargins(0, 0, 0, 0)
         stats_row.setSpacing(0)

@@ -19,6 +19,7 @@ class PrioritySearchStats:
     kept_note_ids: List[int] = field(default_factory=list)
     discarded_note_ids: List[int] = field(default_factory=list)
     cutoff_note_ids: List[int] = field(default_factory=list)
+    final_start_index: Optional[int] = None
 
 
 @dataclass

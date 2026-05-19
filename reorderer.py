@@ -256,6 +256,18 @@ class PriorityReorderer:
                         stats[i].discarded_note_ids.append(c.note_id)
                 stats[i].kept_count = len(stats[i].kept_note_ids)
 
+            # Final start index in the reordered queue (sequential mode):
+            # priority cards occupy positions 0..N-1, each search a contiguous
+            # block, so its start = cumulative kept of preceding searches.
+            cumulative = 0
+            for i in range(len(buckets)):
+                if i >= len(stats):
+                    continue
+                if stats[i].kept_count > 0:
+                    stats[i].final_start_index = cumulative
+                    cumulative += stats[i].kept_count
+                # searches with 0 kept leave final_start_index = None
+
         return queue, overflow
 
     def _apply_reordering(self, priority_queue: List[Card], normal_list: List[Card]) -> OpChangesWithCount:
