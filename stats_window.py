@@ -14,6 +14,7 @@ from aqt.qt import ( # type: ignore
     Qt,
     QVBoxLayout,
     QWidget,
+    pyqtSignal,
     qconnect,
 )
 from aqt.theme import theme_manager # type: ignore
@@ -21,6 +22,7 @@ from aqt.utils import showInfo # type: ignore
 
 from .reorder_log import PrioritySearchStats, ReorderReport, get_last_report
 from .reorderer import run_reorder
+from .search_colors import colorize_query_html
 
 
 def _is_dark() -> bool:
@@ -55,6 +57,18 @@ def _open_in_browser(note_ids: List[int]) -> None:
         return
     browser = dialogs.open("Browser", mw)
     browser.search_for(_nid_search(note_ids))
+
+
+class ClickableLabel(QLabel):
+    """A QLabel that emits ``clicked`` on left mouse press (for rich-text headers
+    that need to behave like a button)."""
+
+    clicked = pyqtSignal()
+
+    def mousePressEvent(self, event) -> None:  # type: ignore[override]
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
 
 
 class StatCell(QWidget):
@@ -114,22 +128,19 @@ class SearchCard(QFrame):
             start_expanded = entry.refined_match_count > 0
         else:
             start_expanded = entry.kept_count > 0
-        self._header_btn = QPushButton()
-        self._header_btn.setCheckable(True)
-        self._header_btn.setChecked(start_expanded)
+        self._expanded = start_expanded
+        self._header_btn = ClickableLabel()
         self._header_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._header_btn.setStyleSheet(
-            "QPushButton {"
-            "  text-align: left;"
-            "  padding: 2px 0;"
-            "  border: none;"
-            "  background: transparent;"
-            "  font-weight: bold;"
-            "}"
-        )
-        self._title_text = f"[{entry.index + 1}]   {entry.query}"
+        self._header_btn.setTextFormat(Qt.TextFormat.RichText)
+        header_font = self._header_btn.font()
+        header_font.setBold(True)
+        self._header_btn.setFont(header_font)
+        self._header_btn.setStyleSheet("padding: 2px 0;")
+        # Colored terms; the [index] prefix and arrow stay default text color.
+        self._query_html = colorize_query_html(entry.query, dark=_is_dark())
+        self._prefix_html = f"[{entry.index + 1}]&nbsp;&nbsp;&nbsp;"
         self._update_header_text(start_expanded)
-        qconnect(self._header_btn.toggled, self._on_collapse_toggle)
+        qconnect(self._header_btn.clicked, self._toggle)
         outer.addWidget(self._header_btn)
 
         # Body
@@ -144,11 +155,14 @@ class SearchCard(QFrame):
 
     def _update_header_text(self, expanded: bool) -> None:
         arrow = "▼" if expanded else "▶"
-        self._header_btn.setText(f"{arrow}   {self._title_text}")
+        self._header_btn.setText(
+            f"{arrow}&nbsp;&nbsp;&nbsp;{self._prefix_html}{self._query_html}"
+        )
 
-    def _on_collapse_toggle(self, expanded: bool) -> None:
-        self._body.setVisible(expanded)
-        self._update_header_text(expanded)
+    def _toggle(self) -> None:
+        self._expanded = not self._expanded
+        self._body.setVisible(self._expanded)
+        self._update_header_text(self._expanded)
 
     def _populate_body(self, body_layout: QVBoxLayout, entry: PrioritySearchStats, mode: str) -> None:
         is_mix = mode == "mix"
