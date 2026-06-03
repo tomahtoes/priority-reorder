@@ -173,15 +173,20 @@ class PriorityReorderer:
                     kept.append(card)
             final_priority.append(kept)
 
-        # Filter normal list (Prioritization)
+        # Promote low-value normal cards into their own dedicated trailing tier.
+        # Kept separate from the real search buckets so they are exempt from any
+        # single search's per-search limit and excluded from per-search stats;
+        # in mix mode all buckets are flattened together anyway, so this is a
+        # no-op there.
         new_normal = []
+        promoted = []
         for card in final_normal:
             if prioritization is not None and not exceeds_threshold(card, prioritization):
-                if not final_priority:
-                    final_priority.append([])
-                final_priority[-1].append(card)
+                promoted.append(card)
             else:
                 new_normal.append(card)
+        if promoted:
+            final_priority.append(promoted)
 
         return final_priority, new_normal
 
@@ -296,7 +301,13 @@ class PriorityReorderer:
         return card.data.sort_field_value
 
     def _sort_cards(self, cards: List[Card]) -> List[Card]:
-        return sorted(cards, key=self._get_sort_key, reverse=self.config.sort_reverse)
+        # Cards with no usable sort value always trail, in either sort direction
+        # (a single numeric sentinel can't do this: reverse=True would float it
+        # to the top).
+        present = [c for c in cards if c.data.has_sort_value]
+        missing = [c for c in cards if not c.data.has_sort_value]
+        present.sort(key=self._get_sort_key, reverse=self.config.sort_reverse)
+        return present + missing
 
     def _write_log(
         self,

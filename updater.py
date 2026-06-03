@@ -11,7 +11,7 @@ from urllib3.util.retry import Retry
 from typing import Optional, Dict, Any
 
 from .config_manager import get_config
-from .dictionary_manager import get_occurrence_index, get_combined_occurrence_index
+from .dictionary_manager import get_occurrence_index, get_combined_occurrence_index, _load_term_meta_raw
 
 class JitenUpdater:
     def __init__(self) -> None:
@@ -170,5 +170,9 @@ class JitenUpdater:
         return updated_count, failed_count
 
     def clear_caches(self) -> None:
+        # Order matters: clear the raw-JSON cache too, otherwise rebuilt indexes
+        # re-read stale dictionary contents and the update has no effect until
+        # Anki is restarted.
+        _load_term_meta_raw.cache_clear()
         get_occurrence_index.cache_clear()
         get_combined_occurrence_index.cache_clear()

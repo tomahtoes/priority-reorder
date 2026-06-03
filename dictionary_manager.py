@@ -1,7 +1,8 @@
+import bisect
 import json
 import os
 from functools import lru_cache
-from typing import Dict, Optional, Tuple, List
+from typing import Dict, List, Optional, Tuple
 
 from .utils import to_hiragana
 
@@ -13,8 +14,10 @@ class OccurrenceIndex:
     def __init__(self) -> None:
         self.expr_to_count: Dict[str, int] = {}
         self.expr_reading_to_count: Dict[Tuple[str, str], int] = {}
-        self.prefix_to_count: Dict[str, int] = {}
         self.honorific_to_count: Dict[str, int] = {}
+        # Built lazily on first prefix query (see _ensure_prefix_index).
+        self._prefix_exprs: Optional[List[str]] = None
+        self._prefix_cumsum: List[int] = []
 
     def add(self, expression: str, reading: Optional[str], count: int) -> None:
         if reading:
@@ -25,10 +28,33 @@ class OccurrenceIndex:
         # Accumulate counts for the same expression
         self.expr_to_count[expression] = self.expr_to_count.get(expression, 0) + count
 
-    def add_prefixes(self, expression: str, count: int) -> None:
-        for i in range(_MIN_PREFIX_LENGTH, len(expression)):
-            prefix = expression[:i]
-            self.prefix_to_count[prefix] = self.prefix_to_count.get(prefix, 0) + count
+    def _ensure_prefix_index(self) -> None:
+        if self._prefix_exprs is not None:
+            return
+        items = sorted(self.expr_to_count.items())
+        self._prefix_exprs = [expr for expr, _ in items]
+        cumsum = [0]
+        for _, count in items:
+            cumsum.append(cumsum[-1] + count)
+        self._prefix_cumsum = cumsum
+
+    def prefix_total(self, expression: str) -> int:
+        """Sum the counts of all terms that have ``expression`` as a *strict*
+        prefix (longer terms only — the exact match is credited by ``get``).
+
+        Computed via binary search over a lazily-built sorted index, so there is
+        no per-term prefix explosion at build time."""
+        if len(expression) < _MIN_PREFIX_LENGTH:
+            return 0
+        self._ensure_prefix_index()
+        exprs = self._prefix_exprs
+        # '￿' is the max BMP code point, so every term starting with
+        # `expression` sorts before it (Japanese text never contains U+FFFF).
+        lo = bisect.bisect_left(exprs, expression)
+        hi = bisect.bisect_left(exprs, expression + "￿")
+        if lo < len(exprs) and exprs[lo] == expression:
+            lo += 1  # exclude the exact match (counted separately by get)
+        return self._prefix_cumsum[hi] - self._prefix_cumsum[lo]
 
     def get(self, expression: str, reading: str) -> int:
         if (expression, reading) in self.expr_reading_to_count:
@@ -48,10 +74,10 @@ class OccurrenceIndex:
         reading_is_distinct = bool(reading) and reading != expression
         if combine_word_forms and reading_is_distinct:
             total += self.expr_to_count.get(reading, 0)
-        if prefix_matching and len(expression) >= _MIN_PREFIX_LENGTH:
-            total += self.prefix_to_count.get(expression, 0)
+        if prefix_matching:
+            total += self.prefix_total(expression)
             if combine_word_forms and reading_is_distinct:
-                total += self.prefix_to_count.get(reading, 0)
+                total += self.prefix_total(reading)
         if honorific_folding:
             total += self.honorific_to_count.get(expression, 0)
             if combine_word_forms and reading_is_distinct:
@@ -84,9 +110,13 @@ class CombinedOccurrenceIndex:
                 honorific_folding=self.honorific_folding,
             )
 
-        if len(self.expr_reading_to_count) >= _COMBINED_MEMO_CAP:
-            self.expr_reading_to_count.clear()
-        self.expr_reading_to_count[key] = total_count
+        memo = self.expr_reading_to_count
+        # Bounded FIFO eviction (dicts preserve insertion order) instead of
+        # clearing the whole memo, which would thrash when the working set
+        # exceeds the cap.
+        if len(memo) >= _COMBINED_MEMO_CAP:
+            memo.pop(next(iter(memo)))
+        memo[key] = total_count
         return total_count
 
 def _dict_dir(dict_name: str) -> str:
@@ -174,8 +204,6 @@ def _build_index_from_raw(data: list, normalize_kana: bool = False, prefix_match
                 if reading:
                     reading = to_hiragana(reading)
             index.add(effective_expression, reading, count)
-            if prefix_matching and len(effective_expression) > _MIN_PREFIX_LENGTH:
-                index.add_prefixes(effective_expression, count)
 
     if honorific_folding:
         for expr, count in list(index.expr_to_count.items()):
