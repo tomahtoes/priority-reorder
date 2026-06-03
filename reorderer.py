@@ -99,9 +99,10 @@ class PriorityReorderer:
         card_id_to_note: Dict[int, int] = {}
 
         for i, (anki_query, _) in enumerate(priority_defs):
-            # The query carries any custom occurrences:/f/kanji: terms; the patched
-            # find_cards resolves them, so the result set is already the final match
-            # — no Python-side post-filter remains.
+            # get_cards_from_search returns the already-filtered match set: a
+            # conjunctive custom-term query is resolved by evaluating the standard
+            # part once and post-filtering the custom terms in Python; only
+            # disjunctive/grouped queries fall through to the patched find_cards.
             cards = self.data_manager.get_cards_from_search(anki_query)
             for c in cards:
                 card_id_to_note[c.card_id] = c.note_id

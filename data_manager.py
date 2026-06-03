@@ -14,6 +14,12 @@ class DataManager:
         # mid -> (expression_idx, reading_idx, sort_idx); None when a field is
         # absent from that note type.
         self._field_idx_cache: Dict[int, Tuple[Optional[int], Optional[int], Optional[int]]] = {}
+        # Per-run caches shared across every search in a single reorder: the same
+        # standard query / custom predicate recurs across many priority searches.
+        self._search_cache: Dict[str, List[int]] = {}                 # find_cards by query
+        self._occ_count_cache: Dict[Tuple[Tuple[str, ...], int], int] = {}  # (dicts, nid) -> count
+        self._kanji_count_cache: Dict[Tuple[str, int], int] = {}      # (check_type, nid) -> count
+        self._kanji_manager = None  # lazy
 
     def _resolve_field_indices(self, mid: int) -> Tuple[Optional[int], Optional[int], Optional[int]]:
         cached = self._field_idx_cache.get(mid)
@@ -111,23 +117,125 @@ class DataManager:
         return note_data
 
     def get_cards_from_search(self, search_string: str) -> List[Card]:
-        if search_string.strip():
-            final_search = f"{search_string} is:new"
-        else:
-            final_search = "is:new"
+        raw = search_string.strip()
 
-        try:
-            card_ids = mw.col.find_cards(final_search)
-        except Exception as e:
-            import traceback
-            print(f"[priority-reorder] find_cards failed for search {final_search!r}: {e}")
-            traceback.print_exc()
-            return []
+        # Fast path: a conjunctive query carrying custom occurrences:/f/kanji: terms.
+        # Resolve the standard part ONCE per distinct query (shared across the many
+        # priority searches that reuse the same deck/filter) and apply the custom
+        # predicates in Python over the already-loaded note data — no per-search
+        # full collection scan and no per-search re-run of the standard query.
+        from .search import has_custom_term, _strip_custom_terms, _candidate_restriction_allowed
+        if raw and has_custom_term(raw):
+            stripped = " ".join(_strip_custom_terms(raw).split())
+            if _candidate_restriction_allowed(raw, stripped):
+                return self._get_cards_filtered(raw, stripped)
+
+        # Default path: no custom terms, or a disjunctive/grouped query whose custom
+        # terms must be resolved by the patched find_cards (correctness over speed).
+        return self._cards_for_search(f"{raw} is:new" if raw else "is:new")
+
+    def _cards_for_search(self, final_search: str) -> List[Card]:
+        """find_cards(final_search) -> loaded Cards, memoized by query string for the
+        duration of the run (the collection is read-only until repositioning)."""
+        card_ids = self._search_cache.get(final_search)
+        if card_ids is None:
+            try:
+                card_ids = list(mw.col.find_cards(final_search))
+            except Exception as e:
+                import traceback
+                print(f"[priority-reorder] find_cards failed for search {final_search!r}: {e}")
+                traceback.print_exc()
+                return []
+            self._search_cache[final_search] = card_ids
 
         self._bulk_load(card_ids)
         return [c for cid in card_ids if (c := self._card_cache.get(cid)) is not None]
+
+    def _get_cards_filtered(self, raw_query: str, stripped: str) -> List[Card]:
+        from .search import parse_custom_terms
+
+        base = " ".join(t for t in stripped.split() if t != "-")  # drop stray '-' from negation
+        cards = self._cards_for_search(f"{base} is:new" if base else "is:new")
+
+        for kind, args, negated in parse_custom_terms(raw_query):
+            pred = self._term_predicate(kind, args)
+            cards = [c for c in cards if (not pred(c)) == negated]
+        return cards
+
+    def _term_predicate(self, kind: str, args):
+        from .utils import parse_comparator
+
+        if kind == "freq":
+            op, thresh = args
+            comparator = parse_comparator(op)
+            return lambda c: comparator(c.data.sort_field_value, thresh)
+
+        if kind == "occ":
+            from .dictionary_manager import expand_dict_names
+            dict_str, op, thresh = args
+            comparator = parse_comparator(op)
+            dict_names = expand_dict_names(dict_str)
+            dkey = tuple(dict_names)
+
+            def occ_pred(c: Card) -> bool:
+                if not c.data.expression or not c.data.reading:
+                    return False
+                return comparator(self._occ_count(dkey, dict_names, c), thresh)
+
+            return occ_pred
+
+        if kind == "kanji":
+            check_type, op, thresh = args
+            comparator = parse_comparator(op)
+            km = self._km()
+
+            def kanji_pred(c: Card) -> bool:
+                if not c.data.expression:
+                    return False
+                return comparator(self._kanji_count(check_type, c, km), thresh)
+
+            return kanji_pred
+
+        return lambda c: False
+
+    def _occ_count(self, dkey: Tuple[str, ...], dict_names: List[str], card: Card) -> int:
+        key = (dkey, card.note_id)
+        value = self._occ_count_cache.get(key)
+        if value is None:
+            from .dictionary_manager import occurrence_count
+            value = occurrence_count(
+                dict_names,
+                card.data.expression,
+                card.data.reading,
+                normalize_kana=self.config.kana_normalization,
+                combine_word_forms=self.config.combine_word_forms,
+                prefix_matching=self.config.prefix_matching,
+                honorific_folding=self.config.honorific_folding,
+            )
+            self._occ_count_cache[key] = value
+        return value
+
+    def _kanji_count(self, check_type: str, card: Card, km) -> int:
+        key = (check_type, card.note_id)
+        value = self._kanji_count_cache.get(key)
+        if value is None:
+            if check_type == "new":
+                value = km.get_unknown_kanji_count(card.data.expression)
+            else:  # "num"
+                value = km.get_kanji_count(card.data.expression)
+            self._kanji_count_cache[key] = value
+        return value
+
+    def _km(self):
+        if self._kanji_manager is None:
+            from .kanji_manager import get_kanji_manager
+            self._kanji_manager = get_kanji_manager(self.config)
+        return self._kanji_manager
 
     def clear_cache(self) -> None:
         self._note_cache.clear()
         self._card_cache.clear()
         self._field_idx_cache.clear()
+        self._search_cache.clear()
+        self._occ_count_cache.clear()
+        self._kanji_count_cache.clear()
