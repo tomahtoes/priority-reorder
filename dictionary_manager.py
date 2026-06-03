@@ -4,7 +4,10 @@ import os
 from functools import lru_cache
 from typing import Dict, List, Optional, Tuple
 
-from .utils import to_hiragana
+try:  # inside Anki: isolated package namespace
+    from .utils import to_hiragana
+except ImportError:  # pytest / flat-import context
+    from utils import to_hiragana
 
 _MIN_PREFIX_LENGTH = 2
 _HONORIFIC_PREFIXES = ("お", "ご", "御")
@@ -228,3 +231,57 @@ def get_occurrence_index(dict_name: str, normalize_kana: bool = False, prefix_ma
 def get_combined_occurrence_index(dict_names_tuple: Tuple[str, ...], normalize_kana: bool = False, combine_word_forms: bool = False, prefix_matching: bool = False, honorific_folding: bool = False) -> CombinedOccurrenceIndex:
     sorted_dict_names = tuple(sorted(dict_names_tuple))
     return CombinedOccurrenceIndex(list(sorted_dict_names), normalize_kana, combine_word_forms, prefix_matching, honorific_folding)
+
+def expand_dict_names(dict_str: str) -> List[str]:
+    """Resolve the dict spec of an ``occurrences:`` term to a de-duplicated list of
+    dictionary names. Accepts a single name (``Foo``), a bracketed combinator
+    (``[A,B,C]``), and the ``all`` keyword (expands to every dict in user_files)."""
+    if dict_str.startswith('[') and dict_str.endswith(']'):
+        raw_names = [d.strip() for d in dict_str[1:-1].split(',')]
+    else:
+        raw_names = [dict_str]
+
+    dict_names: List[str] = []
+    for name in raw_names:
+        if name == "all":
+            dict_names.extend(get_all_dict_names())
+        else:
+            dict_names.append(name)
+
+    # Remove duplicates to act as a true combinator (preserves first-seen order).
+    return list(dict.fromkeys(dict_names))
+
+def occurrence_count(
+    dict_names: List[str],
+    expression: str,
+    reading: str,
+    *,
+    normalize_kana: bool = False,
+    combine_word_forms: bool = False,
+    prefix_matching: bool = False,
+    honorific_folding: bool = False,
+) -> int:
+    """Total occurrence count for ``(expression, reading)`` across ``dict_names``,
+    honoring all four lookup flags. Mirrors the body of the former
+    ``OccurrenceRule.matches`` so both the reorder path and the browser/API search
+    term resolve identically. Callers must ensure expression/reading are present;
+    a note missing either should be treated as a non-match upstream rather than
+    fed a 0 here."""
+    if normalize_kana:
+        expression = to_hiragana(expression)
+        reading = to_hiragana(reading)
+
+    if len(dict_names) == 1:
+        index = get_occurrence_index(dict_names[0], normalize_kana, prefix_matching, honorific_folding)
+        return index.get_total(
+            expression,
+            reading,
+            combine_word_forms=combine_word_forms,
+            prefix_matching=prefix_matching,
+            honorific_folding=honorific_folding,
+        )
+
+    combined_index = get_combined_occurrence_index(
+        tuple(dict_names), normalize_kana, combine_word_forms, prefix_matching, honorific_folding
+    )
+    return combined_index.get(expression, reading)

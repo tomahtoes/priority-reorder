@@ -3,6 +3,7 @@ from aqt import mw
 from anki.utils import ids2str
 from .models import Card, NoteData
 from .config_manager import Config
+from .utils import parse_sort_value
 
 class DataManager:
     """Manages loading and caching of Card and Note data."""
@@ -13,20 +14,6 @@ class DataManager:
         # mid -> (expression_idx, reading_idx, sort_idx); None when a field is
         # absent from that note type.
         self._field_idx_cache: Dict[int, Tuple[Optional[int], Optional[int], Optional[int]]] = {}
-
-    @staticmethod
-    def _parse_sort(sort_val_str: str) -> Tuple[float, bool]:
-        """Returns (sort_value, has_value). Empty / non-numeric / <= 0 values
-        have no usable ordering data, signalled by has_value=False so callers
-        can place those cards last."""
-        if sort_val_str:
-            try:
-                val = float(sort_val_str)
-                if val > 0:
-                    return val, True
-            except ValueError:
-                pass
-        return float("inf"), False
 
     def _resolve_field_indices(self, mid: int) -> Tuple[Optional[int], Optional[int], Optional[int]]:
         cached = self._field_idx_cache.get(mid)
@@ -79,7 +66,7 @@ class DataManager:
                 def field_at(i: Optional[int]) -> str:
                     return fields[i] if i is not None and i < len(fields) else ""
 
-                sort_val, has_sort = self._parse_sort(field_at(sort_i))
+                sort_val, has_sort = parse_sort_value(field_at(sort_i))
                 note_data = NoteData(
                     note_id=nid,
                     expression=field_at(expr_i),
@@ -111,7 +98,7 @@ class DataManager:
         expression = note[expression_field] if expression_field in note else ""
         reading = note[reading_field] if reading_field in note else ""
         sort_val_str = note[sort_field] if sort_field in note else ""
-        sort_val, has_sort = self._parse_sort(sort_val_str)
+        sort_val, has_sort = parse_sort_value(sort_val_str)
 
         note_data = NoteData(
             note_id=note_id,

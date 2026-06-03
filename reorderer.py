@@ -5,8 +5,8 @@ from anki.collection import OpChangesWithCount
 from .models import Card
 from .config_manager import Config, get_config
 from .data_manager import DataManager
-from .kanji_manager import get_kanji_manager
-from .rules import parse_rule_string, Rule
+from .rules import parse_rule_string
+from .search import has_custom_term
 from .reorder_log import (
     PrioritySearchStats,
     ReorderReport,
@@ -14,13 +14,14 @@ from .reorder_log import (
     set_last_report,
 )
 
-PriorityDef = Tuple[List[Rule], str, Optional[int]]
+# (anki_query, limit) — custom occurrences:/f/kanji: terms stay inside the query
+# and are resolved by the patched Collection.find_cards (see search.py).
+PriorityDef = Tuple[str, Optional[int]]
 
 class PriorityReorderer:
     def __init__(self, config: Config) -> None:
         self.config = config
         self.data_manager = DataManager(config)
-        self.kanji_manager = get_kanji_manager(config)
 
     def reorder(self) -> OpChangesWithCount:
         priority_defs, raw_queries = self._parse_definitions()
@@ -67,14 +68,7 @@ class PriorityReorderer:
             searches = [raw] if isinstance(raw, str) else (raw or [])
             for s in searches:
                 if s.strip():
-                    priority_defs.append(parse_rule_string(
-                        s,
-                        kanji_manager=self.kanji_manager,
-                        normalize_kana=self.config.kana_normalization,
-                        combine_word_forms=self.config.combine_word_forms,
-                        prefix_matching=self.config.prefix_matching,
-                        honorific_folding=self.config.honorific_folding
-                    ))
+                    priority_defs.append(parse_rule_string(s))
                     raw_queries.append(s)
         except (ValueError, AttributeError) as e:
             import traceback
@@ -85,12 +79,12 @@ class PriorityReorderer:
 
     def _init_stats(self, defs: List[PriorityDef], raw_queries: List[str]) -> List[PrioritySearchStats]:
         stats: List[PrioritySearchStats] = []
-        for i, (rules, anki_query, limit) in enumerate(defs):
+        for i, (anki_query, limit) in enumerate(defs):
             stats.append(PrioritySearchStats(
                 index=i,
                 query=raw_queries[i] if i < len(raw_queries) else anki_query,
                 anki_query=anki_query,
-                has_custom_rules=bool(rules),
+                has_custom_rules=has_custom_term(anki_query),
                 limit=limit,
             ))
         return stats
@@ -104,17 +98,19 @@ class PriorityReorderer:
         all_ids: Set[int] = set()
         card_id_to_note: Dict[int, int] = {}
 
-        for i, (rules, anki_query, _) in enumerate(priority_defs):
+        for i, (anki_query, _) in enumerate(priority_defs):
+            # The query carries any custom occurrences:/f/kanji: terms; the patched
+            # find_cards resolves them, so the result set is already the final match
+            # — no Python-side post-filter remains.
             cards = self.data_manager.get_cards_from_search(anki_query)
             for c in cards:
                 card_id_to_note[c.card_id] = c.note_id
 
+            matched_ids = {c.card_id for c in cards}
+            priority_matches[i] = matched_ids
             stats[i].raw_match_count = len(cards)
-
-            refined_ids = {c.card_id for c in cards if all(r.matches(c) for r in rules)}
-            priority_matches[i] = refined_ids
-            stats[i].refined_match_count = len(refined_ids)
-            all_ids.update(refined_ids)
+            stats[i].refined_match_count = len(matched_ids)
+            all_ids.update(matched_ids)
 
         normal_cards = self.data_manager.get_cards_from_search(self.config.normal_search)
         for c in normal_cards:
@@ -216,7 +212,7 @@ class PriorityReorderer:
                 eligible = [c for c in bucket if c.card_id not in seen]
                 sorted_bucket = self._sort_cards(eligible)
 
-                limit = defs[i][2] if i < len(defs) else None
+                limit = defs[i][1] if i < len(defs) else None
                 if limit is not None:
                     taken = sorted_bucket[:limit]
                     discarded = sorted_bucket[limit:]

@@ -97,6 +97,14 @@
 
 ## Search Syntax Cheat Sheet
 
+The `occurrences:`, `f`, and `kanji:` terms below are **real Anki search terms**: besides
+`priority_search`/`normal_search`, they work directly in the **Browse search bar** and through the
+collection API (`col.find_cards` / `col.find_notes`, and therefore **AnkiConnect**). This lets you
+test a priority search interactively in the browser before committing it to config. They honor the
+same `kana_normalization` / `combine_word_forms` / `prefix_matching` / `honorific_folding` settings,
+and the configured `search_fields` / `sort_field`, as the reorderer. Leading `-` negates a term as
+usual (e.g. `-occurrences:Dict>5`).
+
 - **Anki Standard**: `added:3`, `deck:Japanese`, `tag:mining`, etc.
 - **Frequency**: `f<=2000` — Matches cards where the sort field value is less than or equal to 2000. Useful for prioritizing common words across different search queries. Supports any comparison operator (`=`, `!=`, `<`, `<=`, `>`, `>=`).
 - **Kanji i+1**: `kanji:new=1` — Matches words where exactly 1 character is unknown to you.
@@ -104,7 +112,8 @@
 
 - **Occurrences**: `occurrences:銀色、遥か>5` — Matches words appearing more than 5 times in the specified dictionary.
 - **Multi-dict**: `occurrences:[Dict1,Dict2]>10` — Matches based on the combined count across multiple dictionaries.
-- **`limit=X`**: Use in a search string to take only the top X cards.
+- **All dicts**: `occurrences:all>5` — Combines the count across every dictionary in `user_files`.
+- **`limit=X`**: Use in a search string to take only the top X cards. **Config-only** — this is a reorder control, not a browser search term, and is ignored in the Browse bar.
   - Example: `added:3 limit=20` (Only the top 20 most frequent recent cards).
 
 ---

@@ -1,4 +1,18 @@
-from typing import Callable, Any
+from typing import Callable, Any, Tuple
+
+def parse_sort_value(sort_val_str: str) -> Tuple[float, bool]:
+    """Returns (sort_value, has_value). Empty / non-numeric / <= 0 values have no
+    usable ordering data, signalled by has_value=False so callers can place those
+    cards last. Missing values resolve to +inf, which is also what frequency
+    comparisons compare against."""
+    if sort_val_str:
+        try:
+            val = float(sort_val_str)
+            if val > 0:
+                return val, True
+        except ValueError:
+            pass
+    return float("inf"), False
 
 def to_hiragana(text: str) -> str:
     return "".join(
