@@ -1,6 +1,10 @@
 from dataclasses import dataclass, field
 from typing import Any, List, Optional, Union
-from aqt import mw
+
+try:  # inside Anki: live collection available
+    from aqt import mw
+except ImportError:  # pytest / flat-import context (get_config is not exercised)
+    mw = None
 
 _VALID_SEARCH_MODES = ("sequential", "mix")
 

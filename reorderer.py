@@ -2,17 +2,30 @@ from typing import List, Optional, Set, Tuple, Dict
 from aqt import mw
 from anki.collection import OpChangesWithCount
 
-from .models import Card
-from .config_manager import Config, get_config
-from .data_manager import DataManager
-from .rules import parse_rule_string
-from .search import has_custom_term
-from .reorder_log import (
-    PrioritySearchStats,
-    ReorderReport,
-    now_timestamp,
-    set_last_report,
-)
+try:  # inside Anki: isolated package namespace
+    from .models import Card
+    from .config_manager import Config, get_config
+    from .data_manager import DataManager
+    from .rules import parse_rule_string
+    from .search import has_custom_term
+    from .reorder_log import (
+        PrioritySearchStats,
+        ReorderReport,
+        now_timestamp,
+        set_last_report,
+    )
+except ImportError:  # pytest / flat-import context
+    from models import Card
+    from config_manager import Config, get_config
+    from data_manager import DataManager
+    from rules import parse_rule_string
+    from search import has_custom_term
+    from reorder_log import (
+        PrioritySearchStats,
+        ReorderReport,
+        now_timestamp,
+        set_last_report,
+    )
 
 # (anki_query, limit) — custom occurrences:/f/kanji: terms stay inside the query
 # and are resolved by the patched Collection.find_cards (see search.py).

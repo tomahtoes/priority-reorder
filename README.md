@@ -36,7 +36,7 @@ This addon ensures you learn the cards you think are most important first. Inste
         "deck:日本語::Mining occurrences:穢翼のユースティア>=5"
       ],
       "priority_search_mode": "sequential",
-      "reorder_before_sync": true,
+      "reorder_on_sync": true,
       "search_fields": {
         "expression_field": "Expression",
         "expression_reading_field": "ExpressionReading"
@@ -59,7 +59,7 @@ This addon ensures you learn the cards you think are most important first. Inste
 > This addon requires you to use a notetype with frequency data to function. I recommend [Lapis](https://github.com/donkuri/lapis) if you need one. If you need to backfill frequency data into existing cards, check out [backfill-anki-yomitan](https://github.com/Manhhao/backfill-anki-yomitan).
 
 ## Quick Start
-By default, the addon ships with a default config that prioritizes cards added in the last 3 days, but you will need to customize it to your own deck and needs. To edit the config, follow these steps:
+The addon ships with a default config that prioritizes cards added in the last 3 days, but you'll want to customize it for your own deck. To edit the config:
 
 1. Go to **Tools** -> **Add-ons** -> **Priority Reorder** -> **Config**.
 2. Edit your config with the fields you want to update (let's say you want to prioritize cards added in the last 5 days instead):
@@ -84,7 +84,16 @@ The addon splits your **New Cards** into two groups:
 1.  **Priority Queue**: Cards matching your `priority_search`. These will be shown *first*.
 2.  **Normal Queue**: Cards matching your `normal_search`. These will be shown *after* the priority cards.
 
-Both queues are sorted internally by your `sort_field`. If there are duplicates, those in the highest priority queue matching the card will take precedence. So in the example above, cards added in the last 3 days will be shown first and then even though those cards are also in the normal queue, the priority queue will have already scheduled them first.
+Both queues are sorted internally by your `sort_field`. If a card matches more than one queue, the highest-priority match wins — so in the example above, recently added cards are scheduled by the priority queue first, even though they also match the normal queue.
+
+> All of the addon's actions live under the **Tools** -> **Priority Reorder** submenu: **Reorder Cards** (``Ctrl+Alt+` ``), **Show Stats**, and **Update Jiten Occurrence Dictionaries**.
+
+## Stats Window
+Open **Tools** -> **Priority Reorder** -> **Show Stats** to see what each of your priority searches did in the latest reorder of the current session (if you haven't reordered yet, just press **Run reorder now** or sync).
+
+You get one collapsible card per `priority_search` showing how many cards it **matched** vs. **kept** vs. **discarded**, with buttons to open the kept/discarded notes in the Browser. **Edit config** and **Run reorder now** sit at the top so you can tweak and re-check live. Everything is labeled in the window itself.
+
+> In `"mix"` mode, per-search kept/discarded numbers aren't meaningful (all searches are pooled before sorting), so each card shows only its **matched** count.
 
 ## Features Guide
 The addon supports several custom filters that you can mix in with standard Anki searches:
@@ -149,7 +158,7 @@ If your occurrence dictionaries were downloaded from [Jiten](https://jiten.moe/)
 - **Manual Update**: Go to **Tools** -> **Priority Reorder** -> **Update Jiten Occurrence Dictionaries** to force-check all dictionaries for updates.
 - **Auto Update**: Set `"auto_update_dicts": true` in your config to automatically attempt to update dictionaries once per day after syncing.
 
-> **⚠️ Note for users with many dictionaries**: Jiten's API has a rate limit of roughly 10 requests per minute at the time of writing. If you have more than 10 occurrence dictionaries, updates will take extra time as the addon waits for the rate limit to reset. In this case, auto-updating on sync may not be recommended since it will delay your sync by over a minute. Use the manual update option instead if this bothers you.
+> **⚠️ Many dictionaries**: Jiten's API allows roughly 10 requests per minute, so with more than 10 dictionaries updates slow down while the addon waits out the limit. If that delay on sync bothers you, prefer the manual update option over `auto_update_dicts`.
    
 ### 3. Kanji Prioritization (`kanji:`)
 Prioritize words based on your existing Kanji knowledge (scanned from your Review cards).
@@ -169,3 +178,6 @@ Match multiple unrelated criteria by using a list.
   - Example: `added:3 limit=20` (Only the top 20 most frequent recent cards).
 - **`priority_limit`**: Global limit for the priority queue.
 - **`priority_cutoff`**: Send high-frequency words back to the normal queue even if they matched priority.
+
+## Changelog
+See [CHANGELOG.md](CHANGELOG.md) for a dated history of major releases.

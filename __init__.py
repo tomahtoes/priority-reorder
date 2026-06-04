@@ -4,16 +4,17 @@ Priority Reorder Addon - Main entry point.
 
 try:
     from aqt import mw
-except ImportError:
-    # Not running inside Anki (e.g. pytest importing the addon package). The unit
-    # tests import the individual modules directly, so the entry point is a no-op.
-    pass
-else:
-    import threading
     from aqt.utils import showInfo, tooltip, qconnect
     from aqt.qt import QAction, QKeySequence
     from aqt import gui_hooks
     from aqt.operations import CollectionOp, QueryOp
+except ImportError:
+    # Not running inside a full Anki (e.g. pytest, whose conftest stubs only the
+    # bits of `aqt`/`anki` the individual modules import). The unit tests import
+    # those modules directly, so the GUI entry point here is a no-op.
+    pass
+else:
+    import threading
 
     from .reorderer import run_reorder
     from .config_manager import get_config

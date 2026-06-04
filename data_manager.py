@@ -1,9 +1,15 @@
 from typing import Dict, List, Optional, Tuple
 from aqt import mw
 from anki.utils import ids2str
-from .models import Card, NoteData
-from .config_manager import Config
-from .utils import parse_sort_value
+
+try:  # inside Anki: isolated package namespace
+    from .models import Card, NoteData
+    from .config_manager import Config
+    from .utils import parse_sort_value
+except ImportError:  # pytest / flat-import context
+    from models import Card, NoteData
+    from config_manager import Config
+    from utils import parse_sort_value
 
 class DataManager:
     """Manages loading and caching of Card and Note data."""

@@ -60,6 +60,7 @@
 
 ### `reorder_on_sync` (bool)
 - **Description**: When enabled, the addon will automatically run the reordering logic after each sync completes.
+- **Alias**: `reorder_before_sync` is accepted as a legacy fallback, but `reorder_on_sync` is the canonical key — prefer it.
 - **Default**: `true`
 
 ### `auto_update_dicts` (bool)
@@ -129,3 +130,14 @@ To use occurrences queries, you must configure which fields the addon should loo
 ### `search_fields.expression_reading_field` (string)
 - **Description**: The field name containing the reading/furigana (e.g.  `"ExpressionReading"`,`"Reading"`).
 - **Default**: `"ExpressionReading"`
+
+---
+
+## Inspecting Results
+
+After a reorder runs, **Tools** -> **Priority Reorder** -> **Show Stats** shows, per
+`priority_search`, how many cards matched, were kept, and were discarded once these settings were
+applied. It's the quickest way to tune `priority_cutoff`, `priority_limit`, and per-search
+`limit=` — you can see the effect of each, open the kept/discarded notes in the Browser, and press
+**Run reorder now** to re-check after editing the config. See the README's _Stats Window_ section
+for more.
