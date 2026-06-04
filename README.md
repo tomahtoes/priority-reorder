@@ -145,12 +145,12 @@ Set `"prefix_matching": true` in your config to allow a card to match with the c
 - **Default**: `false`. Note that enabling this flag increases initial index startup time of the addon a bit, but not substantially.
 
 #### Honorific Folding
-Set `"honorific_folding": true` in your config to credit bare-form cards with the counts of dictionary entries that start with an honorific morpheme (`お`, `ご`, `御`) and whose stripped remainder is the same word. Useful when your dict counts `お茶` or `御社` separately from the bare form that's actually on the card.
+Set `"honorific_folding": true` in your config to credit bare-form cards with the counts of dictionary entries that start with an honorific morpheme (`お`, `ご`, `御`) and whose stripped remainder is the same word. Useful when you want to counts for `お茶` or `御社` to also be attributed to the bare forms.
 
-- **Semantics**: a dict entry `お{X}` aliases its count onto `{X}`, but only when `{X}` is itself an entry in the same dict. This safety gate filters junk like `おはよう → はよう` and `御覧 → 覧`. Direction is dict-side only — a card for `お茶` is unchanged, but a card for `茶` picks up `お茶`'s count.
+- **Semantics**: a dict entry `お{X}` aliases its count onto `{X}`, but only when `{X}` is itself an entry in the same dict. Direction is dict-side only — a card for `お茶` is unchanged, but a card for `茶` picks up `お茶`'s count.
 - **Example**: With dict entries `お茶` (50) and `茶` (10), a card for `茶` resolves to `10 + 50 = 60`. A card for `お茶` resolves to 50, unchanged.
-- **Known limitation**: if the dict has `お金` but not bare `金`, a card for `金` is not credited — the gate refuses to alias onto a form the dict doesn't independently recognize. Combine with a supplementary dict via `occurrences:[A,B]` if you need to cover those cases.
-- **Default**: `false`. Composes independently with `combine_word_forms`, `prefix_matching`, and `kana_normalization`.
+- **Known limitation**: if the dict has `お金` but not bare `金`, a card for `金` is not credited — the gate refuses to alias onto a form the dict doesn't independently recognize.
+- **Default**: `false`.
 
 #### Updating Occurrence Dictionaries
 If your occurrence dictionaries were downloaded from [Jiten](https://jiten.moe/), the addon can keep them up to date automatically or on demand.
