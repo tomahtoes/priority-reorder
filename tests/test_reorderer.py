@@ -106,7 +106,7 @@ def test_cutoff_moves_over_threshold_cards_to_normal_with_stats():
     over = card(2, 20)
     buckets = [[card(1, 5), over]]
 
-    final_priority, normal = r._apply_refinement_rules(buckets, [card(9, 30)], st, {})
+    final_priority, normal = r._apply_refinement_rules(buckets, [card(9, 30)], st)
 
     assert ids(final_priority[0]) == [1]            # only the under-cutoff card kept
     assert over.card_id in ids(normal)              # dropped to normal
@@ -119,7 +119,7 @@ def test_cutoff_in_mix_mode_does_not_touch_per_search_stats():
     st = stats(1)
     buckets = [[card(1, 5), card(2, 20)]]
 
-    final_priority, normal = r._apply_refinement_rules(buckets, [], st, {})
+    final_priority, normal = r._apply_refinement_rules(buckets, [], st)
 
     assert 2 in ids(normal)          # still dropped to normal
     assert st[0].cutoff_dropped == 0  # but mix mode records no per-search stat
@@ -133,7 +133,7 @@ def test_prioritization_promotes_into_separate_trailing_tier():
     buckets = [[card(1, 5)]]
     normal = [card(50, 50), card(200, 200)]  # 50 <= 100 promoted; 200 stays
 
-    final_priority, new_normal = r._apply_refinement_rules(buckets, normal, st, {})
+    final_priority, new_normal = r._apply_refinement_rules(buckets, normal, st)
 
     assert len(final_priority) == 2          # original bucket + dedicated tier
     assert ids(final_priority[0]) == [1]     # search bucket untouched
@@ -148,7 +148,7 @@ def test_empty_kept_bucket_is_still_appended_for_index_alignment():
     st = stats(2)
     buckets = [[card(1, 20)], [card(2, 5)]]  # bucket 0 entirely over the cutoff
 
-    final_priority, _ = r._apply_refinement_rules(buckets, [], st, {})
+    final_priority, _ = r._apply_refinement_rules(buckets, [], st)
 
     assert final_priority[0] == []
     assert ids(final_priority[1]) == [2]
@@ -165,7 +165,7 @@ def test_limit_overflow_falls_through_to_later_bucket():
     defs = [("q0", 1), ("q1", None)]       # bucket 0 keeps only its top card
     buckets = [[cA, cB], [cB, cC]]          # cB matches both searches
 
-    queue, overflow = r._finalize_priority_queue(defs, buckets, st, {})
+    queue, overflow = r._finalize_priority_queue(defs, buckets, st)
 
     assert ids(queue) == [10, 20, 30]       # cB fell through to bucket 1
     assert cB.card_id in ids(queue)
@@ -181,7 +181,7 @@ def test_sequential_dedup_card_counts_only_in_earliest_bucket():
     defs = [("q0", None), ("q1", None)]
     buckets = [[shared], [shared, card(6, 2)]]
 
-    queue, _ = r._finalize_priority_queue(defs, buckets, st, {})
+    queue, _ = r._finalize_priority_queue(defs, buckets, st)
 
     assert ids(queue) == [5, 6]             # shared placed once, by bucket 0
     assert st[0].kept_note_ids == [shared.note_id]
@@ -194,7 +194,7 @@ def test_global_priority_limit_clips_queue_into_overflow():
     defs = [("q0", None)]
     buckets = [[card(1, 1), card(2, 2), card(3, 3)]]
 
-    queue, overflow = r._finalize_priority_queue(defs, buckets, st, {})
+    queue, overflow = r._finalize_priority_queue(defs, buckets, st)
 
     assert ids(queue) == [1, 2]
     assert ids(overflow) == [3]
@@ -208,7 +208,7 @@ def test_final_start_index_is_cumulative_kept_of_prior_searches():
     defs = [("q0", None), ("q1", None)]
     buckets = [[card(1, 1), card(2, 2)], [card(3, 3), card(4, 4)]]
 
-    r._finalize_priority_queue(defs, buckets, st, {})
+    r._finalize_priority_queue(defs, buckets, st)
 
     assert st[0].final_start_index == 0
     assert st[1].final_start_index == 2     # follows the 2 kept by search 0
@@ -220,7 +220,7 @@ def test_final_start_index_none_for_search_with_zero_kept():
     defs = [("q0", None), ("q1", None)]
     buckets = [[card(1, 1)], []]             # search 1 keeps nothing
 
-    r._finalize_priority_queue(defs, buckets, st, {})
+    r._finalize_priority_queue(defs, buckets, st)
 
     assert st[0].final_start_index == 0
     assert st[1].final_start_index is None
@@ -232,7 +232,7 @@ def test_mix_mode_flattens_and_sorts_all_buckets_together():
     defs = [("q0", None)]
     buckets = [[card(1, 3), card(2, 1), card(3, None)]]
 
-    queue, overflow = r._finalize_priority_queue(defs, buckets, st, {})
+    queue, overflow = r._finalize_priority_queue(defs, buckets, st)
 
     assert ids(queue) == [2, 1, 3]          # sorted asc, value-less card last
     assert overflow == []

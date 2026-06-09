@@ -189,25 +189,50 @@ def _safe_rewrite(query: str) -> str:
 # Cache of resolved nid lists, keyed by (token_string, collection signature). A
 # single reorder run issues many find_cards calls and repeated browser searches
 # re-resolve the same tokens; this avoids re-scanning the collection each time.
-# Correctness-first: any collection change (mw.col.mod) invalidates the whole memo.
+# Correctness-first: any collection change (mw.col.mod) OR any addon config change
+# (which doesn't touch the collection) invalidates the whole memo.
 _resolution_cache = {}
 _resolution_sig = None
+
+
+def _config_fingerprint():
+    """The addon-config values resolution results depend on (occurrence flags,
+    field names, sort_field). Editing the config doesn't bump mw.col.mod, so these
+    must be part of the cache signature."""
+    try:  # inside Anki: isolated package namespace
+        from .config_manager import get_config
+    except ImportError:  # pytest / flat-import context
+        from config_manager import get_config
+    try:
+        cfg = get_config()
+    except Exception:
+        return None
+    return (
+        cfg.kana_normalization,
+        cfg.combine_word_forms,
+        cfg.prefix_matching,
+        cfg.honorific_folding,
+        cfg.sort_field,
+        cfg.search_config.expression_field,
+        cfg.search_config.expression_reading_field,
+    )
 
 
 def _resolve(key, compute, candidate_nids):
     """Run a resolver's compute() with the right caching scope.
 
     Full-scan results (candidate_nids is None) are candidate-independent, so they
-    are memoized (and the whole memo is dropped whenever the collection changes).
-    Restricted results depend on the candidate set, are already cheap, and must
-    never be served to a different query — so they are computed fresh, unmemoized."""
+    are memoized (and the whole memo is dropped whenever the collection or the
+    addon config changes). Restricted results depend on the candidate set, are
+    already cheap, and must never be served to a different query — so they are
+    computed fresh, unmemoized."""
     if candidate_nids is not None:
         return compute()
 
     global _resolution_sig
     from aqt import mw
 
-    sig = mw.col.mod
+    sig = (mw.col.mod, _config_fingerprint())
     if sig != _resolution_sig:
         _resolution_cache.clear()
         _resolution_sig = sig
@@ -328,6 +353,7 @@ def resolve_kanji(check_type, op, thresh, candidate_nids=None):
         expr_field = cfg.search_config.expression_field
         comparator = parse_comparator(op)
         km = get_kanji_manager(cfg)
+        km.initialize()  # once per batch, not per evaluated note
 
         ids = []
         for nid, values in _iter_candidate_notes((expr_field,), candidate_nids):

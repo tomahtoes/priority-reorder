@@ -159,10 +159,13 @@ class SearchCard(QFrame):
             f"{arrow}&nbsp;&nbsp;&nbsp;{self._prefix_html}{self._query_html}"
         )
 
+    def set_expanded(self, expanded: bool) -> None:
+        self._expanded = expanded
+        self._body.setVisible(expanded)
+        self._update_header_text(expanded)
+
     def _toggle(self) -> None:
-        self._expanded = not self._expanded
-        self._body.setVisible(self._expanded)
-        self._update_header_text(self._expanded)
+        self.set_expanded(not self._expanded)
 
     def _populate_body(self, body_layout: QVBoxLayout, entry: PrioritySearchStats, mode: str) -> None:
         is_mix = mode == "mix"
@@ -217,25 +220,21 @@ class SearchCard(QFrame):
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(6)
-        any_btn = False
-
-        if entry.kept_note_ids:
-            kept_ids = list(entry.kept_note_ids)
-            btn = QPushButton(f"Open kept in browser ({len(kept_ids)})")
-            qconnect(btn.clicked, lambda _=False, ids=kept_ids: _open_in_browser(ids))
-            btn_row.addWidget(btn)
-            any_btn = True
-
-        if entry.discarded_note_ids:
-            disc_ids = list(entry.discarded_note_ids)
-            btn = QPushButton(f"Open discarded in browser ({len(disc_ids)})")
-            qconnect(btn.clicked, lambda _=False, ids=disc_ids: _open_in_browser(ids))
-            btn_row.addWidget(btn)
-            any_btn = True
+        kept_added = self._add_browser_button(btn_row, "Open kept in browser", entry.kept_note_ids)
+        disc_added = self._add_browser_button(btn_row, "Open discarded in browser", entry.discarded_note_ids)
 
         btn_row.addStretch(1)
-        if any_btn:
+        if kept_added or disc_added:
             body_layout.addLayout(btn_row)
+
+    def _add_browser_button(self, row: QHBoxLayout, label: str, note_ids: List[int]) -> bool:
+        if not note_ids:
+            return False
+        ids = list(note_ids)
+        btn = QPushButton(f"{label} ({len(ids)})")
+        qconnect(btn.clicked, lambda _=False, ids=ids: _open_in_browser(ids))
+        row.addWidget(btn)
+        return True
 
 
 class StatsDialog(QDialog):
@@ -389,7 +388,7 @@ class StatsDialog(QDialog):
 
     def _set_all_expanded(self, expanded: bool) -> None:
         for card in self._cards:
-            card._header_btn.setChecked(expanded)
+            card.set_expanded(expanded)
 
     def _open_addon_config(self) -> None:
         from aqt.addons import ConfigEditor # type: ignore

@@ -208,6 +208,16 @@ def test_prefix_total_excludes_exact_match():
     assert idx.prefix_total("彫刻") == 100  # only the longer term, exact handled by get()
 
 
+def test_prefix_total_includes_supplementary_plane_successors():
+    # Regression: with a U+FFFF sentinel, a term whose char right after the prefix
+    # is a supplementary-plane kanji (𠮟, U+20B9F) sorted past the range end and
+    # was silently missed.
+    idx = OccurrenceIndex()
+    idx.add("漢字", None, 5)
+    idx.add("漢字𠮟", None, 70)
+    assert idx.prefix_total("漢字") == 70
+
+
 # --- CombinedOccurrenceIndex memo eviction ----------------------------------
 
 def test_combined_index_evicts_oldest_when_cap_reached(monkeypatch):

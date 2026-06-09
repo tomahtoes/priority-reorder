@@ -46,5 +46,12 @@ def set_last_report(report: ReorderReport) -> None:
     _last_report = report
 
 
+def clear_last_report() -> None:
+    """Drop the stored report (used on profile switch — note ids from one profile
+    must not be shown or opened in another)."""
+    global _last_report
+    _last_report = None
+
+
 def get_last_report() -> Optional[ReorderReport]:
     return _last_report

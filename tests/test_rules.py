@@ -29,3 +29,9 @@ def test_whitespace_only_is_collapsed_to_empty():
     query, limit = parse_rule_string("   limit=3   ")
     assert query == ""
     assert limit == 3
+
+
+def test_limit_inside_larger_token_is_left_alone():
+    query, limit = parse_rule_string("deck:JP mylimit=3")
+    assert query == "deck:JP mylimit=3"
+    assert limit is None

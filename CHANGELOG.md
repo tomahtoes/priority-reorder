@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-06-09
+- Assorted bug fixes (search `or` handling, stats window, custom-term caching).
+- Safer dictionary updating and lower memory use.
+
 ## 2026-06-04
 - New **Stats window** (Tools → Priority Reorder → Show Stats).
 - Jiten occurrence-dictionary updating, manual or automatic (`auto_update_dicts`).

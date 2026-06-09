@@ -52,18 +52,11 @@ class PriorityReorderer:
 
         priority_buckets, normal_list = self._assign_initial_buckets(priority_defs, priority_matches, all_candidate_ids, all_cards_map)
 
-        # Track which bucket each card originally belonged to (for sequential mode attribution)
-        card_origin: Dict[int, int] = {}
-        if self.config.priority_search_mode != "mix":
-            for i, bucket in enumerate(priority_buckets):
-                for c in bucket:
-                    card_origin.setdefault(c.card_id, i)
-
         final_priority_buckets, final_normal_list = self._apply_refinement_rules(
-            priority_buckets, normal_list, stats, card_origin
+            priority_buckets, normal_list, stats
         )
         final_priority_queue, overflow = self._finalize_priority_queue(
-            priority_defs, final_priority_buckets, stats, card_origin
+            priority_defs, final_priority_buckets, stats
         )
         final_normal_list.extend(overflow)
 
@@ -116,17 +109,17 @@ class PriorityReorderer:
             # conjunctive custom-term query is resolved by evaluating the standard
             # part once and post-filtering the custom terms in Python; only
             # disjunctive/grouped queries fall through to the patched find_cards.
-            cards = self.data_manager.get_cards_from_search(anki_query)
-            for c in cards:
+            result = self.data_manager.get_cards_from_search(anki_query)
+            for c in result.cards:
                 card_id_to_note[c.card_id] = c.note_id
 
-            matched_ids = {c.card_id for c in cards}
+            matched_ids = {c.card_id for c in result.cards}
             priority_matches[i] = matched_ids
-            stats[i].raw_match_count = len(cards)
+            stats[i].raw_match_count = result.raw_count
             stats[i].refined_match_count = len(matched_ids)
             all_ids.update(matched_ids)
 
-        normal_cards = self.data_manager.get_cards_from_search(self.config.normal_search)
+        normal_cards = self.data_manager.get_cards_from_search(self.config.normal_search).cards
         for c in normal_cards:
             card_id_to_note[c.card_id] = c.note_id
         all_ids.update(c.card_id for c in normal_cards)
@@ -156,45 +149,47 @@ class PriorityReorderer:
         priority_buckets: List[List[Card]],
         normal_list: List[Card],
         stats: List[PrioritySearchStats],
-        card_origin: Dict[int, int],
     ) -> Tuple[List[List[Card]], List[Card]]:
         cutoff = self.config.priority_cutoff
         prioritization = self.config.normal_prioritization
         reverse = self.config.sort_reverse
 
-        final_priority = []
-        final_normal = list(normal_list)
-
-        def exceeds_threshold(card, threshold):
-            val = card.data.sort_field_value
-            return val < threshold if reverse else val > threshold
+        def split_by_threshold(cards: List[Card], threshold: Optional[int]) -> Tuple[List[Card], List[Card]]:
+            """Partition into (over, rest) by the sort value exceeding `threshold`
+            in the configured direction; a None threshold puts everything in rest."""
+            if threshold is None:
+                return [], list(cards)
+            over: List[Card] = []
+            rest: List[Card] = []
+            for card in cards:
+                val = card.data.sort_field_value
+                exceeds = val < threshold if reverse else val > threshold
+                (over if exceeds else rest).append(card)
+            return over, rest
 
         is_mix = self.config.priority_search_mode == "mix"
 
+        final_priority = []
+        final_normal = list(normal_list)
+
         for bucket_idx, bucket in enumerate(priority_buckets):
-            kept = []
-            for card in bucket:
-                if cutoff is not None and exceeds_threshold(card, cutoff):
-                    final_normal.append(card)
-                    if not is_mix and bucket_idx < len(stats):
-                        stats[bucket_idx].cutoff_dropped += 1
-                        stats[bucket_idx].cutoff_note_ids.append(card.note_id)
-                else:
-                    kept.append(card)
+            dropped, kept = split_by_threshold(bucket, cutoff)
+            final_normal.extend(dropped)
+            if dropped and not is_mix and bucket_idx < len(stats):
+                stats[bucket_idx].cutoff_dropped += len(dropped)
+                stats[bucket_idx].cutoff_note_ids.extend(c.note_id for c in dropped)
             final_priority.append(kept)
 
         # Promote low-value normal cards into their own dedicated trailing tier.
         # Kept separate from the real search buckets so they are exempt from any
-        # single search's per-search limit and excluded from per-search stats;
-        # in mix mode all buckets are flattened together anyway, so this is a
-        # no-op there.
-        new_normal = []
-        promoted = []
-        for card in final_normal:
-            if prioritization is not None and not exceeds_threshold(card, prioritization):
-                promoted.append(card)
-            else:
-                new_normal.append(card)
+        # single search's per-search limit and excluded from per-search stats. In
+        # mix mode the tier is flattened into the single sorted pool later, so
+        # promoted cards interleave with priority matches by sort value instead
+        # of trailing them.
+        if prioritization is None:
+            new_normal, promoted = final_normal, []
+        else:
+            new_normal, promoted = split_by_threshold(final_normal, prioritization)
         if promoted:
             final_priority.append(promoted)
 
@@ -205,7 +200,6 @@ class PriorityReorderer:
         defs: List[PriorityDef],
         buckets: List[List[Card]],
         stats: List[PrioritySearchStats],
-        card_origin: Dict[int, int],
     ) -> Tuple[List[Card], List[Card]]:
         queue: List[Card] = []
         overflow: List[Card] = []

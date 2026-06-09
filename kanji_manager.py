@@ -2,7 +2,11 @@ import re
 from aqt import mw
 from collections import Counter
 from typing import Set, Dict, List
-from .config_manager import Config
+
+try:  # inside Anki: isolated package namespace
+    from .config_manager import Config
+except ImportError:  # pytest / flat-import context
+    from config_manager import Config
 
 _kanji_manager_instance = None
 
@@ -112,7 +116,11 @@ class KanjiManager:
             traceback.print_exc()
 
     def get_unknown_kanji_count(self, text: str) -> int:
-        self.initialize()
+        # Safety net only: callers evaluating many notes invoke initialize() once
+        # per batch (the collection can't change mid-batch), so the per-call
+        # mw.col.mod read this used to do is skipped on the hot path.
+        if not self.initialized:
+            self.initialize()
         return sum(1 for char in self._extract_kanji(text) if self.known_kanji_counts[char] == 0)
 
     def get_kanji_count(self, text: str) -> int:

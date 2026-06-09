@@ -45,7 +45,7 @@
 ### `normal_prioritization` (int | null)
 - **Description**: A threshold used to promote cards from the normal list into the priority queue.
 - **Behavior**: If a normal card's sort value is below this number, it moves into the Priority Queue.
-- **Multi-search**: Promoted cards are appended to the *last* priority bucket. For stricter placement, define an explicit `priority_search` instead.
+- **Multi-search**: Promoted cards form their own tier placed *after* all priority searches (so they are exempt from any single search's `limit=`). In `mix` mode the tier is folded into the single sorted pool, so promoted cards interleave with priority matches by sort value. For stricter placement, define an explicit `priority_search` instead.
 - **Note**: If `sort_reverse` is `true`, cards with values *above* the threshold are moved instead.
 - **Default**: `null`
 
@@ -60,7 +60,7 @@
 
 ### `reorder_on_sync` (bool)
 - **Description**: When enabled, the addon will automatically run the reordering logic after each sync completes.
-- **Alias**: `reorder_before_sync` is accepted as a legacy fallback, but `reorder_on_sync` is the canonical key — prefer it.
+- **Alias**: `reorder_after_sync` / `reorder_before_sync` are accepted as legacy fallbacks, but `reorder_on_sync` is the canonical key — prefer it.
 - **Default**: `true`
 
 ### `auto_update_dicts` (bool)

@@ -51,10 +51,11 @@ class OccurrenceIndex:
             return 0
         self._ensure_prefix_index()
         exprs = self._prefix_exprs
-        # '￿' is the max BMP code point, so every term starting with
-        # `expression` sorts before it (Japanese text never contains U+FFFF).
+        # U+10FFFF is the max code point, so every term starting with `expression`
+        # sorts before the sentinel — including terms whose next char is a
+        # supplementary-plane kanji like 𠮟 (U+FFFF would sort before those).
         lo = bisect.bisect_left(exprs, expression)
-        hi = bisect.bisect_left(exprs, expression + "￿")
+        hi = bisect.bisect_left(exprs, expression + chr(0x10FFFF))
         if lo < len(exprs) and exprs[lo] == expression:
             lo += 1  # exclude the exact match (counted separately by get)
         return self._prefix_cumsum[hi] - self._prefix_cumsum[lo]
@@ -134,22 +135,27 @@ def _load_index_file(dict_dir: str) -> Optional[str]:
     return None
 
 def get_all_dict_names() -> List[str]:
-    """Returns a sorted list of all dictionary names in user_files, ignoring 'all'."""
+    """Returns a sorted list of all dictionary names in user_files, ignoring 'all'
+    and dot-prefixed temp dirs (updater swap leftovers)."""
     user_files_dir = os.path.join(os.path.dirname(__file__), "user_files")
     if not os.path.isdir(user_files_dir):
         return []
 
     dict_names = []
     for item in os.listdir(user_files_dir):
-        if item == "all":
+        if item == "all" or item.startswith("."):
             continue
         item_path = os.path.join(user_files_dir, item)
         if os.path.isdir(item_path):
             dict_names.append(item)
     return sorted(dict_names)
 
-@lru_cache(maxsize=32)
 def _load_term_meta_raw(dict_name: str) -> Optional[list]:
+    """Parse the dictionary's term meta bank from disk. Deliberately NOT cached:
+    the raw list is huge (every entry of a 100k+ term bank) and only needed while
+    building an OccurrenceIndex — get_occurrence_index memoizes the compact result,
+    so in the steady state each dict is parsed once per session and the raw list
+    is garbage-collected right after the build."""
     dir_path = _dict_dir(dict_name)
     index_path = _load_index_file(dir_path)
     if not index_path:

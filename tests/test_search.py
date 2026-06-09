@@ -1,3 +1,6 @@
+import sys
+import types
+
 import search
 
 
@@ -142,6 +145,38 @@ def test_multiple_distinct_terms():
         freq_resolver=freq_recorder([], ids=[3]),
     )
     assert out == "(nid:1) (nid:2) (nid:3)"
+
+
+# --- resolution cache invalidation -------------------------------------------
+
+def test_resolution_cache_invalidated_on_config_change(monkeypatch):
+    # Editing addon config doesn't bump mw.col.mod, so the memo signature must
+    # include a config fingerprint or stale nid sets get served.
+    import config_manager
+    from config_manager import Config
+
+    aqt = sys.modules["aqt"]
+    monkeypatch.setattr(aqt.mw, "col", types.SimpleNamespace(mod=1), raising=False)
+
+    cfgs = {"cur": Config()}
+    monkeypatch.setattr(config_manager, "get_config", lambda: cfgs["cur"])
+    monkeypatch.setattr(search, "_resolution_cache", {}, raising=False)
+    monkeypatch.setattr(search, "_resolution_sig", None, raising=False)
+
+    calls = {"n": 0}
+
+    def compute():
+        calls["n"] += 1
+        return [1]
+
+    key = ("occ", "D", ">", 5)
+    assert search._resolve(key, compute, None) == [1]
+    assert search._resolve(key, compute, None) == [1]
+    assert calls["n"] == 1  # same collection + same config -> memoized
+
+    cfgs["cur"] = Config(prefix_matching=True)  # config edit, col.mod unchanged
+    assert search._resolve(key, compute, None) == [1]
+    assert calls["n"] == 2  # recomputed
 
 
 # --- has_custom_term --------------------------------------------------------

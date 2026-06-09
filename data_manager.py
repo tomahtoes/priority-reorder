@@ -1,15 +1,37 @@
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, NamedTuple, Optional, Tuple
 from aqt import mw
 from anki.utils import ids2str
 
 try:  # inside Anki: isolated package namespace
     from .models import Card, NoteData
     from .config_manager import Config
-    from .utils import parse_sort_value
+    from .utils import parse_sort_value, parse_comparator
+    from .search import (
+        has_custom_term,
+        parse_custom_terms,
+        _strip_custom_terms,
+        _candidate_restriction_allowed,
+    )
+    from .dictionary_manager import expand_dict_names, occurrence_count
+    from .kanji_manager import get_kanji_manager
 except ImportError:  # pytest / flat-import context
     from models import Card, NoteData
     from config_manager import Config
-    from utils import parse_sort_value
+    from utils import parse_sort_value, parse_comparator
+    from search import (
+        has_custom_term,
+        parse_custom_terms,
+        _strip_custom_terms,
+        _candidate_restriction_allowed,
+    )
+    from dictionary_manager import expand_dict_names, occurrence_count
+    from kanji_manager import get_kanji_manager
+
+class SearchResult(NamedTuple):
+    """Cards matched by a search, plus the standard-query match count from before
+    any custom occurrences:/f/kanji: post-filtering (equal when there is none)."""
+    cards: List[Card]
+    raw_count: int
 
 class DataManager:
     """Manages loading and caching of Card and Note data."""
@@ -97,32 +119,7 @@ class DataManager:
         self._bulk_load([card_id])
         return self._card_cache.get(card_id)
 
-    def get_note_data(self, note_id: int) -> Optional[NoteData]:
-        if note_id in self._note_cache:
-            return self._note_cache[note_id]
-
-        note = mw.col.get_note(note_id)
-
-        expression_field = self.config.search_config.expression_field
-        reading_field = self.config.search_config.expression_reading_field
-        sort_field = self.config.sort_field
-
-        expression = note[expression_field] if expression_field in note else ""
-        reading = note[reading_field] if reading_field in note else ""
-        sort_val_str = note[sort_field] if sort_field in note else ""
-        sort_val, has_sort = parse_sort_value(sort_val_str)
-
-        note_data = NoteData(
-            note_id=note_id,
-            expression=expression,
-            reading=reading,
-            sort_field_value=sort_val,
-            has_sort_value=has_sort,
-        )
-        self._note_cache[note_id] = note_data
-        return note_data
-
-    def get_cards_from_search(self, search_string: str) -> List[Card]:
+    def get_cards_from_search(self, search_string: str) -> SearchResult:
         raw = search_string.strip()
 
         # Fast path: a conjunctive query carrying custom occurrences:/f/kanji: terms.
@@ -130,7 +127,6 @@ class DataManager:
         # priority searches that reuse the same deck/filter) and apply the custom
         # predicates in Python over the already-loaded note data — no per-search
         # full collection scan and no per-search re-run of the standard query.
-        from .search import has_custom_term, _strip_custom_terms, _candidate_restriction_allowed
         if raw and has_custom_term(raw):
             stripped = " ".join(_strip_custom_terms(raw).split())
             if _candidate_restriction_allowed(raw, stripped):
@@ -138,7 +134,10 @@ class DataManager:
 
         # Default path: no custom terms, or a disjunctive/grouped query whose custom
         # terms must be resolved by the patched find_cards (correctness over speed).
-        return self._cards_for_search(f"{raw} is:new" if raw else "is:new")
+        # The user part is parenthesized because Anki binds AND tighter than OR:
+        # bare `deck:A or deck:B is:new` would scope is:new to the last branch only.
+        cards = self._cards_for_search(f"({raw}) is:new" if raw else "is:new")
+        return SearchResult(cards, len(cards))
 
     def _cards_for_search(self, final_search: str) -> List[Card]:
         """find_cards(final_search) -> loaded Cards, memoized by query string for the
@@ -157,27 +156,23 @@ class DataManager:
         self._bulk_load(card_ids)
         return [c for cid in card_ids if (c := self._card_cache.get(cid)) is not None]
 
-    def _get_cards_filtered(self, raw_query: str, stripped: str) -> List[Card]:
-        from .search import parse_custom_terms
-
+    def _get_cards_filtered(self, raw_query: str, stripped: str) -> SearchResult:
         base = " ".join(t for t in stripped.split() if t != "-")  # drop stray '-' from negation
-        cards = self._cards_for_search(f"{base} is:new" if base else "is:new")
+        cards = self._cards_for_search(f"({base}) is:new" if base else "is:new")
+        raw_count = len(cards)
 
         for kind, args, negated in parse_custom_terms(raw_query):
             pred = self._term_predicate(kind, args)
             cards = [c for c in cards if (not pred(c)) == negated]
-        return cards
+        return SearchResult(cards, raw_count)
 
     def _term_predicate(self, kind: str, args):
-        from .utils import parse_comparator
-
         if kind == "freq":
             op, thresh = args
             comparator = parse_comparator(op)
             return lambda c: comparator(c.data.sort_field_value, thresh)
 
         if kind == "occ":
-            from .dictionary_manager import expand_dict_names
             dict_str, op, thresh = args
             comparator = parse_comparator(op)
             dict_names = expand_dict_names(dict_str)
@@ -194,6 +189,7 @@ class DataManager:
             check_type, op, thresh = args
             comparator = parse_comparator(op)
             km = self._km()
+            km.initialize()  # once per predicate build, not per evaluated card
 
             def kanji_pred(c: Card) -> bool:
                 if not c.data.expression:
@@ -208,7 +204,6 @@ class DataManager:
         key = (dkey, card.note_id)
         value = self._occ_count_cache.get(key)
         if value is None:
-            from .dictionary_manager import occurrence_count
             value = occurrence_count(
                 dict_names,
                 card.data.expression,
@@ -234,14 +229,5 @@ class DataManager:
 
     def _km(self):
         if self._kanji_manager is None:
-            from .kanji_manager import get_kanji_manager
             self._kanji_manager = get_kanji_manager(self.config)
         return self._kanji_manager
-
-    def clear_cache(self) -> None:
-        self._note_cache.clear()
-        self._card_cache.clear()
-        self._field_idx_cache.clear()
-        self._search_cache.clear()
-        self._occ_count_cache.clear()
-        self._kanji_count_cache.clear()
