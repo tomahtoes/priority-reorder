@@ -11,9 +11,9 @@ from urllib3.util.retry import Retry
 from typing import Any, Optional
 
 try:  # inside Anki: isolated package namespace
-    from .dictionary_manager import get_occurrence_index, get_combined_occurrence_index
+    from .dictionary_manager import get_occurrence_index, get_combined_occurrence_index, SEEN_FOLDER
 except ImportError:  # pytest / flat-import context
-    from dictionary_manager import get_occurrence_index, get_combined_occurrence_index
+    from dictionary_manager import get_occurrence_index, get_combined_occurrence_index, SEEN_FOLDER
 
 class JitenUpdater:
     def __init__(self) -> None:
@@ -30,13 +30,13 @@ class JitenUpdater:
         self.session.mount("https://", adapter)
 
     def _dict_dirs(self) -> list:
-        """Dictionary directory names in user_files ('all' and dot-prefixed temp
-        dirs from interrupted swaps excluded)."""
+        """Dictionary directory names in user_files ('all', the reserved '_seen'
+        folder, and dot-prefixed temp dirs from interrupted swaps excluded)."""
         if not os.path.isdir(self.user_files_dir):
             return []
         return [
             d for d in os.listdir(self.user_files_dir)
-            if d != "all" and not d.startswith(".")
+            if d != "all" and d != SEEN_FOLDER and not d.startswith(".")
             and os.path.isdir(os.path.join(self.user_files_dir, d))
         ]
 

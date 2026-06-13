@@ -36,6 +36,14 @@ FREQ_RE = re.compile(
 KANJI_RE = re.compile(
     r"(?<![^\s(-])kanji:(?P<type>new|num)(?P<op>>=|<=|!=|=|<|>)(?P<thresh>\d+)"
 )
+# `seen:N` is a date-windowed lookup over user_files/_seen/<date>/ (see seen_manager):
+# N is the number of trailing daily dicts, with an OPTIONAL count test that defaults to
+# `>=1` (so bare `seen:2` means "seen at least once across the last 2 days"). N<=0
+# matches nothing. The dict spec is a number, not a name, so it never composes with
+# occurrences: — there is no `occurrences:seen` path to the seen data.
+SEEN_RE = re.compile(
+    r"(?<![^\s(-])seen:(?P<n>\d+)(?:(?P<op>>=|<=|!=|=|<|>)(?P<thresh>\d+))?"
+)
 
 
 def has_custom_term(query: str) -> bool:
@@ -43,7 +51,12 @@ def has_custom_term(query: str) -> bool:
     cosmetic stats labeling; the actual resolution happens in rewrite_query."""
     if not query:
         return False
-    return bool(OCC_RE.search(query) or KANJI_RE.search(query) or FREQ_RE.search(query))
+    return bool(
+        OCC_RE.search(query)
+        or KANJI_RE.search(query)
+        or FREQ_RE.search(query)
+        or SEEN_RE.search(query)
+    )
 
 
 def _format_nid_clause(ids) -> str:
@@ -87,6 +100,15 @@ def _strip_custom_terms(query: str) -> str:
     return q
 
 
+def _strip_for_candidates(query: str) -> str:
+    """`_strip_custom_terms` plus `seen:` removal, used only to build the candidate-set
+    base handed to the unpatched find_notes (which doesn't understand `seen:` and would
+    otherwise throw on it). Kept separate from the exported `_strip_custom_terms`: the
+    reorder fast path relies on that one leaving `seen:` in place so it gets resolved by
+    the patched find_cards."""
+    return SEEN_RE.sub(" ", _strip_custom_terms(query))
+
+
 def _candidate_restriction_allowed(query: str, stripped: str) -> bool:
     """True when resolving the custom terms over only the notes matched by the
     standard part of the query is guaranteed to give the same result as a full
@@ -113,13 +135,14 @@ def _call_resolver(resolver, injected, candidate_nids, *args):
     return resolver(*args, candidate_nids=candidate_nids)
 
 
-def rewrite_query(query, *, occ_resolver=None, freq_resolver=None, kanji_resolver=None, find_notes=None) -> str:
+def rewrite_query(query, *, occ_resolver=None, freq_resolver=None, kanji_resolver=None, seen_resolver=None, find_notes=None) -> str:
     """Replace every custom token in `query` with a concrete `nid:` clause.
 
     Resolvers are injectable for testing and default to the real ones:
       occ_resolver(dict_str, op, thresh) -> list[int]
       freq_resolver(op, thresh) -> list[int]
       kanji_resolver(check_type, op, thresh) -> list[int]
+      seen_resolver(n, op, thresh) -> list[int]
     Idempotent: the output contains no custom token.
     """
     if not query:
@@ -127,13 +150,16 @@ def rewrite_query(query, *, occ_resolver=None, freq_resolver=None, kanji_resolve
     has_occ = "occurrences:" in query
     has_kanji = "kanji:" in query
     has_freq = bool(FREQ_RE.search(query))
-    if not (has_occ or has_kanji or has_freq):
+    has_seen = bool(SEEN_RE.search(query))
+    if not (has_occ or has_kanji or has_freq or has_seen):
         return query  # fast path: nothing to resolve
 
-    injected = (occ_resolver is not None or freq_resolver is not None or kanji_resolver is not None)
+    injected = (occ_resolver is not None or freq_resolver is not None
+                or kanji_resolver is not None or seen_resolver is not None)
     occ = occ_resolver or resolve_occurrences
     freq = freq_resolver or resolve_frequency
     kanji = kanji_resolver or resolve_kanji
+    seen = seen_resolver or resolve_seen
 
     # Restrict resolution to the notes the standard part of the query already
     # selects, so e.g. `deck:X occurrences:D>5` evaluates the occurrence predicate
@@ -144,7 +170,9 @@ def rewrite_query(query, *, occ_resolver=None, freq_resolver=None, kanji_resolve
     if not injected:
         fn = find_notes if find_notes is not None else _default_find_notes()
         if fn is not None:
-            stripped = " ".join(_strip_custom_terms(query).split())
+            # _strip_for_candidates also removes seen:, which the unpatched find_notes
+            # can't parse; a bare seen: query then strips to empty -> no restriction.
+            stripped = " ".join(_strip_for_candidates(query).split())
             if _candidate_restriction_allowed(query, stripped):
                 base = " ".join(t for t in stripped.split() if t != "-")
                 try:
@@ -171,6 +199,15 @@ def rewrite_query(query, *, occ_resolver=None, freq_resolver=None, kanji_resolve
                 freq, injected, candidate_nids, m.group("op"), int(m.group("thresh")))),
             query,
         )
+    if has_seen:
+        def _seen_sub(m):
+            n = int(m.group("n"))
+            if n <= 0:
+                return _format_nid_clause([])  # seen:0 matches nothing
+            op = m.group("op") or ">="          # bare seen:N means "appeared >= 1 time"
+            thresh = int(m.group("thresh")) if m.group("thresh") is not None else 1
+            return _format_nid_clause(_call_resolver(seen, injected, candidate_nids, n, op, thresh))
+        query = SEEN_RE.sub(_seen_sub, query)
     return query
 
 
@@ -193,6 +230,13 @@ def _safe_rewrite(query: str) -> str:
 # (which doesn't touch the collection) invalidates the whole memo.
 _resolution_cache = {}
 _resolution_sig = None
+
+# Separate memo for `seen:` full scans. It can't share _resolution_cache because a
+# seen result also depends on today's date and the seen files' mtimes — neither of
+# which _resolution_sig captures. Keyed by (n, op, thresh) under a signature that adds
+# both (see resolve_seen).
+_seen_cache = {}
+_seen_sig = None
 
 
 def _config_fingerprint():
@@ -369,6 +413,83 @@ def resolve_kanji(check_type, op, thresh, candidate_nids=None):
         return ids
 
     return _resolve(("kanji", check_type, op, thresh), compute, candidate_nids)
+
+
+def resolve_seen(n, op, thresh, candidate_nids=None):
+    """Note ids whose word appears, summed across the last `n` daily seen dicts
+    (user_files/_seen/<date>/), a count satisfying `op thresh`. Counting goes through
+    seen_manager's window indices, which reuse the occurrence machinery, so the global
+    flags (prefix/kana/combine/honorific) apply just like `occurrences:`.
+
+    Notes with an empty expression are skipped; the reading is optional (an empty
+    reading falls back to expression-only), matching daily-occurrence-search.
+
+    The window's per-day indices are resolved once per call (not per note), and full
+    scans are memoized in `_seen_cache`. That memo can't be `_resolve`/`_resolution_sig`:
+    a `seen` result also depends on today's date and the seen files' mtimes, so the
+    signature below adds both (they change without bumping mw.col.mod)."""
+    try:  # inside Anki: isolated package namespace
+        from .config_manager import get_config
+        from . import seen_manager
+    except ImportError:  # pytest / flat-import context
+        from config_manager import get_config
+        import seen_manager
+
+    if n <= 0:
+        return []
+
+    cfg = get_config()
+    expr_field = cfg.search_config.expression_field
+    read_field = cfg.search_config.expression_reading_field
+    comparator = parse_comparator(op)
+    today = seen_manager.today_date()
+
+    def compute():
+        # Resolve the window ONCE (one filesystem stat per day + a merged index for the
+        # prefix work), then the note loop is pure in-memory lookups. Resolving per note
+        # would re-stat the seen folder once per note per day — pathologically slow.
+        day_indices, merged = seen_manager.get_window(
+            n, cfg.kana_normalization, cfg.prefix_matching, cfg.honorific_folding, today=today,
+        )
+        ids = []
+        for nid, values in _iter_candidate_notes((expr_field, read_field), candidate_nids):
+            expression = values[expr_field]
+            if not expression:
+                continue
+            reading = values[read_field]
+            count = seen_manager.window_total(
+                day_indices,
+                merged,
+                expression,
+                reading,
+                normalize_kana=cfg.kana_normalization,
+                combine_word_forms=cfg.combine_word_forms,
+                prefix_matching=cfg.prefix_matching,
+                honorific_folding=cfg.honorific_folding,
+            )
+            if comparator(count, thresh):
+                ids.append(nid)
+        return ids
+
+    # Restricted resolution depends on the candidate set and is already cheap — compute
+    # fresh (mirrors _resolve). Full scans recur across the many find_cards calls of a
+    # single reorder (each priority search wraps the query in parens, which defeats the
+    # candidate restriction), so memoize them — keyed so that date rollover and seen-file
+    # rewrites, which don't bump mw.col.mod, still invalidate the result.
+    if candidate_nids is not None:
+        return compute()
+
+    global _seen_sig
+    from aqt import mw
+
+    sig = (mw.col.mod, _config_fingerprint(), today, seen_manager.window_mtimes(n, today))
+    if sig != _seen_sig:
+        _seen_cache.clear()
+        _seen_sig = sig
+    key = (n, op, thresh)
+    if key not in _seen_cache:
+        _seen_cache[key] = compute()
+    return _seen_cache[key]
 
 
 # ---------------------------------------------------------------------------

@@ -13,6 +13,13 @@ _MIN_PREFIX_LENGTH = 2
 _HONORIFIC_PREFIXES = ("お", "ご", "御")
 _COMBINED_MEMO_CAP = 50_000
 
+# Reserved child folder under user_files holding the daily seen dicts
+# (user_files/_seen/<YYYY-MM-DD>/term_meta_bank_*.json). The leading underscore keeps it
+# visually distinct and sorted above real dictionaries. It is owned by the `seen:N`
+# search term (see seen_manager.py) and must never be treated as a normal occurrence
+# dictionary, so it is excluded from dict enumeration / expansion / updating.
+SEEN_FOLDER = "_seen"
+
 class OccurrenceIndex:
     def __init__(self) -> None:
         self.expr_to_count: Dict[str, int] = {}
@@ -135,15 +142,15 @@ def _load_index_file(dict_dir: str) -> Optional[str]:
     return None
 
 def get_all_dict_names() -> List[str]:
-    """Returns a sorted list of all dictionary names in user_files, ignoring 'all'
-    and dot-prefixed temp dirs (updater swap leftovers)."""
+    """Returns a sorted list of all dictionary names in user_files, ignoring 'all',
+    the reserved '_seen' folder, and dot-prefixed temp dirs (updater swap leftovers)."""
     user_files_dir = os.path.join(os.path.dirname(__file__), "user_files")
     if not os.path.isdir(user_files_dir):
         return []
 
     dict_names = []
     for item in os.listdir(user_files_dir):
-        if item == "all" or item.startswith("."):
+        if item == "all" or item == SEEN_FOLDER or item.startswith("."):
             continue
         item_path = os.path.join(user_files_dir, item)
         if os.path.isdir(item_path):
@@ -254,8 +261,10 @@ def expand_dict_names(dict_str: str) -> List[str]:
         else:
             dict_names.append(name)
 
-    # Remove duplicates to act as a true combinator (preserves first-seen order).
-    return list(dict.fromkeys(dict_names))
+    # Remove duplicates to act as a true combinator (preserves first-seen order), and
+    # drop the reserved '_seen' folder so `occurrences:_seen` / `occurrences:[A,_seen]`
+    # can never reach the daily seen dicts — only `seen:N` may.
+    return [name for name in dict.fromkeys(dict_names) if name != SEEN_FOLDER]
 
 def occurrence_count(
     dict_names: List[str],

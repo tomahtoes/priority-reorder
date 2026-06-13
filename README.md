@@ -99,6 +99,7 @@ You get one collapsible card per `priority_search` showing how many cards it **m
 The addon supports several custom filters that you can mix in with standard Anki searches:
 - **`f<10000`**: Filter by the value in your frequency sort field.
 - **`occurrences:DictionaryName>5`**: Filter by word occurrences in a dictionary.
+- **`seen:2`**: Filter by words appearing in your recent daily occurrence dictionaries.
 - **`limit=20`**: Limit the number of results from a specific search.
 - **`kanji:num=1`**: Filter by the total number of Kanji.
 - **`kanji:new=1`**: Filter by the number of unknown Kanji.
@@ -168,12 +169,34 @@ Prioritize words based on your existing Kanji knowledge (scanned from your Revie
 - **`kanji:num=1`**: Matches words with exactly 1 Kanji.
 - **`kanji:num>=3`**: Matches words with 3 or more Kanji.
 
-### 4. Multiple Priorities
+### 4. Recently Seen Words (`seen:`)
+> ⚠️ **Experimental** — `seen:` is a newer, experimental feature and may change or be removed in a future version.
+
+Prioritize words you've encountered recently in your immersion, using *daily* occurrence dictionaries. It's resolved through this addon, so the occurrence options above (`prefix_matching`, `kana_normalization`, etc.) apply to `seen:` too.
+- **Syntax**: `seen:N` matches words appearing in any of the last **N** daily dictionaries, with an optional count test (`seen:7>=10`) that defaults to `>=1`. All comparison operators work, and a leading `-` negates (`-seen:30`).
+- **Examples**: `seen:1` (today), `seen:7` (seen at least once in the last 7 days), `seen:7>=10` (10+ times total over 7 days).
+- **Day boundaries**: "today" honors Anki's rollover hour, and today's dictionary is picked up live as it's rewritten — no restart needed.
+- **Where it works**: the Browse bar, the collection API / AnkiConnect, and `priority_search`/`normal_search`.
+- **⚡ Keep windows small**: cost grows with N, so **the smaller your window, the faster the reorder** — `seen:1`–`seen:3` are cheap, large windows (`seen:30`+) get noticeably slower, especially with `prefix_matching` on. If you care at all about sorting speed, use the smallest window that still means "recently seen". (Reusing the *same* window across several priority searches is free within a reorder.)
+
+#### Setup for Seen Dictionaries
+Place your daily occurrence dictionaries in a reserved `_seen` folder under `user_files`, one subfolder per day named `YYYY-MM-DD`:
+```
+user_files/
+└── _seen/
+    ├── 2026-06-11/
+    │   └── term_meta_bank_1.json
+    └── 2026-06-12/
+        └── term_meta_bank_1.json
+```
+Each `term_meta_bank_*.json` is an ordinary Yomitan occurrence dictionary — the same format as occurrence mining above, and it reuses the same `search_fields` note-type config. The `_seen` folder is **reserved** (the leading underscore keeps it distinct from your real dictionaries): it's never treated as a normal occurrence dictionary, so it's excluded from `occurrences:all` and can't be reached via `occurrences:_seen` — only `seen:N` reads it.
+
+### 5. Multiple Priorities
 Match multiple unrelated criteria by using a list.
 - **Sequential**: First match `added:3`, THEN match `tag:ノベルゲーム::銀色、遥か`.
 - **Mix**: Match `added:3` OR `tag:ノベルゲーム::銀色、遥か` and sort them all together.
 
-### 5. Limits and Cutoffs
+### 6. Limits and Cutoffs
 - **`limit=X`**: Use in a search string to take only the top X cards.
   - Example: `added:3 limit=20` (Only the top 20 most frequent recent cards).
 - **`priority_limit`**: Global limit for the priority queue.
