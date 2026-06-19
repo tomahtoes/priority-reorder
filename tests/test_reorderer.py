@@ -279,3 +279,75 @@ def test_apply_reordering_no_cards_does_not_call_scheduler(monkeypatch):
 
     assert sched.calls == []
     assert result.count == 0
+
+
+# --- _needs_reorder / skip-when-unchanged ----------------------------------
+
+class _FakeDB:
+    """Stands in for mw.col.db; .list() returns a scripted new-card order
+    (what `select id from cards where type = 0 order by due, id` would yield)."""
+    def __init__(self, current_ids):
+        self._current_ids = list(current_ids)
+
+    def list(self, _query):
+        return list(self._current_ids)
+
+
+def _col(sched, current_ids):
+    import types
+    return types.SimpleNamespace(sched=sched, db=_FakeDB(current_ids))
+
+
+def test_apply_reordering_skips_when_order_already_applied(monkeypatch):
+    # Managed cards already occupy the front of the new queue in target order
+    # (99 is an unmanaged new card trailing behind them) -> reposition is
+    # skipped so nothing is dirtied for sync.
+    import reorderer as rmod
+
+    sched = _FakeSched()
+    monkeypatch.setattr(rmod.mw, "col", _col(sched, [1, 2, 3, 99]), raising=False)
+
+    result = reorderer()._apply_reordering([card(1, 1), card(2, 2), card(3, 3)], [])
+
+    assert sched.calls == []
+    assert result.count == 0
+
+
+def test_apply_reordering_repositions_when_order_differs(monkeypatch):
+    import reorderer as rmod
+
+    sched = _FakeSched()
+    monkeypatch.setattr(rmod.mw, "col", _col(sched, [3, 2, 1]), raising=False)
+
+    result = reorderer()._apply_reordering([card(1, 1), card(2, 2), card(3, 3)], [])
+
+    assert sched.calls[0][0] == [1, 2, 3]
+    assert result.count == 3
+
+
+def test_apply_reordering_repositions_when_a_card_is_missing(monkeypatch):
+    # Fewer new cards present than we want to place (a delete-one/add-one keeps
+    # the count equal elsewhere, but here the sequence/length differs) -> reorder.
+    import reorderer as rmod
+
+    sched = _FakeSched()
+    monkeypatch.setattr(rmod.mw, "col", _col(sched, [1, 2]), raising=False)
+
+    result = reorderer()._apply_reordering([card(1, 1), card(2, 2), card(3, 3)], [])
+
+    assert sched.calls[0][0] == [1, 2, 3]
+    assert result.count == 3
+
+
+def test_apply_reordering_repositions_when_foreign_card_interleaved(monkeypatch):
+    # An unmanaged new card (99) sits among the managed ones, so they are not yet
+    # the contiguous front block -> reorder.
+    import reorderer as rmod
+
+    sched = _FakeSched()
+    monkeypatch.setattr(rmod.mw, "col", _col(sched, [1, 99, 2, 3]), raising=False)
+
+    result = reorderer()._apply_reordering([card(1, 1), card(2, 2), card(3, 3)], [])
+
+    assert sched.calls[0][0] == [1, 2, 3]
+    assert result.count == 3

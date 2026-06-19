@@ -293,6 +293,9 @@ class PriorityReorderer:
         if not final_ids:
             return OpChangesWithCount(count=0)
 
+        if not self._needs_reorder(final_ids):
+            return OpChangesWithCount(count=0)
+
         return mw.col.sched.reposition_new_cards(
             card_ids=final_ids,
             starting_from=0,
@@ -300,6 +303,34 @@ class PriorityReorderer:
             randomize=False,
             shift_existing=self.config.shift_existing
         )
+
+    def _needs_reorder(self, new_ids: List[int]) -> bool:
+        """Whether repositioning would actually change the new-card order.
+
+        Anki's reposition rewrites every new card it touches — and with
+        shift_existing it bumps every new card's position by a fixed offset —
+        unconditionally, even when the resulting order is identical. That marks
+        the cards for sync, so a no-op reorder leaves the sync button stuck on
+        "changes pending". Skipping the reposition when the order is already
+        correct is the only way to avoid that churn.
+        """
+        if not new_ids:
+            return False
+
+        try:
+            # type = 0 == new cards (the `is:new` domain every search uses).
+            # Tie-break by id so equal-due cards order deterministically across
+            # runs; otherwise a due collision could flip the order and trigger a
+            # needless reorder.
+            current_ids = mw.col.db.list("select id from cards where type = 0 order by due, id")
+        except Exception:
+            # Even though we can't know for sure, default to reordering to match historical behavior
+            return True
+
+        if len(current_ids) < len(new_ids):
+            return True
+
+        return current_ids[:len(new_ids)] != new_ids
 
     def _get_sort_key(self, card: Card) -> float:
         return card.data.sort_field_value
