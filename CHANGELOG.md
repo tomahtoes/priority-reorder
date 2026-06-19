@@ -1,7 +1,7 @@
 # Changelog
 
 ## 2026-06-19
-- New `seen:N` search term — prioritize words from your recent *daily* occurrence dictionaries (in `user_files/_seen/<YYYY-MM-DD>/`), with an optional count test (`seen:7>=10`). Works in the Browse bar, the collection API (AnkiConnect), and config, and honors the occurrence options (prefix matching, etc.).
+- New `seen:N` search term — prioritize words from your recent *daily* occurrence dictionaries (in `user_files/_seen/<YYYY-MM-DD>/`). Matches words appearing in any of the last N days ("seen at all"). Works in the Browse bar, the collection API (AnkiConnect), and config, and honors the occurrence options (prefix matching, etc.).
 - Assorted bug fixes (search `or` handling, stats window, custom-term caching, error during sync on close).
 - Safer dictionary updating and lower memory use.
 

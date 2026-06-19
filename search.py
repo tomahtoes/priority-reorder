@@ -36,13 +36,13 @@ FREQ_RE = re.compile(
 KANJI_RE = re.compile(
     r"(?<![^\s(-])kanji:(?P<type>new|num)(?P<op>>=|<=|!=|=|<|>)(?P<thresh>\d+)"
 )
-# `seen:N` is a date-windowed lookup over user_files/_seen/<date>/ (see seen_manager):
-# N is the number of trailing daily dicts, with an OPTIONAL count test that defaults to
-# `>=1` (so bare `seen:2` means "seen at least once across the last 2 days"). N<=0
-# matches nothing. The dict spec is a number, not a name, so it never composes with
+# `seen:N` is a date-windowed *presence* lookup over user_files/_seen/<date>/ (see
+# seen_manager): N is the number of trailing daily dicts, and a word matches if it appears in
+# ANY of them. It is boolean — there is no count test (a bare `seen:N` only asks "seen at
+# all"). N<=0 matches nothing. The spec is a number, not a name, so it never composes with
 # occurrences: — there is no `occurrences:seen` path to the seen data.
 SEEN_RE = re.compile(
-    r"(?<![^\s(-])seen:(?P<n>\d+)(?:(?P<op>>=|<=|!=|=|<|>)(?P<thresh>\d+))?"
+    r"(?<![^\s(-])seen:(?P<n>\d+)"
 )
 
 
@@ -142,7 +142,7 @@ def rewrite_query(query, *, occ_resolver=None, freq_resolver=None, kanji_resolve
       occ_resolver(dict_str, op, thresh) -> list[int]
       freq_resolver(op, thresh) -> list[int]
       kanji_resolver(check_type, op, thresh) -> list[int]
-      seen_resolver(n, op, thresh) -> list[int]
+      seen_resolver(n) -> list[int]
     Idempotent: the output contains no custom token.
     """
     if not query:
@@ -204,9 +204,7 @@ def rewrite_query(query, *, occ_resolver=None, freq_resolver=None, kanji_resolve
             n = int(m.group("n"))
             if n <= 0:
                 return _format_nid_clause([])  # seen:0 matches nothing
-            op = m.group("op") or ">="          # bare seen:N means "appeared >= 1 time"
-            thresh = int(m.group("thresh")) if m.group("thresh") is not None else 1
-            return _format_nid_clause(_call_resolver(seen, injected, candidate_nids, n, op, thresh))
+            return _format_nid_clause(_call_resolver(seen, injected, candidate_nids, n))
         query = SEEN_RE.sub(_seen_sub, query)
     return query
 
@@ -415,19 +413,19 @@ def resolve_kanji(check_type, op, thresh, candidate_nids=None):
     return _resolve(("kanji", check_type, op, thresh), compute, candidate_nids)
 
 
-def resolve_seen(n, op, thresh, candidate_nids=None):
-    """Note ids whose word appears, summed across the last `n` daily seen dicts
-    (user_files/_seen/<date>/), a count satisfying `op thresh`. Counting goes through
-    seen_manager's window indices, which reuse the occurrence machinery, so the global
-    flags (prefix/kana/combine/honorific) apply just like `occurrences:`.
+def resolve_seen(n, candidate_nids=None):
+    """Note ids whose word appears in any of the last `n` daily seen dicts
+    (user_files/_seen/<date>/). Presence goes through seen_manager's window, which reuses the
+    occurrence parsing, so the global flags (prefix/kana/combine/honorific) apply just like
+    `occurrences:`. It is boolean — bare `seen:N` only asks "seen at all".
 
     Notes with an empty expression are skipped; the reading is optional (an empty
     reading falls back to expression-only), matching daily-occurrence-search.
 
-    The window's per-day indices are resolved once per call (not per note), and full
-    scans are memoized in `_seen_cache`. That memo can't be `_resolve`/`_resolution_sig`:
-    a `seen` result also depends on today's date and the seen files' mtimes, so the
-    signature below adds both (they change without bumping mw.col.mod)."""
+    The window is resolved once per call (not per note), and full scans are memoized in
+    `_seen_cache`. That memo can't be `_resolve`/`_resolution_sig`: a `seen` result also
+    depends on today's date and the seen files' mtimes, so the signature below adds both
+    (they change without bumping mw.col.mod)."""
     try:  # inside Anki: isolated package namespace
         from .config_manager import get_config
         from . import seen_manager
@@ -441,15 +439,14 @@ def resolve_seen(n, op, thresh, candidate_nids=None):
     cfg = get_config()
     expr_field = cfg.search_config.expression_field
     read_field = cfg.search_config.expression_reading_field
-    comparator = parse_comparator(op)
     today = seen_manager.today_date()
 
     def compute():
-        # Resolve the window ONCE (one filesystem stat per day + a merged index for the
-        # prefix work), then the note loop is pure in-memory lookups. Resolving per note
-        # would re-stat the seen folder once per note per day — pathologically slow.
-        day_indices, merged = seen_manager.get_window(
-            n, cfg.kana_normalization, cfg.prefix_matching, cfg.honorific_folding, today=today,
+        # Resolve the window ONCE (one filesystem stat per day), then the note loop is pure
+        # in-memory membership lookups. Resolving per note would re-stat the seen folder once
+        # per note per day — pathologically slow.
+        window = seen_manager.get_seen_window(
+            n, cfg.kana_normalization, cfg.honorific_folding, today=today,
         )
         ids = []
         for nid, values in _iter_candidate_notes((expr_field, read_field), candidate_nids):
@@ -457,17 +454,14 @@ def resolve_seen(n, op, thresh, candidate_nids=None):
             if not expression:
                 continue
             reading = values[read_field]
-            count = seen_manager.window_total(
-                day_indices,
-                merged,
+            if window.contains(
                 expression,
                 reading,
                 normalize_kana=cfg.kana_normalization,
                 combine_word_forms=cfg.combine_word_forms,
                 prefix_matching=cfg.prefix_matching,
                 honorific_folding=cfg.honorific_folding,
-            )
-            if comparator(count, thresh):
+            ):
                 ids.append(nid)
         return ids
 
@@ -486,7 +480,7 @@ def resolve_seen(n, op, thresh, candidate_nids=None):
     if sig != _seen_sig:
         _seen_cache.clear()
         _seen_sig = sig
-    key = (n, op, thresh)
+    key = (n,)
     if key not in _seen_cache:
         _seen_cache[key] = compute()
     return _seen_cache[key]

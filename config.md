@@ -114,7 +114,7 @@ usual (e.g. `-occurrences:Dict>5`).
 - **Occurrences**: `occurrences:銀色、遥か>5` — Matches words appearing more than 5 times in the specified dictionary.
 - **Multi-dict**: `occurrences:[Dict1,Dict2]>10` — Matches based on the combined count across multiple dictionaries.
 - **All dicts**: `occurrences:all>5` — Combines the count across every dictionary in `user_files`.
-- **Recently seen**: `seen:7` — Matches words appearing in any of the last 7 *daily* occurrence dictionaries (in `user_files/_seen/<YYYY-MM-DD>/`). Add an optional count test, `seen:7>=10` (default `>=1`). "Today" honors Anki's rollover hour. The `_seen` folder is reserved — it is never a normal occurrence dict, so `occurrences:_seen` / `occurrences:all` can't reach it; only `seen:N` does. See the README for folder setup.
+- **Recently seen**: `seen:7` — Matches words appearing in any of the last 7 *daily* occurrence dictionaries (in `user_files/_seen/<YYYY-MM-DD>/`). It's boolean ("seen at all"). "Today" honors Anki's rollover hour. The `_seen` folder is reserved — it is never a normal occurrence dict, so `occurrences:_seen` / `occurrences:all` can't reach it; only `seen:N` does. See the README for folder setup.
 - **`limit=X`**: Use in a search string to take only the top X cards. **Config-only** — this is a reorder control, not a browser search term, and is ignored in the Browse bar.
   - Example: `added:3 limit=20` (Only the top 20 most frequent recent cards).
 

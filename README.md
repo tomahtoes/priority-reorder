@@ -173,8 +173,8 @@ Prioritize words based on your existing Kanji knowledge (scanned from your Revie
 > ⚠️ **Experimental** — `seen:` is a newer, experimental feature and may change or be removed in a future version.
 
 Prioritize words you've encountered recently in your immersion, using *daily* occurrence dictionaries. It's resolved through this addon, so the occurrence options above (`prefix_matching`, `kana_normalization`, etc.) apply to `seen:` too.
-- **Syntax**: `seen:N` matches words appearing in any of the last **N** daily dictionaries, with an optional count test (`seen:7>=10`) that defaults to `>=1`. All comparison operators work, and a leading `-` negates (`-seen:30`).
-- **Examples**: `seen:1` (today), `seen:7` (seen at least once in the last 7 days), `seen:7>=10` (10+ times total over 7 days).
+- **Syntax**: `seen:N` matches words appearing in any of the last **N** daily dictionaries. It's boolean — "seen at all", regardless of how many times. A leading `-` negates (`-seen:30`).
+- **Examples**: `seen:1` (today), `seen:7` (appeared in any of the last 7 days).
 - **Day boundaries**: "today" honors Anki's rollover hour, and today's dictionary is picked up live as it's rewritten — no restart needed.
 - **Where it works**: the Browse bar, the collection API / AnkiConnect, and `priority_search`/`normal_search`.
 - **⚡ Keep windows small**: cost grows with N, so **the smaller your window, the faster the reorder** — `seen:1`–`seen:3` are cheap, large windows (`seen:30`+) get noticeably slower, especially with `prefix_matching` on. If you care at all about sorting speed, use the smallest window that still means "recently seen". (Reusing the *same* window across several priority searches is free within a reorder.)

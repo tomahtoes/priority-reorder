@@ -10,8 +10,8 @@ import seen_manager
 
 
 def seen_recorder(calls, ids=None):
-    def resolve(n, op, thresh):
-        calls.append((n, op, thresh))
+    def resolve(n):
+        calls.append(n)
         return ids if ids is not None else [7, 8]
     return resolve
 
@@ -25,25 +25,20 @@ def occ_recorder(calls, ids=None):
 
 # --- seen: token rewriting --------------------------------------------------
 
-def test_seen_default_threshold_is_at_least_one():
+def test_seen_basic_resolves():
     calls = []
     out = search.rewrite_query("seen:2", seen_resolver=seen_recorder(calls))
     assert out == "(nid:7,8)"
-    assert calls == [(2, ">=", 1)]  # bare seen:N -> "appeared >= 1 time over N days"
+    assert calls == [2]  # bare seen:N -> "appeared in any of the last N days" (boolean)
 
 
-def test_seen_explicit_op_and_threshold():
+def test_seen_threshold_removed():
+    # The count-threshold syntax is gone: `seen:7` resolves and a trailing `>=10` is left as a
+    # normal token (clean removal — not silently absorbed).
     calls = []
     out = search.rewrite_query("seen:7>=10", seen_resolver=seen_recorder(calls))
-    assert out == "(nid:7,8)"
-    assert calls == [(7, ">=", 10)]
-
-
-def test_seen_all_operators():
-    for op in ("<", "<=", ">", ">=", "=", "!="):
-        calls = []
-        search.rewrite_query(f"seen:3{op}4", seen_resolver=seen_recorder(calls))
-        assert calls == [(3, op, 4)]
+    assert out == "(nid:7,8)>=10"
+    assert calls == [7]
 
 
 def test_seen_zero_matches_nothing_without_resolving():
@@ -54,7 +49,7 @@ def test_seen_zero_matches_nothing_without_resolving():
 
 
 def test_seen_empty_result_is_nid_zero():
-    out = search.rewrite_query("seen:2", seen_resolver=lambda n, o, t: [])
+    out = search.rewrite_query("seen:2", seen_resolver=lambda n: [])
     assert out == "nid:0"
 
 
@@ -131,60 +126,70 @@ def test_today_date_after_rollover_is_same_day():
     assert seen_manager.today_date(now=datetime(2026, 6, 12, 10, 0), rollover=4) == date(2026, 6, 12)
 
 
-# --- window_total: hybrid merge math ----------------------------------------
+# --- SeenWindow.contains: presence + parity with counting -------------------
 
-def _ref_per_day(days, e, r, **flags):
-    """Reference (pre-merge behavior): sum get_total() over each day independently."""
-    return sum(d.get_total(e, r, **flags) for d in days)
-
-
-def test_window_total_sums_days_and_credits_prefix():
-    day_recent = dm._build_index_from_raw([["下駄箱", "freq", 5]])
-    day_prev = dm._build_index_from_raw([["下駄", "freq", 2]])
-    days = [day_recent, day_prev]
-    merged = seen_manager._merge_window(days)
-    # exact-only: 下駄 appears only on the previous day -> 2
-    assert seen_manager.window_total(days, merged, "下駄", "") == 2
-    # prefix on: prev-day exact 2 + recent-day 下駄箱 credited via prefix 5 -> 7
-    assert seen_manager.window_total(days, merged, "下駄", "", prefix_matching=True) == 7
-    # a 1-day window drops the prev-day exact match -> only the recent prefix credit
-    one = [day_recent]
-    assert seen_manager.window_total(one, seen_manager._merge_window(one), "下駄", "", prefix_matching=True) == 5
+def _build_window(day_raws, normalize_kana=False, honorific_folding=False):
+    days = [seen_manager.build_seen_day(d, normalize_kana, honorific_folding) for d in day_raws]
+    return seen_manager._merge_seen_days(days)
 
 
-def test_window_total_combine_word_forms():
-    days = [dm._build_index_from_raw([
-        ["南京", "freq", {"reading": "なんきん", "frequency": {"value": 7}}],
-        ["なんきん", "freq", {"value": 3}],  # kana-only entry keyed under the reading
-    ])]
-    merged = seen_manager._merge_window(days)
-    assert seen_manager.window_total(days, merged, "南京", "なんきん") == 7
-    assert seen_manager.window_total(days, merged, "南京", "なんきん", combine_word_forms=True) == 10
+def test_seen_window_presence_and_prefix():
+    window = _build_window([[["下駄箱", "freq", 5]], [["下駄", "freq", 2]]])
+    assert window.contains("下駄", "")       # exact, on the previous day
+    assert window.contains("下駄箱", "")     # exact, on the recent day
+    assert not window.contains("茶", "")     # absent
+    # prefix: 下駄 is credited by the longer 下駄箱 even when the exact 下駄 day is absent
+    one = _build_window([[["下駄箱", "freq", 5]]])
+    assert not one.contains("下駄", "")
+    assert one.contains("下駄", "", prefix_matching=True)
 
 
-def test_window_total_equals_per_day_summation_incl_homograph():
-    # The hybrid merge must equal the old per-day get_total() summation for EVERY
-    # card/flag combo — including the homograph (角 read かど vs つの) whose per-day
-    # reading-mismatch fallback a full merge would drop.
-    d1 = dm._build_index_from_raw([
-        ["下駄", "freq", {"reading": "げた", "frequency": {"value": 5}}],
-        ["下駄箱", "freq", {"reading": "げたばこ", "frequency": {"value": 10}}],
-        ["角", "freq", {"reading": "かど", "frequency": {"value": 4}}],
-        ["お茶", "freq", {"reading": "おちゃ", "frequency": {"value": 50}}],
-        ["茶", "freq", {"reading": "ちゃ", "frequency": {"value": 8}}],
-    ], honorific_folding=True)
-    d2 = dm._build_index_from_raw([
-        ["下駄箱", "freq", {"reading": "げたばこ", "frequency": {"value": 6}}],
-        ["角", "freq", {"reading": "つの", "frequency": {"value": 3}}],
-    ], honorific_folding=True)
-    d3 = dm._build_index_from_raw([
-        ["下駄", "freq", {"reading": "げた", "frequency": {"value": 2}}],
-        ["下駄屋", "freq", {"reading": "げたや", "frequency": {"value": 8}}],
-    ], honorific_folding=True)
-    days = [d1, d2, d3]
-    merged = seen_manager._merge_window(days)
+def test_seen_window_combine_word_forms():
+    # A kana-only entry is keyed under the reading; a kanji card sharing that reading is only
+    # credited with combine_word_forms.
+    kana_only = _build_window([[["なんきん", "freq", {"value": 3}]]])
+    assert not kana_only.contains("南京", "なんきん")
+    assert kana_only.contains("南京", "なんきん", combine_word_forms=True)
 
-    cards = [("下駄", "げた"), ("角", "かど"), ("茶", "ちゃ"), ("下駄箱", "げたばこ"), ("ない", "")]
+
+def test_seen_window_honorific_folding():
+    # お茶 present + 茶 present -> honorific folding makes the bare 茶 (and an unseen-as-kanji
+    # card) credited. Here a card present ONLY via the honorific fold:
+    window = _build_window([[["お得", "freq", 5]]], honorific_folding=True)
+    assert not window.contains("得", "")  # 得 itself never appeared
+    window2 = _build_window([[["お得", "freq", 5], ["得", "freq", 1]]], honorific_folding=True)
+    assert window2.contains("得", "", honorific_folding=True)
+
+
+def _ref_seen(day_indices, e, r, **flags):
+    """Reference presence from the counting index: seen iff the summed total is >= 1."""
+    return sum(d.get_total(e, r, **flags) for d in day_indices) >= 1
+
+
+def test_seen_contains_matches_counting_presence_incl_homograph():
+    # SeenWindow.contains must equal the counting index's `get_total(...) >= 1` for EVERY
+    # card/flag combo — the boolean model is a faithful drop-in for bare `seen:N`. Reuses the
+    # homograph dataset (角 read かど vs つの) whose per-day reading-mismatch fallback a full
+    # count merge would drop, to prove presence is unaffected by it.
+    raws = [
+        [
+            ["下駄", "freq", {"reading": "げた", "frequency": {"value": 5}}],
+            ["下駄箱", "freq", {"reading": "げたばこ", "frequency": {"value": 10}}],
+            ["角", "freq", {"reading": "かど", "frequency": {"value": 4}}],
+            ["お茶", "freq", {"reading": "おちゃ", "frequency": {"value": 50}}],
+            ["茶", "freq", {"reading": "ちゃ", "frequency": {"value": 8}}],
+        ],
+        [
+            ["下駄箱", "freq", {"reading": "げたばこ", "frequency": {"value": 6}}],
+            ["角", "freq", {"reading": "つの", "frequency": {"value": 3}}],
+        ],
+        [
+            ["下駄", "freq", {"reading": "げた", "frequency": {"value": 2}}],
+            ["下駄屋", "freq", {"reading": "げたや", "frequency": {"value": 8}}],
+        ],
+    ]
+    cards = [("下駄", "げた"), ("角", "かど"), ("茶", "ちゃ"), ("下駄箱", "げたばこ"),
+             ("お茶", "おちゃ"), ("ない", "")]
     flagsets = [
         {},
         {"prefix_matching": True},
@@ -193,13 +198,12 @@ def test_window_total_equals_per_day_summation_incl_homograph():
         {"honorific_folding": True},
         {"prefix_matching": True, "combine_word_forms": True, "honorific_folding": True},
     ]
-    for e, r in cards:
-        for fs in flagsets:
-            assert seen_manager.window_total(days, merged, e, r, **fs) == _ref_per_day(days, e, r, **fs), (e, r, fs)
-
-    # concrete anchors from the README worked example:
-    assert seen_manager.window_total(days, merged, "角", "かど") == 7  # 4 + per-day fallback 3
-    assert seen_manager.window_total(days, merged, "下駄", "げた", prefix_matching=True) == 31  # 7 + (16+8)
+    for fs in flagsets:
+        honor = fs.get("honorific_folding", False)
+        window = _build_window(raws, honorific_folding=honor)
+        day_indices = [dm._build_index_from_raw(r, honorific_folding=honor) for r in raws]
+        for e, r in cards:
+            assert window.contains(e, r, **fs) == _ref_seen(day_indices, e, r, **fs), (e, r, fs)
 
 
 # --- reservation: `seen` is never a normal occurrence dict ------------------
@@ -268,9 +272,9 @@ def test_resolve_seen_stats_window_once_not_per_note(monkeypatch):
 
     monkeypatch.setattr(seen_manager, "_source_mtime", counting_source_mtime)
 
-    search.resolve_seen(7, ">=", 1, candidate_nids=None)
+    search.resolve_seen(7, candidate_nids=None)
 
-    # O(window): get_window (7 stats) + the memo signature's window_mtimes (7).
+    # O(window): get_seen_window (7 stats) + the memo signature's window_mtimes (7).
     # Pre-fix this re-statted per note per day -> 7 * 500 = 3500.
     assert stats["n"] <= 14
 
@@ -287,7 +291,7 @@ def test_resolve_seen_memoizes_full_scan_within_signature(monkeypatch):
     monkeypatch.setattr(search, "_iter_candidate_notes", counting_iter)
     monkeypatch.setattr(seen_manager, "_source_mtime", lambda folder: 111.0)
 
-    search.resolve_seen(7, ">=", 1, candidate_nids=None)
-    search.resolve_seen(7, ">=", 1, candidate_nids=None)
+    search.resolve_seen(7, candidate_nids=None)
+    search.resolve_seen(7, candidate_nids=None)
 
     assert scans["n"] == 1  # second identical full scan served from _seen_cache
