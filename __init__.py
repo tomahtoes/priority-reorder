@@ -24,12 +24,36 @@ else:
 
     from .updater import JitenUpdater
 
+    # True while Anki is tearing down the profile (profile_will_close ..
+    # profile_did_open). During this window the collection is about to be
+    # unloaded, so the async CollectionOp path below would race col.close()
+    # and read a None mw.col mid-flight; close-time reorders run synchronously
+    # instead (see handle_sync_did_finish / run_reorder_on_close).
+    _is_closing = False
+
     def run_in_background() -> None:
         """Run the reordering operation in the background"""
+        if mw.col is None:
+            return
         operation = CollectionOp(parent=mw, op=run_reorder).failure(
             lambda err: showInfo(f"Error during reordering: {err}")
         )
         operation.run_in_background()
+
+    def run_reorder_on_close() -> None:
+        """Reorder synchronously during shutdown.
+
+        sync_did_finish fires on the main thread with mw.col still alive, just
+        before Anki unloads the collection. Running here (rather than scheduling
+        a background CollectionOp) completes before col.close(), so the reorder
+        is applied and persisted without racing teardown. Errors are only logged
+        — never shown as a dialog as the app is exiting."""
+        if mw.col is None:
+            return
+        try:
+            run_reorder()
+        except Exception as e:
+            print(f"[priority-reorder] Reorder on close failed: {e}")
 
     def show_updater_results(results: tuple[int, int]) -> None:
         updated_count, failed_count = results
@@ -103,14 +127,32 @@ else:
         """Run on sync finish to update dicts and run reorder"""
         config = get_config()
 
+        if _is_closing:
+            # Closing: skip the networked dict-updater (it can't finish during
+            # shutdown) and run the reorder synchronously before col is unloaded.
+            if config.reorder_on_sync:
+                run_reorder_on_close()
+            return
+
         if config.auto_update_dicts:
             run_updater_background(manual=False)
         elif config.reorder_on_sync:
             run_in_background()
 
+    def _on_profile_will_close() -> None:
+        global _is_closing
+        _is_closing = True
+
+    def _on_profile_did_open() -> None:
+        # Fires before the startup auto-sync, so startup/manual syncs take the
+        # normal async path.
+        global _is_closing
+        _is_closing = False
+
     def setup_sync_hook() -> None:
         """Set up sync hook if enabled in config"""
         gui_hooks.sync_did_finish.append(handle_sync_did_finish)
+        gui_hooks.profile_will_close.append(_on_profile_will_close)
 
     def setup_search_terms() -> None:
         """Register the custom search terms (occurrences:/f/kanji:) so they work in the
@@ -120,6 +162,8 @@ else:
         # A freshly opened profile must not show (or open in the browser) the
         # previous profile's reorder report.
         gui_hooks.profile_did_open.append(clear_last_report)
+        # A new profile means we're no longer in a close sequence.
+        gui_hooks.profile_did_open.append(_on_profile_did_open)
 
     def setup_menu() -> None:
         """Set up menu entries and shortcuts"""

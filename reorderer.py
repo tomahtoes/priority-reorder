@@ -346,4 +346,6 @@ class PriorityReorderer:
             traceback.print_exc()
 
 def run_reorder(col=None) -> OpChangesWithCount:
+    if mw.col is None:
+        return OpChangesWithCount(count=0)
     return PriorityReorderer(get_config()).reorder()
