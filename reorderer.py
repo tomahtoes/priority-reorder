@@ -311,12 +311,24 @@ class PriorityReorderer:
         )
 
     def _needs_reorder(self, new_ids: List[int]) -> bool:
+        """Whether repositioning would actually change the new-card order.
+
+        Anki's reposition rewrites every new card it touches — and with
+        shift_existing it bumps every new card's position by a fixed offset —
+        unconditionally, even when the resulting order is identical. That marks
+        the cards for sync, so a no-op reorder leaves the sync button stuck on
+        "changes pending". Skipping the reposition when the order is already
+        correct is the only way to avoid that churn.
+        """
         if not new_ids:
             return False
 
         try:
-            # type = 0 is "new" cards only
-            current_ids = mw.col.db.list("select id from cards where type = 0 order by due")
+            # type = 0 == new cards (the `is:new` domain every search uses).
+            # Tie-break by id so equal-due cards order deterministically across
+            # runs; otherwise a due collision could flip the order and trigger a
+            # needless reorder.
+            current_ids = mw.col.db.list("select id from cards where type = 0 order by due, id")
         except Exception:
             # Even though we can't know for sure, default to reordering to match historical behavior
             return True

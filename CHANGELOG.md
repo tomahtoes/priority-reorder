@@ -1,5 +1,8 @@
 # Changelog
 
+## 2026-06-19
+- Reorder-on-sync now skips repositioning when the new-card order is already correct, so syncs no longer stay stuck on "changes pending" after an unchanged reorder.
+
 ## 2026-06-04
 - New **Stats window** (Tools → Priority Reorder → Show Stats).
 - Jiten occurrence-dictionary updating, manual or automatic (`auto_update_dicts`).
