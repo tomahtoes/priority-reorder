@@ -117,9 +117,12 @@ else:
                     timer.cancel()
                     mw.taskman.run_on_main(lambda: show_updater_results(results))
 
-                    # Chain the reorder process on sync completion if not manual
+                    # Chain the reorder process on sync completion if not manual.
+                    # Pass manual=False so the reorder triggers a follow-up sync to
+                    # push the new positions (run_on_main would otherwise call
+                    # run_in_background with no args, defaulting manual to True).
                     if reorder_after:
-                        mw.taskman.run_on_main(run_in_background)
+                        mw.taskman.run_on_main(lambda: run_in_background(manual=False))
                 except Exception as e:
                     timer.cancel()
                     mw.taskman.run_on_main(lambda: showInfo(f"Error during dictionary update: {e}"))
@@ -191,7 +194,9 @@ else:
 
         reorder_action = QAction("Reorder Cards", mw)
         reorder_action.setShortcut(QKeySequence("Ctrl+Alt+`"))
-        qconnect(reorder_action.triggered, run_in_background)
+        # Wrap in a lambda so Qt's triggered(checked) bool isn't passed as the
+        # `manual` arg — a menu/shortcut reorder must stay manual (no auto sync).
+        qconnect(reorder_action.triggered, lambda: run_in_background())
         menu.addAction(reorder_action)
 
         stats_action = QAction("Show Stats", mw)

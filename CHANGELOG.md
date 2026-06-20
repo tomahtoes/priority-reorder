@@ -5,6 +5,7 @@
 - Assorted bug fixes (search `or` handling, stats window, custom-term caching, error during sync on close).
 - Safer dictionary updating and lower memory use.
 - Reorder-on-sync now skips repositioning when the new-card order is already correct, so syncs no longer stay stuck on "changes pending" after an unchanged reorder.
+- A sync-triggered reorder now pushes the new card order in a single sync — previously a second manual sync was needed before the new order took effect on other devices.
 
 ## 2026-06-04
 - New **Stats window** (Tools → Priority Reorder → Show Stats).
