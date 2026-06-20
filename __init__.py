@@ -31,13 +31,26 @@ else:
     # instead (see handle_sync_did_finish / run_reorder_on_close).
     _is_closing = False
 
-    def run_in_background() -> None:
+    # Prevents infinite sync loop
+    _auto_syncing = False
+
+    def trigger_second_sync() -> None:
+        """Trigger a second sync if reordering was triggered by a sync."""
+        global _auto_syncing
+        _auto_syncing = True
+        mw.onSync()
+
+    def run_in_background(manual: bool = True) -> None:
         """Run the reordering operation in the background"""
         if mw.col is None:
             return
         operation = CollectionOp(parent=mw, op=run_reorder).failure(
             lambda err: showInfo(f"Error during reordering: {err}")
         )
+
+        if not manual:
+            operation.success(lambda _: trigger_second_sync())
+
         operation.run_in_background()
 
     def run_reorder_on_close() -> None:
@@ -125,6 +138,12 @@ else:
 
     def handle_sync_did_finish() -> None:
         """Run on sync finish to update dicts and run reorder"""
+        global _auto_syncing
+
+        if _auto_syncing:
+            _auto_syncing = False
+            return
+
         config = get_config()
 
         if _is_closing:
@@ -137,7 +156,7 @@ else:
         if config.auto_update_dicts:
             run_updater_background(manual=False)
         elif config.reorder_on_sync:
-            run_in_background()
+            run_in_background(manual=False)
 
     def _on_profile_will_close() -> None:
         global _is_closing
