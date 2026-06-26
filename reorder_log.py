@@ -4,7 +4,7 @@ from typing import List, Optional
 
 
 @dataclass
-class PrioritySearchStats:
+class PrioritySearchSummary:
     index: int
     query: str
     anki_query: str
@@ -28,7 +28,7 @@ class ReorderReport:
     mode: str
     priority_cutoff: Optional[int]
     global_priority_limit: Optional[int]
-    entries: List[PrioritySearchStats] = field(default_factory=list)
+    entries: List[PrioritySearchSummary] = field(default_factory=list)
     total_priority_kept: int = 0
     total_normal: int = 0
     total_repositioned: int = 0

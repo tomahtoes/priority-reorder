@@ -20,7 +20,7 @@ from aqt.qt import ( # type: ignore
 from aqt.theme import theme_manager # type: ignore
 from aqt.utils import showInfo # type: ignore
 
-from .reorder_log import PrioritySearchStats, ReorderReport, get_last_report
+from .reorder_log import PrioritySearchSummary, ReorderReport, get_last_report
 from .reorderer import run_reorder
 from .search_colors import colorize_query_html
 
@@ -71,7 +71,7 @@ class ClickableLabel(QLabel):
         super().mousePressEvent(event)
 
 
-class StatCell(QWidget):
+class SummaryCell(QWidget):
     """A single label+value pair laid out tightly: dimmed label, bold value."""
 
     def __init__(self, label: str, value: str, *, accent: Optional[str] = None, parent: Optional[QWidget] = None) -> None:
@@ -98,7 +98,7 @@ class SearchCard(QFrame):
 
     def __init__(
         self,
-        entry: PrioritySearchStats,
+        entry: PrioritySearchSummary,
         mode: str,
         *,
         cutoff_active: bool,
@@ -167,13 +167,13 @@ class SearchCard(QFrame):
     def _toggle(self) -> None:
         self.set_expanded(not self._expanded)
 
-    def _populate_body(self, body_layout: QVBoxLayout, entry: PrioritySearchStats, mode: str) -> None:
+    def _populate_body(self, body_layout: QVBoxLayout, entry: PrioritySearchSummary, mode: str) -> None:
         is_mix = mode == "mix"
 
-        cells: List[StatCell] = []
+        cells: List[SummaryCell] = []
 
         def add_cell(label: str, value: str, accent: Optional[str] = None) -> None:
-            cells.append(StatCell(label, value, accent=accent))
+            cells.append(SummaryCell(label, value, accent=accent))
 
         if not is_mix:
             add_cell("kept", str(entry.kept_count))
@@ -196,18 +196,18 @@ class SearchCard(QFrame):
             if entry.final_start_index is not None:
                 add_cell("starts at", str(entry.final_start_index))
 
-        stats_row = QHBoxLayout()
-        stats_row.setContentsMargins(0, 0, 0, 0)
-        stats_row.setSpacing(0)
+        summary_row = QHBoxLayout()
+        summary_row.setContentsMargins(0, 0, 0, 0)
+        summary_row.setSpacing(0)
         for i, cell in enumerate(cells):
             if i > 0:
                 sep = QLabel("·")
                 sep.setStyleSheet(f"color: {_muted_color()};")
                 sep.setContentsMargins(10, 0, 10, 0)
-                stats_row.addWidget(sep)
-            stats_row.addWidget(cell)
-        stats_row.addStretch(1)
-        body_layout.addLayout(stats_row)
+                summary_row.addWidget(sep)
+            summary_row.addWidget(cell)
+        summary_row.addStretch(1)
+        body_layout.addLayout(summary_row)
 
         if is_mix:
             note = QLabel("(mix mode — kept/discarded combined in totals)")
@@ -237,10 +237,10 @@ class SearchCard(QFrame):
         return True
 
 
-class StatsDialog(QDialog):
+class SummaryDialog(QDialog):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Priority Reorder Stats")
+        self.setWindowTitle("Priority Reorder Summary")
         self._root = QVBoxLayout(self)
         self._root.setContentsMargins(12, 12, 12, 12)
         self._root.setSpacing(10)
@@ -457,13 +457,13 @@ class StatsDialog(QDialog):
         return max(720, max_text_w + chrome)
 
 
-_dialog: Optional[StatsDialog] = None
+_dialog: Optional[SummaryDialog] = None
 
 
-def show_stats_window() -> None:
+def show_summary_window() -> None:
     global _dialog
     if _dialog is None:
-        _dialog = StatsDialog(parent=mw)
+        _dialog = SummaryDialog(parent=mw)
     else:
         _dialog.refresh()
     _dialog.show()

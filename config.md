@@ -136,9 +136,9 @@ To use occurrences queries, you must configure which fields the addon should loo
 
 ## Inspecting Results
 
-After a reorder runs, **Tools** -> **Priority Reorder** -> **Show Stats** shows, per
+After a reorder runs, **Tools** -> **Priority Reorder** -> **Show Summary** shows, per
 `priority_search`, how many cards matched, were kept, and were discarded once these settings were
 applied. It's the quickest way to tune `priority_cutoff`, `priority_limit`, and per-search
 `limit=` — you can see the effect of each, open the kept/discarded notes in the Browser, and press
-**Run reorder now** to re-check after editing the config. See the README's _Stats Window_ section
+**Run reorder now** to re-check after editing the config. See the README's _Summary Window_ section
 for more.

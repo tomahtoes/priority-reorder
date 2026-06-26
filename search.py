@@ -48,7 +48,7 @@ SEEN_RE = re.compile(
 
 def has_custom_term(query: str) -> bool:
     """True if `query` contains any of the addon's custom search terms. Used for
-    cosmetic stats labeling; the actual resolution happens in rewrite_query."""
+    cosmetic summary labeling; the actual resolution happens in rewrite_query."""
     if not query:
         return False
     return bool(

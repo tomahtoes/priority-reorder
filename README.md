@@ -86,10 +86,10 @@ The addon splits your **New Cards** into two groups:
 
 Both queues are sorted internally by your `sort_field`. If a card matches more than one queue, the highest-priority match wins — so in the example above, recently added cards are scheduled by the priority queue first, even though they also match the normal queue.
 
-> All of the addon's actions live under the **Tools** -> **Priority Reorder** submenu: **Reorder Cards** (``Ctrl+Alt+` ``), **Show Stats**, and **Update Jiten Occurrence Dictionaries**.
+> All of the addon's actions live under the **Tools** -> **Priority Reorder** submenu: **Reorder Cards** (``Ctrl+Alt+` ``), **Show Summary**, and **Update Jiten Occurrence Dictionaries**.
 
-## Stats Window
-Open **Tools** -> **Priority Reorder** -> **Show Stats** to see what each of your priority searches did in the latest reorder of the current session (if you haven't reordered yet, just press **Run reorder now** or sync).
+## Summary Window
+Open **Tools** -> **Priority Reorder** -> **Show Summary** to see what each of your priority searches did in the latest reorder of the current session (if you haven't reordered yet, just press **Run reorder now** or sync).
 
 You get one collapsible card per `priority_search` showing how many cards it **matched** vs. **kept** vs. **discarded**, with buttons to open the kept/discarded notes in the Browser. **Edit config** and **Run reorder now** sit at the top so you can tweak and re-check live. Everything is labeled in the window itself.
 

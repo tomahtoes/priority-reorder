@@ -9,7 +9,7 @@ try:  # inside Anki: isolated package namespace
     from .rules import parse_rule_string
     from .search import has_custom_term
     from .reorder_log import (
-        PrioritySearchStats,
+        PrioritySearchSummary,
         ReorderReport,
         now_timestamp,
         set_last_report,
@@ -21,7 +21,7 @@ except ImportError:  # pytest / flat-import context
     from rules import parse_rule_string
     from search import has_custom_term
     from reorder_log import (
-        PrioritySearchStats,
+        PrioritySearchSummary,
         ReorderReport,
         now_timestamp,
         set_last_report,
@@ -41,9 +41,9 @@ class PriorityReorderer:
         if not priority_defs:
             return OpChangesWithCount(count=0)
 
-        stats = self._init_stats(priority_defs, raw_queries)
+        summaries = self._init_summaries(priority_defs, raw_queries)
 
-        priority_matches, all_candidate_ids, card_id_to_note = self._find_matches(priority_defs, stats)
+        priority_matches, all_candidate_ids, card_id_to_note = self._find_matches(priority_defs, summaries)
 
         all_cards_map = {cid: self.data_manager.get_card(cid) for cid in all_candidate_ids}
         all_cards_map = {k: v for k, v in all_cards_map.items() if v is not None}
@@ -53,16 +53,16 @@ class PriorityReorderer:
         priority_buckets, normal_list = self._assign_initial_buckets(priority_defs, priority_matches, all_candidate_ids, all_cards_map)
 
         final_priority_buckets, final_normal_list = self._apply_refinement_rules(
-            priority_buckets, normal_list, stats
+            priority_buckets, normal_list, summaries
         )
         final_priority_queue, overflow = self._finalize_priority_queue(
-            priority_defs, final_priority_buckets, stats
+            priority_defs, final_priority_buckets, summaries
         )
         final_normal_list.extend(overflow)
 
         result = self._apply_reordering(final_priority_queue, final_normal_list)
 
-        self._write_log(stats, final_priority_queue, final_normal_list, result)
+        self._write_log(summaries, final_priority_queue, final_normal_list, result)
 
         return result
 
@@ -83,22 +83,22 @@ class PriorityReorderer:
             return [], []
         return priority_defs, raw_queries
 
-    def _init_stats(self, defs: List[PriorityDef], raw_queries: List[str]) -> List[PrioritySearchStats]:
-        stats: List[PrioritySearchStats] = []
+    def _init_summaries(self, defs: List[PriorityDef], raw_queries: List[str]) -> List[PrioritySearchSummary]:
+        summaries: List[PrioritySearchSummary] = []
         for i, (anki_query, limit) in enumerate(defs):
-            stats.append(PrioritySearchStats(
+            summaries.append(PrioritySearchSummary(
                 index=i,
                 query=raw_queries[i] if i < len(raw_queries) else anki_query,
                 anki_query=anki_query,
                 has_custom_rules=has_custom_term(anki_query),
                 limit=limit,
             ))
-        return stats
+        return summaries
 
     def _find_matches(
         self,
         priority_defs: List[PriorityDef],
-        stats: List[PrioritySearchStats],
+        summaries: List[PrioritySearchSummary],
     ) -> Tuple[Dict[int, Set[int]], Set[int], Dict[int, int]]:
         priority_matches: Dict[int, Set[int]] = {}
         all_ids: Set[int] = set()
@@ -115,8 +115,8 @@ class PriorityReorderer:
 
             matched_ids = {c.card_id for c in result.cards}
             priority_matches[i] = matched_ids
-            stats[i].raw_match_count = result.raw_count
-            stats[i].refined_match_count = len(matched_ids)
+            summaries[i].raw_match_count = result.raw_count
+            summaries[i].refined_match_count = len(matched_ids)
             all_ids.update(matched_ids)
 
         normal_cards = self.data_manager.get_cards_from_search(self.config.normal_search).cards
@@ -148,7 +148,7 @@ class PriorityReorderer:
         self,
         priority_buckets: List[List[Card]],
         normal_list: List[Card],
-        stats: List[PrioritySearchStats],
+        summaries: List[PrioritySearchSummary],
     ) -> Tuple[List[List[Card]], List[Card]]:
         cutoff = self.config.priority_cutoff
         prioritization = self.config.normal_prioritization
@@ -175,14 +175,14 @@ class PriorityReorderer:
         for bucket_idx, bucket in enumerate(priority_buckets):
             dropped, kept = split_by_threshold(bucket, cutoff)
             final_normal.extend(dropped)
-            if dropped and not is_mix and bucket_idx < len(stats):
-                stats[bucket_idx].cutoff_dropped += len(dropped)
-                stats[bucket_idx].cutoff_note_ids.extend(c.note_id for c in dropped)
+            if dropped and not is_mix and bucket_idx < len(summaries):
+                summaries[bucket_idx].cutoff_dropped += len(dropped)
+                summaries[bucket_idx].cutoff_note_ids.extend(c.note_id for c in dropped)
             final_priority.append(kept)
 
         # Promote low-value normal cards into their own dedicated trailing tier.
         # Kept separate from the real search buckets so they are exempt from any
-        # single search's per-search limit and excluded from per-search stats. In
+        # single search's per-search limit and excluded from per-search summaries. In
         # mix mode the tier is flattened into the single sorted pool later, so
         # promoted cards interleave with priority matches by sort value instead
         # of trailing them.
@@ -199,7 +199,7 @@ class PriorityReorderer:
         self,
         defs: List[PriorityDef],
         buckets: List[List[Card]],
-        stats: List[PrioritySearchStats],
+        summaries: List[PrioritySearchSummary],
     ) -> Tuple[List[Card], List[Card]]:
         queue: List[Card] = []
         overflow: List[Card] = []
@@ -228,9 +228,9 @@ class PriorityReorderer:
                         queue.append(card)
                         seen.add(card.card_id)
                         bucket_kept_cards[i].append(card)
-                    if i < len(stats):
-                        stats[i].limit_discarded += len(discarded)
-                        stats[i].discarded_note_ids.extend(c.note_id for c in discarded)
+                    if i < len(summaries):
+                        summaries[i].limit_discarded += len(discarded)
+                        summaries[i].discarded_note_ids.extend(c.note_id for c in discarded)
                 else:
                     for card in sorted_bucket:
                         queue.append(card)
@@ -255,26 +255,26 @@ class PriorityReorderer:
         if not is_mix:
             kept_set = {c.card_id for c in queue}
             for i in range(len(buckets)):
-                if i >= len(stats):
+                if i >= len(summaries):
                     continue
                 for c in bucket_kept_cards.get(i, []):
                     if c.card_id in kept_set:
-                        stats[i].kept_note_ids.append(c.note_id)
+                        summaries[i].kept_note_ids.append(c.note_id)
                     else:
-                        stats[i].global_limit_discarded += 1
-                        stats[i].discarded_note_ids.append(c.note_id)
-                stats[i].kept_count = len(stats[i].kept_note_ids)
+                        summaries[i].global_limit_discarded += 1
+                        summaries[i].discarded_note_ids.append(c.note_id)
+                summaries[i].kept_count = len(summaries[i].kept_note_ids)
 
             # Final start index in the reordered queue (sequential mode):
             # priority cards occupy positions 0..N-1, each search a contiguous
             # block, so its start = cumulative kept of preceding searches.
             cumulative = 0
             for i in range(len(buckets)):
-                if i >= len(stats):
+                if i >= len(summaries):
                     continue
-                if stats[i].kept_count > 0:
-                    stats[i].final_start_index = cumulative
-                    cumulative += stats[i].kept_count
+                if summaries[i].kept_count > 0:
+                    summaries[i].final_start_index = cumulative
+                    cumulative += summaries[i].kept_count
                 # searches with 0 kept leave final_start_index = None
 
         return queue, overflow
@@ -346,7 +346,7 @@ class PriorityReorderer:
 
     def _write_log(
         self,
-        stats: List[PrioritySearchStats],
+        summaries: List[PrioritySearchSummary],
         final_priority_queue: List[Card],
         final_normal_list: List[Card],
         result: OpChangesWithCount,
@@ -358,7 +358,7 @@ class PriorityReorderer:
                 mode=self.config.priority_search_mode,
                 priority_cutoff=self.config.priority_cutoff,
                 global_priority_limit=self.config.priority_limit,
-                entries=stats,
+                entries=summaries,
                 total_priority_kept=len(final_priority_queue),
                 total_normal=len(final_normal_list),
                 total_repositioned=getattr(result, "count", 0) or 0,

@@ -18,7 +18,7 @@ else:
 
     from .reorderer import run_reorder
     from .config_manager import get_config
-    from .stats_window import show_stats_window
+    from .summary_window import show_summary_window
     from .reorder_log import clear_last_report
     from . import search
 
@@ -199,9 +199,9 @@ else:
         qconnect(reorder_action.triggered, lambda: run_in_background())
         menu.addAction(reorder_action)
 
-        stats_action = QAction("Show Stats", mw)
-        qconnect(stats_action.triggered, show_stats_window)
-        menu.addAction(stats_action)
+        summary_action = QAction("Show Summary", mw)
+        qconnect(summary_action.triggered, show_summary_window)
+        menu.addAction(summary_action)
 
         update_dicts_action = QAction("Update Jiten Occurrence Dictionaries", mw)
         qconnect(update_dicts_action.triggered, update_jiten_dicts)

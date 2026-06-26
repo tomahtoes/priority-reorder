@@ -1,4 +1,4 @@
-"""Color-coding for search-query terms shown in the stats window.
+"""Color-coding for search-query terms shown in the summary window.
 
 A query token is keyed off its leading keyword (``kanji:new>=1`` -> ``kanji``,
 ``f>=1`` -> ``f``, bare word -> the word). ``NO_COLOR_KEYS`` stay default,
