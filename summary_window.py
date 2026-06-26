@@ -11,6 +11,7 @@ from aqt.qt import ( # type: ignore
     QLabel,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     Qt,
     QVBoxLayout,
     QWidget,
@@ -48,6 +49,10 @@ def _card_border() -> str:
     return "#444" if _is_dark() else "#d0d0d0"
 
 
+def _hover_bg() -> str:
+    return "#333333" if _is_dark() else "#f0f0f0"
+
+
 def _nid_search(note_ids: List[int]) -> str:
     return "nid:" + ",".join(str(n) for n in note_ids) if note_ids else ""
 
@@ -74,7 +79,7 @@ class ClickableLabel(QLabel):
 class SummaryCell(QWidget):
     """A single label+value pair laid out tightly: dimmed label, bold value."""
 
-    def __init__(self, label: str, value: str, *, accent: Optional[str] = None, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, label: str, value: str, *, accent: Optional[str] = None, dim: bool = False, point_size: Optional[int] = None, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -82,14 +87,25 @@ class SummaryCell(QWidget):
 
         lbl = QLabel(label)
         lbl.setStyleSheet(f"color: {_muted_color()};")
+        if point_size and point_size > 0:
+            lf = lbl.font()
+            lf.setPointSize(point_size)
+            lbl.setFont(lf)
         layout.addWidget(lbl)
 
         val = QLabel(value)
         val_font = val.font()
-        val_font.setBold(True)
-        val.setFont(val_font)
+        if point_size and point_size > 0:
+            val_font.setPointSize(point_size)
         if accent:
+            val_font.setBold(True)
             val.setStyleSheet(f"color: {accent}; font-weight: bold;")
+        elif dim:
+            # Zero counts: muted and non-bold so meaningful numbers stand out.
+            val.setStyleSheet(f"color: {_muted_color()};")
+        else:
+            val_font.setBold(True)
+        val.setFont(val_font)
         layout.addWidget(val)
 
 
@@ -109,18 +125,15 @@ class SearchCard(QFrame):
         self.entry = entry
         self._cutoff_active = cutoff_active
         self._global_limit_active = global_limit_active
-        self.setObjectName("searchCard")
-        self.setStyleSheet(
-            f"#searchCard {{"
-            f"  background-color: {_card_bg()};"
-            f"  border: 1px solid {_card_border()};"
-            f"  border-radius: 6px;"
-            f"}}"
-        )
 
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(10, 8, 10, 10)
-        outer.setSpacing(8)
+        self.setObjectName("searchCard")
+
+        # No layout margins: the card's inset lives in the header's own padding
+        # and the body's margins, so the whole header band (full width, up to the
+        # rounded border) is part of the clickable header — not dead margin space.
+        self._outer = QVBoxLayout(self)
+        self._outer.setContentsMargins(0, 0, 0, 0)
+        self._outer.setSpacing(0)
 
         # Header: collapse toggle + title. Start collapsed when nothing was kept
         # (in mix mode, kept_count isn't meaningful so fall back to matches).
@@ -128,40 +141,83 @@ class SearchCard(QFrame):
             start_expanded = entry.refined_match_count > 0
         else:
             start_expanded = entry.kept_count > 0
+        # A search that contributed nothing (collapsed by default) carries no
+        # standout info: render it as a compact, muted one-liner while collapsed
+        # and restore the full card on expand.
+        self._dimmed = not start_expanded
         self._expanded = start_expanded
         self._header_btn = ClickableLabel()
         self._header_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._header_btn.setTextFormat(Qt.TextFormat.RichText)
-        header_font = self._header_btn.font()
-        header_font.setBold(True)
-        self._header_btn.setFont(header_font)
-        self._header_btn.setStyleSheet("padding: 2px 0;")
-        # Colored terms; the [index] prefix and arrow stay default text color.
+        # Fill the full card width so the whole row toggles, not just the text.
+        self._header_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self._base_point_size = self._header_btn.font().pointSize()
+        # Colored terms for the active/expanded header; the [index] prefix and
+        # arrow stay default text color. The muted variant keeps the term colors
+        # but blends them toward gray, shown when a dimmed row is collapsed.
         self._query_html = colorize_query_html(entry.query, dark=_is_dark())
+        self._query_html_muted = colorize_query_html(
+            entry.query, dark=_is_dark(), mute_toward=_muted_color()
+        )
         self._prefix_html = f"[{entry.index + 1}]&nbsp;&nbsp;&nbsp;"
-        self._update_header_text(start_expanded)
         qconnect(self._header_btn.clicked, self._toggle)
-        outer.addWidget(self._header_btn)
+        self._outer.addWidget(self._header_btn)
 
-        # Body
+        # Body. Add it to the card's layout (reparenting it) BEFORE making it
+        # visible: a parentless widget that is shown — even briefly — appears as
+        # its own top-level window, i.e. a flashing popup. Its side/bottom margins
+        # replace the old layout margins; the gap above it comes from the header's
+        # bottom padding.
         self._body = QWidget()
+        self._outer.addWidget(self._body)
         body_layout = QVBoxLayout(self._body)
-        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setContentsMargins(10, 0, 10, 10)
         body_layout.setSpacing(8)
-        self._body.setVisible(start_expanded)
-        outer.addWidget(self._body)
-
         self._populate_body(body_layout, entry, mode)
+        self._body.setVisible(start_expanded)
+
+        self._apply_chrome(start_expanded)
+        self._update_header_text(start_expanded)
+
+    def _apply_chrome(self, expanded: bool) -> None:
+        """Style the card frame, margins and header font. Empty searches drop
+        all chrome and shrink while collapsed, then restore the full card on
+        expand; active cards keep one fixed style."""
+        compact = self._dimmed and not expanded
+        if compact:
+            self.setStyleSheet(
+                "#searchCard { background-color: transparent; border: none; }"
+                f"#searchCard:hover {{ background-color: {_hover_bg()}; border-radius: 6px; }}"
+            )
+            self._header_btn.setStyleSheet("padding: 1px 8px;")
+        else:
+            self.setStyleSheet(
+                f"#searchCard {{"
+                f"  background-color: {_card_bg()};"
+                f"  border: 1px solid {_card_border()};"
+                f"  border-radius: 6px;"
+                f"}}"
+                f"#searchCard:hover {{ background-color: {_hover_bg()}; }}"
+            )
+            self._header_btn.setStyleSheet("padding: 8px 10px;")
+        font = self._header_btn.font()
+        font.setBold(not compact)
+        if self._base_point_size > 0:
+            font.setPointSize(self._base_point_size - 1 if compact else self._base_point_size)
+        self._header_btn.setFont(font)
 
     def _update_header_text(self, expanded: bool) -> None:
         arrow = "▼" if expanded else "▶"
+        query_html = self._query_html_muted if (self._dimmed and not expanded) else self._query_html
         self._header_btn.setText(
-            f"{arrow}&nbsp;&nbsp;&nbsp;{self._prefix_html}{self._query_html}"
+            f"{arrow}&nbsp;&nbsp;&nbsp;{self._prefix_html}{query_html}"
         )
 
     def set_expanded(self, expanded: bool) -> None:
         self._expanded = expanded
         self._body.setVisible(expanded)
+        if self._dimmed:
+            self._apply_chrome(expanded)
         self._update_header_text(expanded)
 
     def _toggle(self) -> None:
@@ -170,17 +226,24 @@ class SearchCard(QFrame):
     def _populate_body(self, body_layout: QVBoxLayout, entry: PrioritySearchSummary, mode: str) -> None:
         is_mix = mode == "mix"
 
+        # Stats and the browser-button labels both use the card's base font; the
+        # button box height is keyed to that same font (below) so the text sits
+        # comfortably inside it.
+        base_pt = QFont().pointSize()
+        stats_pt = base_pt
+        btn_pt = base_pt
+
         cells: List[SummaryCell] = []
 
-        def add_cell(label: str, value: str, accent: Optional[str] = None) -> None:
-            cells.append(SummaryCell(label, value, accent=accent))
+        def add_cell(label: str, value: str, accent: Optional[str] = None, dim: bool = False) -> None:
+            cells.append(SummaryCell(label, value, accent=accent, dim=dim, point_size=stats_pt))
 
         if not is_mix:
-            add_cell("kept", str(entry.kept_count))
+            add_cell("kept", str(entry.kept_count), dim=entry.kept_count == 0)
 
-        add_cell("matched", str(entry.refined_match_count))
+        add_cell("matched", str(entry.refined_match_count), dim=entry.refined_match_count == 0)
         if entry.has_custom_rules and entry.raw_match_count != entry.refined_match_count:
-            add_cell("raw", str(entry.raw_match_count))
+            add_cell("raw", str(entry.raw_match_count), dim=entry.raw_match_count == 0)
 
         if not is_mix:
             can_be_discarded = entry.limit is not None or self._global_limit_active
@@ -188,53 +251,78 @@ class SearchCard(QFrame):
                 discarded_total = entry.limit_discarded + entry.global_limit_discarded
                 accent = _accent_red() if discarded_total > 0 else None
                 limit_str = f" / limit {entry.limit}" if entry.limit is not None else ""
-                add_cell("discarded", f"{discarded_total}{limit_str}", accent=accent)
+                add_cell("discarded", f"{discarded_total}{limit_str}", accent=accent, dim=discarded_total == 0)
 
             if self._cutoff_active:
-                add_cell("cutoff-dropped", str(entry.cutoff_dropped))
+                add_cell("cutoff-dropped", str(entry.cutoff_dropped), dim=entry.cutoff_dropped == 0)
 
             if entry.final_start_index is not None:
                 add_cell("starts at", str(entry.final_start_index))
 
-        summary_row = QHBoxLayout()
-        summary_row.setContentsMargins(0, 0, 0, 0)
-        summary_row.setSpacing(0)
+        # Stats on the left; browser buttons anchored to the right of the same line.
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
         for i, cell in enumerate(cells):
             if i > 0:
                 sep = QLabel("·")
                 sep.setStyleSheet(f"color: {_muted_color()};")
                 sep.setContentsMargins(10, 0, 10, 0)
-                summary_row.addWidget(sep)
-            summary_row.addWidget(cell)
-        summary_row.addStretch(1)
-        body_layout.addLayout(summary_row)
+                if stats_pt > 0:
+                    sf = sep.font()
+                    sf.setPointSize(stats_pt)
+                    sep.setFont(sf)
+                row.addWidget(sep)
+            row.addWidget(cell)
+        row.addStretch(1)
+
+        if not is_mix:
+            buttons = [
+                b for b in (
+                    self._make_browser_button("View kept", entry.kept_note_ids, btn_pt, base_pt),
+                    self._make_browser_button("View discarded", entry.discarded_note_ids, btn_pt, base_pt),
+                )
+                if b is not None
+            ]
+            for i, b in enumerate(buttons):
+                if i > 0:
+                    row.addSpacing(6)
+                row.addWidget(b)
+
+        body_layout.addLayout(row)
 
         if is_mix:
             note = QLabel("(mix mode — kept/discarded combined in totals)")
             f = note.font()
             f.setItalic(True)
+            if stats_pt > 0:
+                f.setPointSize(stats_pt)
             note.setFont(f)
             note.setStyleSheet(f"color: {_muted_color()};")
             body_layout.addWidget(note)
-            return
 
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(6)
-        kept_added = self._add_browser_button(btn_row, "Open kept in browser", entry.kept_note_ids)
-        disc_added = self._add_browser_button(btn_row, "Open discarded in browser", entry.discarded_note_ids)
-
-        btn_row.addStretch(1)
-        if kept_added or disc_added:
-            body_layout.addLayout(btn_row)
-
-    def _add_browser_button(self, row: QHBoxLayout, label: str, note_ids: List[int]) -> bool:
+    def _make_browser_button(self, label: str, note_ids: List[int], font_pt: int, height_pt: int) -> Optional[QPushButton]:
         if not note_ids:
-            return False
+            return None
         ids = list(note_ids)
         btn = QPushButton(f"{label} ({len(ids)})")
+        btn.setStyleSheet("QPushButton { padding: 1px 12px; }")
+        if font_pt > 0:
+            bf = btn.font()
+            bf.setPointSize(font_pt)
+            btn.setFont(bf)
+        # Key the height to the card's base font (passed as height_pt) so the row
+        # stays a fixed, compact height regardless of the button's own larger
+        # font, but never below what that font needs so the label can't clip.
+        height_font = QFont()
+        if height_pt > 0:
+            height_font.setPointSize(height_pt)
+        btn.setFixedHeight(max(
+            QFontMetrics(height_font).height() + 4,
+            QFontMetrics(btn.font()).height() + 2,
+        ))
         qconnect(btn.clicked, lambda _=False, ids=ids: _open_in_browser(ids))
-        row.addWidget(btn)
-        return True
+        return btn
 
 
 class SummaryDialog(QDialog):
@@ -288,6 +376,12 @@ class SummaryDialog(QDialog):
 
         close_row = QHBoxLayout()
         close_row.addStretch(1)
+        self._reorder_btn = QPushButton("Run reorder now")
+        self._reorder_btn.setAutoDefault(False)
+        self._reorder_btn.setDefault(False)
+        self._reorder_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        qconnect(self._reorder_btn.clicked, self._run_reorder_now)
+        close_row.addWidget(self._reorder_btn)
         close_btn = QPushButton("Close")
         qconnect(close_btn.clicked, self.close)
         close_row.addWidget(close_btn)
@@ -321,6 +415,19 @@ class SummaryDialog(QDialog):
 
         header_row.addStretch(1)
         self._root.addLayout(header_row)
+
+        # At-a-glance overview of the whole report.
+        if report.entries:
+            n = len(report.entries)
+            n_matched = sum(1 for e in report.entries if e.refined_match_count > 0)
+            n_empty = n - n_matched
+            overview = QLabel(
+                f"{n} priority searches · {n_matched} matched"
+                f" · {n_empty} empty"
+                f" · {report.total_priority_kept} prioritized"
+            )
+            overview.setStyleSheet(f"color: {_muted_color()};")
+            self._root.addWidget(overview)
 
         # Expand/collapse all controls
         ctrl_row = QHBoxLayout()

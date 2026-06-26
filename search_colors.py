@@ -123,11 +123,29 @@ def color_for_key(key: str, *, dark: bool) -> Optional[str]:
     return palette[idx]
 
 
-def colorize_query_html(query: str, *, dark: bool) -> str:
+def _blend(color: str, target: str, t: float) -> str:
+    """Blend ``color`` toward ``target`` by fraction ``t`` (both ``#rrggbb``)."""
+    c, g = color.lstrip("#"), target.lstrip("#")
+    out = []
+    for i in (0, 2, 4):
+        a, b = int(c[i:i + 2], 16), int(g[i:i + 2], 16)
+        out.append(round(a + (b - a) * t))
+    return "#{:02x}{:02x}{:02x}".format(*out)
+
+
+# How far a muted query's term colors are pulled toward the neutral target.
+_MUTE_FACTOR = 0.5
+
+
+def colorize_query_html(query: str, *, dark: bool, mute_toward: Optional[str] = None) -> str:
     """HTML for the query with each term wrapped in a colored span.
 
     Overflow colors are assigned per-query left-to-right: distinct keys never
     share one (linear-probe on collision; uncolored if the palette is exhausted).
+
+    When ``mute_toward`` (a ``#rrggbb`` neutral) is given, every term's hue is
+    blended toward it and otherwise-uncolored terms take that neutral, so the
+    whole query reads de-emphasized while keeping its color identity.
     """
     variant = "dark" if dark else "light"
     palette = OVERFLOW_PALETTE[variant]
@@ -161,6 +179,8 @@ def colorize_query_html(query: str, *, dark: bool) -> str:
         escaped = html.escape(token)
         key = _color_key(token)
         color = resolve(key) if key is not None else None
+        if mute_toward is not None:
+            color = _blend(color, mute_toward, _MUTE_FACTOR) if color else mute_toward
         if color:
             parts.append(f'<span style="color:{color}">{escaped}</span>')
         else:
