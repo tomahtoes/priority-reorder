@@ -1,7 +1,7 @@
 # Changelog
 
-## 2026-06-26
-- Summary window look-and-feel improvements.
+## 2026-07-09
+- Summary window look-and-feel improvements: flatter, more compact layout with clearer rows.
 
 ## 2026-06-19
 - New `seen:N` search term — prioritize words from your recent *daily* occurrence dictionaries (in `user_files/_seen/<YYYY-MM-DD>/`). Matches words appearing in any of the last N days ("seen at all"). Works in the Browse bar, the collection API (AnkiConnect), and config, and honors the occurrence options (prefix matching, etc.).

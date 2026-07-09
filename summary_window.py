@@ -3,12 +3,19 @@ from typing import List, Optional
 from aqt import mw, dialogs # type: ignore
 from aqt.operations import CollectionOp # type: ignore
 from aqt.qt import ( # type: ignore
+    QColor,
     QDialog,
     QFont,
     QFontMetrics,
     QFrame,
+    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
+    QPainter,
+    QPalette,
+    QPixmap,
+    QPointF,
+    QPolygonF,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -42,15 +49,20 @@ def _accent_red() -> str:
 
 
 def _card_bg() -> str:
-    return "#2a2a2a" if _is_dark() else "#fafafa"
+    # Anki's --canvas-glass: the translucent container fill the main screen's
+    # deck list uses; blends with the dialog background underneath.
+    return "rgba(54, 54, 54, 0.4)" if _is_dark() else "rgba(255, 255, 255, 0.4)"
 
 
 def _card_border() -> str:
-    return "#444" if _is_dark() else "#d0d0d0"
+    # Anki's --border-subtle: the deck-list container's hairline outline.
+    return "#252525" if _is_dark() else "#e4e4e4"
 
 
 def _hover_bg() -> str:
-    return "#333333" if _is_dark() else "#f0f0f0"
+    # Slightly stronger tint than the card fill so hover reads both on the
+    # bare window (compact rows) and on the glass fill (expanded cards).
+    return "rgba(70, 70, 70, 0.5)" if _is_dark() else "rgba(0, 0, 0, 0.05)"
 
 
 def _nid_search(note_ids: List[int]) -> str:
@@ -64,9 +76,9 @@ def _open_in_browser(note_ids: List[int]) -> None:
     browser.search_for(_nid_search(note_ids))
 
 
-class ClickableLabel(QLabel):
-    """A QLabel that emits ``clicked`` on left mouse press (for rich-text headers
-    that need to behave like a button)."""
+class ClickableWidget(QWidget):
+    """A container that emits ``clicked`` on left mouse press. Child QLabels
+    ignore mouse events, so a click anywhere on the row lands here."""
 
     clicked = pyqtSignal()
 
@@ -76,8 +88,29 @@ class ClickableLabel(QLabel):
         super().mousePressEvent(event)
 
 
+def _arrow_pixmap(expanded: bool, color: str, size: int, dpr: float) -> QPixmap:
+    """A crisp antialiased collapse arrow. Font glyphs (▶/►) come from
+    inconsistent symbol-font fallbacks and render jagged at small sizes, so
+    the triangle is painted directly instead."""
+    pm = QPixmap(round(size * dpr), round(size * dpr))
+    pm.setDevicePixelRatio(dpr)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(color))
+    if expanded:
+        pts = [(0.08, 0.25), (0.92, 0.25), (0.5, 0.82)]
+    else:
+        pts = [(0.25, 0.08), (0.25, 0.92), (0.82, 0.5)]
+    p.drawPolygon(QPolygonF([QPointF(x * size, y * size) for x, y in pts]))
+    p.end()
+    return pm
+
+
 class SummaryCell(QWidget):
-    """A single label+value pair laid out tightly: dimmed label, bold value."""
+    """A single label+value pair laid out tightly: dimmed label, value
+    emphasized by color only."""
 
     def __init__(self, label: str, value: str, *, accent: Optional[str] = None, dim: bool = False, point_size: Optional[int] = None, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -94,18 +127,15 @@ class SummaryCell(QWidget):
         layout.addWidget(lbl)
 
         val = QLabel(value)
-        val_font = val.font()
         if point_size and point_size > 0:
-            val_font.setPointSize(point_size)
+            vf = val.font()
+            vf.setPointSize(point_size)
+            val.setFont(vf)
         if accent:
-            val_font.setBold(True)
-            val.setStyleSheet(f"color: {accent}; font-weight: bold;")
+            val.setStyleSheet(f"color: {accent};")
         elif dim:
-            # Zero counts: muted and non-bold so meaningful numbers stand out.
+            # Zero counts: muted so meaningful numbers stand out.
             val.setStyleSheet(f"color: {_muted_color()};")
-        else:
-            val_font.setBold(True)
-        val.setFont(val_font)
         layout.addWidget(val)
 
 
@@ -128,9 +158,9 @@ class SearchCard(QFrame):
 
         self.setObjectName("searchCard")
 
-        # No layout margins: the card's inset lives in the header's own padding
+        # No layout margins: the card's inset lives in the header's own margins
         # and the body's margins, so the whole header band (full width, up to the
-        # rounded border) is part of the clickable header — not dead margin space.
+        # card edge) is part of the clickable header — not dead margin space.
         self._outer = QVBoxLayout(self)
         self._outer.setContentsMargins(0, 0, 0, 0)
         self._outer.setSpacing(0)
@@ -146,22 +176,29 @@ class SearchCard(QFrame):
         # and restore the full card on expand.
         self._dimmed = not start_expanded
         self._expanded = start_expanded
-        self._header_btn = ClickableLabel()
-        self._header_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._header_btn.setTextFormat(Qt.TextFormat.RichText)
-        # Fill the full card width so the whole row toggles, not just the text.
-        self._header_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        self._base_point_size = self._header_btn.font().pointSize()
-        # Colored terms for the active/expanded header; the [index] prefix and
-        # arrow stay default text color. The muted variant keeps the term colors
+        # Header row: a painted arrow + rich-text title inside a clickable
+        # container, so the whole band toggles. The header's inset lives in
+        # this layout's margins (swapped per state in _apply_chrome).
+        self._header = ClickableWidget()
+        self._header.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._header_layout = QHBoxLayout(self._header)
+        self._header_layout.setSpacing(8)
+        self._arrow_lbl = QLabel()
+        self._header_layout.addWidget(self._arrow_lbl)
+        self._title_lbl = QLabel()
+        self._title_lbl.setTextFormat(Qt.TextFormat.RichText)
+        self._header_layout.addWidget(self._title_lbl, 1)
+        self._base_point_size = self._title_lbl.font().pointSize()
+        # Colored terms for the active/expanded header; the [index] prefix
+        # stays default text color. The muted variant keeps the term colors
         # but blends them toward gray, shown when a dimmed row is collapsed.
         self._query_html = colorize_query_html(entry.query, dark=_is_dark())
         self._query_html_muted = colorize_query_html(
             entry.query, dark=_is_dark(), mute_toward=_muted_color()
         )
         self._prefix_html = f"[{entry.index + 1}]&nbsp;&nbsp;&nbsp;"
-        qconnect(self._header_btn.clicked, self._toggle)
-        self._outer.addWidget(self._header_btn)
+        qconnect(self._header.clicked, self._toggle)
+        self._outer.addWidget(self._header)
 
         # Body. Add it to the card's layout (reparenting it) BEFORE making it
         # visible: a parentless widget that is shown — even briefly — appears as
@@ -171,25 +208,37 @@ class SearchCard(QFrame):
         self._body = QWidget()
         self._outer.addWidget(self._body)
         body_layout = QVBoxLayout(self._body)
-        body_layout.setContentsMargins(10, 0, 10, 10)
-        body_layout.setSpacing(8)
+        body_layout.setContentsMargins(10, 0, 10, 6)
+        body_layout.setSpacing(6)
         self._populate_body(body_layout, entry, mode)
         self._body.setVisible(start_expanded)
+
+        # Drop shadow matching the deck-list container on the main screen
+        # (".fancy table" in Anki's deckbrowser.css). Disabled while a dimmed
+        # row is compact: with a transparent background the shadow would
+        # outline the text itself.
+        self._shadow = QGraphicsDropShadowEffect(self)
+        self._shadow.setColor(QColor(20, 20, 20, 60))
+        self._shadow.setBlurRadius(6)
+        self._shadow.setOffset(0, 2)
+        self.setGraphicsEffect(self._shadow)
 
         self._apply_chrome(start_expanded)
         self._update_header_text(start_expanded)
 
     def _apply_chrome(self, expanded: bool) -> None:
-        """Style the card frame, margins and header font. Empty searches drop
-        all chrome and shrink while collapsed, then restore the full card on
-        expand; active cards keep one fixed style."""
+        """Style the card frame and header padding. Active cards are rounded
+        glass-filled containers with a hairline border and drop shadow, like
+        the main screen's deck list; empty searches drop all of that and
+        shrink to a bare one-liner while collapsed, restoring the full card
+        on expand."""
         compact = self._dimmed and not expanded
         if compact:
             self.setStyleSheet(
                 "#searchCard { background-color: transparent; border: none; }"
                 f"#searchCard:hover {{ background-color: {_hover_bg()}; border-radius: 6px; }}"
             )
-            self._header_btn.setStyleSheet("padding: 1px 8px;")
+            self._header_layout.setContentsMargins(10, 1, 10, 1)
         else:
             self.setStyleSheet(
                 f"#searchCard {{"
@@ -199,19 +248,36 @@ class SearchCard(QFrame):
                 f"}}"
                 f"#searchCard:hover {{ background-color: {_hover_bg()}; }}"
             )
-            self._header_btn.setStyleSheet("padding: 8px 10px;")
-        font = self._header_btn.font()
-        font.setBold(not compact)
+            self._header_layout.setContentsMargins(10, 6, 10, 6)
+        self._shadow.setEnabled(not compact)
+        font = self._title_lbl.font()
         if self._base_point_size > 0:
             font.setPointSize(self._base_point_size - 1 if compact else self._base_point_size)
-        self._header_btn.setFont(font)
+        self._title_lbl.setFont(font)
 
     def _update_header_text(self, expanded: bool) -> None:
-        arrow = "▼" if expanded else "▶"
-        query_html = self._query_html_muted if (self._dimmed and not expanded) else self._query_html
-        self._header_btn.setText(
-            f"{arrow}&nbsp;&nbsp;&nbsp;{self._prefix_html}{query_html}"
+        compact = self._dimmed and not expanded
+        arrow_color = (
+            _muted_color()
+            if compact
+            else self.palette().color(QPalette.ColorRole.WindowText).name()
         )
+        # Size the arrow to the title's current font; a fixed-width label
+        # keeps the text from shifting between the two orientations.
+        fm = QFontMetrics(self._title_lbl.font())
+        size = max(8, round(fm.ascent() * 0.9))
+        self._arrow_lbl.setFixedWidth(size)
+        self._arrow_lbl.setPixmap(
+            _arrow_pixmap(expanded, arrow_color, size, self.devicePixelRatioF())
+        )
+        query_html = self._query_html_muted if compact else self._query_html
+        text = f"{self._prefix_html}{query_html}"
+        if compact:
+            # Mute the whole line — [index] included, arrow via arrow_color —
+            # so an empty row reads as inactive at a glance; the query's
+            # blended term colors (inner spans) still show through.
+            text = f'<span style="color:{_muted_color()}">{text}</span>'
+        self._title_lbl.setText(text)
 
     def set_expanded(self, expanded: bool) -> None:
         self._expanded = expanded
@@ -451,8 +517,10 @@ class SummaryDialog(QDialog):
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         inner = QWidget()
         inner_layout = QVBoxLayout(inner)
-        inner_layout.setSpacing(10)
-        inner_layout.setContentsMargins(0, 0, 0, 0)
+        inner_layout.setSpacing(6)
+        # Margins keep the rows off the scrollbar (right) and leave room for
+        # the cards' drop shadows, which paint outside the card rect.
+        inner_layout.setContentsMargins(4, 3, 6, 6)
 
         if not report.entries:
             empty = QLabel("(no priority searches were configured)")
@@ -547,20 +615,18 @@ class SummaryDialog(QDialog):
         if report is None or not report.entries:
             return 720
 
-        f = QFont()
-        f.setBold(True)
-        fm = QFontMetrics(f)
+        fm = QFontMetrics(QFont())
         max_text_w = 0
         for entry in report.entries:
-            text = f"▼   [{entry.index + 1}]   {entry.query}"
+            text = f"[{entry.index + 1}]   {entry.query}"
             w = fm.horizontalAdvance(text)
             if w > max_text_w:
                 max_text_w = w
 
         # Account for: dialog margins (24) + card horizontal padding (20)
-        # + card border (2) + scroll-area vertical scrollbar reserve (~24)
-        # + a small breathing buffer.
-        chrome = 90
+        # + the arrow column (~20) + scroll-area vertical scrollbar
+        # reserve (~24) + a small breathing buffer.
+        chrome = 110
         return max(720, max_text_w + chrome)
 
 
