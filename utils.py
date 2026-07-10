@@ -20,6 +20,17 @@ def to_hiragana(text: str) -> str:
         for c in text
     )
 
+def is_kanji(ch: str) -> bool:
+    """True if the single character is a CJK ideograph (Unified, Ext A,
+    compatibility, or a supplementary-plane block like Ext B+)."""
+    cp = ord(ch)
+    return (
+        0x4E00 <= cp <= 0x9FFF      # CJK Unified
+        or 0x3400 <= cp <= 0x4DBF   # Ext A
+        or 0xF900 <= cp <= 0xFAFF   # compatibility ideographs
+        or 0x20000 <= cp <= 0x3FFFF # supplementary planes (Ext B+)
+    )
+
 def parse_comparator(op: str) -> Callable[[float, float], bool]:
     """Returns a comparison function for the given operator string."""
     match op:

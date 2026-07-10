@@ -24,10 +24,10 @@ from typing import Dict, List, Optional, Set, Tuple
 
 try:  # inside Anki: isolated package namespace
     from . import dictionary_manager as dm
-    from .utils import to_hiragana
+    from .utils import is_kanji, to_hiragana
 except ImportError:  # pytest / flat-import context
     import dictionary_manager as dm
-    from utils import to_hiragana
+    from utils import is_kanji, to_hiragana
 
 
 # ---------------------------------------------------------------------------
@@ -84,18 +84,28 @@ def today_date(now: Optional[datetime] = None, rollover: Optional[int] = None) -
 
 class SeenWindow:
     """Window-wide *presence* of words across the resolved daily seen dicts. Holds the union of
-    effective expressions seen in the window (``exprs``) and, for honorific folding, the set of
-    stripped forms (``honorific_stripped``).
+    effective expressions seen in the window (``exprs``), for honorific folding the set of
+    stripped forms (``honorific_stripped``), and for the single-kanji phrase rule the
+    ``(expression, reading)`` pairs of particle-phrase entries (``phrase_entries``).
 
     ``contains`` is the boolean analogue of the old ``window_total(...) >= 1`` — the same base /
     combine / prefix / honorific paths, ORed."""
 
-    def __init__(self, exprs: Set[str], honorific_stripped: Set[str]) -> None:
+    def __init__(
+        self,
+        exprs: Set[str],
+        honorific_stripped: Set[str],
+        phrase_entries: Set[Tuple[str, str]],
+    ) -> None:
         self.exprs = exprs
         self.honorific_stripped = honorific_stripped
+        self.phrase_entries = phrase_entries
         # Sorted view of `exprs`, built lazily on the first prefix query (mirrors
         # OccurrenceIndex._ensure_prefix_index — no per-term prefix explosion at build time).
         self._sorted_exprs: Optional[List[str]] = None
+        # First-char buckets of `phrase_entries`, built lazily on the first single-kanji
+        # phrase query (mirrors OccurrenceIndex._ensure_phrase_index).
+        self._phrase_by_first: Optional[Dict[str, List[Tuple[str, str]]]] = None
 
     def _prefix_present(self, expression: str) -> bool:
         """True if some *strictly longer* term has ``expression`` as a prefix. Same binary-search
@@ -113,6 +123,21 @@ class SeenWindow:
         if lo < len(exprs) and exprs[lo] == expression:
             lo += 1  # exclude the exact match (credited by base membership)
         return lo < hi
+
+    def _phrase_present(self, expression: str, reading: str) -> bool:
+        """Boolean analogue of ``OccurrenceIndex.single_kanji_phrase_total``: True if some
+        particle-phrase entry 'X<particle><tail>' validates the single-kanji card's reading."""
+        if len(expression) != 1 or not reading or not is_kanji(expression):
+            return False
+        if self._phrase_by_first is None:
+            by_first: Dict[str, List[Tuple[str, str]]] = {}
+            for expr, entry_reading in self.phrase_entries:
+                by_first.setdefault(expr[0], []).append((expr[1], entry_reading))
+            self._phrase_by_first = by_first
+        return any(
+            entry_reading.startswith(reading + particle)
+            for particle, entry_reading in self._phrase_by_first.get(expression, ())
+        )
 
     def contains(
         self,
@@ -139,6 +164,8 @@ class SeenWindow:
                 return True
             if combine_word_forms and reading_is_distinct and self._prefix_present(reading):
                 return True
+            if self._phrase_present(expression, reading):
+                return True
         if honorific_folding:
             if expression in self.honorific_stripped:
                 return True
@@ -149,15 +176,20 @@ class SeenWindow:
 
 def build_seen_day(
     data, normalize_kana: bool = False, honorific_folding: bool = False
-) -> Tuple[Set[str], Set[str]]:
-    """Parse one day's raw term_meta entries into ``(exprs, honorific_stripped)`` presence sets.
+) -> Tuple[Set[str], Set[str], Set[Tuple[str, str]]]:
+    """Parse one day's raw term_meta entries into ``(exprs, honorific_stripped,
+    phrase_entries)`` presence sets.
 
     Mirrors the entry parsing of ``dictionary_manager._build_index_from_raw`` (the ``count > 0``
     gate, the ``㋕`` kana-occurrence marker that attributes the entry to its reading, kana
     normalization), but records mere presence in a set instead of accumulating counts — base
-    presence reduces to the expression set, so there is no ``(expr, reading)`` map. A drift-guard
-    test pins this against the counting index's ``get_total(...) >= 1``."""
+    presence reduces to the expression set, so there is no ``(expr, reading)`` map. The one
+    exception is ``phrase_entries``: particle-phrase entries ('X<particle><tail>', a sliver of
+    any dict) keep their ``(expression, reading)`` pair so the single-kanji phrase rule can
+    validate readings at query time. A drift-guard test pins this against the counting index's
+    ``get_total(...) >= 1``."""
     exprs: Set[str] = set()
+    phrase_entries: Set[Tuple[str, str]] = set()
     for entry in data:
         if not isinstance(entry, list) or len(entry) < 3:
             continue
@@ -193,7 +225,11 @@ def build_seen_day(
             effective = reading if (is_kana_occurrences and reading) else expression
             if normalize_kana:
                 effective = to_hiragana(effective)
+                if reading:
+                    reading = to_hiragana(reading)
             exprs.add(effective)
+            if dm._is_phrase_entry(effective, reading):
+                phrase_entries.add((effective, reading))
 
     honorific_stripped: Set[str] = set()
     if honorific_folding:
@@ -204,18 +240,19 @@ def build_seen_day(
             stripped = expr[1:]
             if stripped and stripped in exprs:
                 honorific_stripped.add(stripped)
-    return exprs, honorific_stripped
+    return exprs, honorific_stripped, phrase_entries
 
 
 # ---------------------------------------------------------------------------
 # per-day set cache (lite: keyed on source mtime + build-time flags)
 # ---------------------------------------------------------------------------
 
-# (folder_name, mtime, normalize_kana, honorific_folding) -> (exprs, honorific_stripped).
-# mtime self-invalidates on current-day rewrites; the build flags are in the key so a config
-# change rebuilds. prefix_matching / combine_word_forms are query-time flags (applied in
-# SeenWindow.contains), so they are deliberately NOT part of the build key.
-_day_cache: Dict[Tuple, Tuple[Set[str], Set[str]]] = {}
+# (folder_name, mtime, normalize_kana, honorific_folding) -> (exprs, honorific_stripped,
+# phrase_entries). mtime self-invalidates on current-day rewrites; the build flags are in the
+# key so a config change rebuilds. prefix_matching / combine_word_forms are query-time flags
+# (applied in SeenWindow.contains), so they are deliberately NOT part of the build key —
+# phrase_entries is retained unconditionally and only consulted when prefix matching is on.
+_day_cache: Dict[Tuple, Tuple[Set[str], Set[str], Set[Tuple[str, str]]]] = {}
 
 
 def _seen_dict_name(folder: str) -> str:
@@ -252,21 +289,24 @@ def _seen_day_for(folder, mtime, normalize_kana, honorific_folding):
         del _day_cache[stale]
 
     data = dm._load_term_meta_raw(_seen_dict_name(folder))
-    sets = build_seen_day(data, normalize_kana, honorific_folding) if data is not None else (set(), set())
+    sets = build_seen_day(data, normalize_kana, honorific_folding) if data is not None else (set(), set(), set())
     _day_cache[key] = sets
     return sets
 
 
 def _merge_seen_days(days) -> "SeenWindow":
-    """Union the per-day ``(exprs, honorific_stripped)`` sets into one ``SeenWindow``. Presence is
-    idempotent across days, so a plain union replaces the old additive count merge (and the
-    per-day separation it needed for the non-additive reading-mismatch fallback)."""
+    """Union the per-day ``(exprs, honorific_stripped, phrase_entries)`` sets into one
+    ``SeenWindow``. Presence is idempotent across days, so a plain union replaces the old
+    additive count merge (and the per-day separation it needed for the non-additive
+    reading-mismatch fallback)."""
     exprs: Set[str] = set()
     honorific: Set[str] = set()
-    for de, dh in days:
+    phrases: Set[Tuple[str, str]] = set()
+    for de, dh, dp in days:
         exprs |= de
         honorific |= dh
-    return SeenWindow(exprs, honorific)
+        phrases |= dp
+    return SeenWindow(exprs, honorific, phrases)
 
 
 # Merged-window cache: signature (per-day (folder, mtime) + build flags) -> SeenWindow. Bounded
@@ -302,7 +342,7 @@ def get_seen_window(
     ``prefix_matching`` is not a parameter — the union set is identical with or without it, and
     the sorted prefix view is built lazily on the returned object. ``today`` injectable for tests."""
     if n <= 0:
-        return SeenWindow(set(), set())
+        return SeenWindow(set(), set(), set())
     if today is None:
         today = today_date()
     folders = [date_to_folder(d) for d in window_dates(today, n)]

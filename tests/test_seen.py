@@ -152,6 +152,24 @@ def test_seen_window_combine_word_forms():
     assert kana_only.contains("南京", "なんきん", combine_word_forms=True)
 
 
+def test_seen_window_single_kanji_phrase():
+    window = _build_window([[["手を貸す", "freq", {"reading": "てをかす", "frequency": {"value": 5}}]]])
+    assert not window.contains("手", "て")
+    assert window.contains("手", "て", prefix_matching=True)
+    assert not window.contains("手", "しゅ", prefix_matching=True)  # reading gate
+    assert not window.contains("手", "", prefix_matching=True)      # nothing to validate
+
+
+def test_seen_window_phrase_normalize_kana():
+    # The retained phrase reading must be folded at build so a katakana-reading
+    # entry still validates a (folded) card reading.
+    window = _build_window(
+        [[["手を貸す", "freq", {"reading": "テヲカス", "frequency": {"value": 5}}]]],
+        normalize_kana=True,
+    )
+    assert window.contains("手", "テ", normalize_kana=True, prefix_matching=True)
+
+
 def test_seen_window_honorific_folding():
     # お茶 present + 茶 present -> honorific folding makes the bare 茶 (and an unseen-as-kanji
     # card) credited. Here a card present ONLY via the honorific fold:
@@ -178,18 +196,26 @@ def test_seen_contains_matches_counting_presence_incl_homograph():
             ["角", "freq", {"reading": "かど", "frequency": {"value": 4}}],
             ["お茶", "freq", {"reading": "おちゃ", "frequency": {"value": 50}}],
             ["茶", "freq", {"reading": "ちゃ", "frequency": {"value": 8}}],
+            ["手を貸す", "freq", {"reading": "てをかす", "frequency": {"value": 7}}],
+            ["最も", "freq", {"reading": "もっとも", "frequency": {"value": 4}}],
         ],
         [
             ["下駄箱", "freq", {"reading": "げたばこ", "frequency": {"value": 6}}],
             ["角", "freq", {"reading": "つの", "frequency": {"value": 3}}],
+            ["思はず", "freq", {"reading": "おもわず", "frequency": {"value": 2}}],
         ],
         [
             ["下駄", "freq", {"reading": "げた", "frequency": {"value": 2}}],
             ["下駄屋", "freq", {"reading": "げたや", "frequency": {"value": 8}}],
+            ["積もる", "freq", {"reading": "つもる", "frequency": {"value": 3}}],
         ],
     ]
     cards = [("下駄", "げた"), ("角", "かど"), ("茶", "ちゃ"), ("下駄箱", "げたばこ"),
-             ("お茶", "おちゃ"), ("ない", "")]
+             ("お茶", "おちゃ"), ("ない", ""),
+             # single-kanji phrase path: positive, reading-gated, tail-gated, and
+             # the documented okurigana truncation edge (積/つ validates 積もる)
+             ("手", "て"), ("手", "しゅ"), ("思", "おも"), ("最", "もっと"),
+             ("積", "つ"), ("積", "せき")]
     flagsets = [
         {},
         {"prefix_matching": True},

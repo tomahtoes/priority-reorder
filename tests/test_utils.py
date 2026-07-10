@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from utils import parse_sort_value, to_hiragana, parse_comparator
+from utils import is_kanji, parse_sort_value, to_hiragana, parse_comparator
 
 
 # --- parse_sort_value -------------------------------------------------------
@@ -43,6 +43,19 @@ def test_to_hiragana_leaves_hiragana_kanji_ascii_untouched():
 
 def test_to_hiragana_mixed_string():
     assert to_hiragana("お茶ハ") == "お茶は"  # only the katacana ハ folds to は
+
+
+# --- is_kanji ----------------------------------------------------------------
+
+def test_is_kanji_true_for_ideographs():
+    assert is_kanji("手")
+    assert is_kanji("漢")
+    assert is_kanji("𠮟")  # U+20B9F, supplementary plane (Ext B)
+
+
+def test_is_kanji_false_for_kana_ascii_symbols():
+    for ch in ("て", "ヲ", "a", "1", "㋕", "々"):
+        assert not is_kanji(ch), ch
 
 
 # --- parse_comparator -------------------------------------------------------

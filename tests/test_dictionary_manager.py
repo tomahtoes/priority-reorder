@@ -218,6 +218,91 @@ def test_prefix_total_includes_supplementary_plane_successors():
     assert idx.prefix_total("漢字") == 70
 
 
+# --- single-kanji phrase matching -------------------------------------------
+
+def test_phrase_total_credits_particle_phrase():
+    idx = OccurrenceIndex()
+    idx.add("手", "て", 5)
+    idx.add("手を貸す", "てをかす", 10)
+    idx.add("手が出る", "てがでる", 3)
+    idx.add("手紙", "てがみ", 50)  # no particle -> morpheme compound, excluded
+    assert idx.get_total("手", "て") == 5
+    # exact 5 + phrase 10 + 3; 手紙 excluded (and prefix_total's single-char gate
+    # keeps it out of the bare prefix path -> no double counting)
+    assert idx.get_total("手", "て", prefix_matching=True) == 18
+    assert idx.prefix_total("手") == 0
+
+
+def test_phrase_total_reading_validation_excludes_mismatches():
+    idx = OccurrenceIndex()
+    idx.add("思はず", "おもわず", 9)   # old orthography: は read わ -> reading gate fails
+    idx.add("積もる", "つもる", 6)     # okurigana verb
+    assert idx.get_total("思", "おも", prefix_matching=True) == 0
+    assert idx.get_total("積", "せき", prefix_matching=True) == 0
+    # known edge: the implausible truncated reading つ WOULD validate 積もる
+    assert idx.get_total("積", "つ", prefix_matching=True) == 6
+
+
+def test_phrase_total_requires_non_empty_tail():
+    idx = OccurrenceIndex()
+    idx.add("最も", "もっとも", 12)
+    # reading would validate (もっとも starts with もっと+も) but there is no tail
+    assert idx.get_total("最", "もっと", prefix_matching=True) == 0
+
+
+def test_phrase_total_requires_kanji_head_and_reading():
+    idx = OccurrenceIndex()
+    idx.add("手を貸す", "てをかす", 10)
+    idx.add("とはいえ", "とはいえ", 5)   # kana head never enters the phrase bucket
+    idx.add("手を出す", None, 9)         # no reading -> nothing to validate against
+    assert idx.get_total("と", "と", prefix_matching=True) == 0
+    assert idx.get_total("手", "", prefix_matching=True) == 0    # empty card reading
+    assert idx.get_total("手", "しゅ", prefix_matching=True) == 0
+    assert idx.get_total("手", "て", prefix_matching=True) == 10  # 手を出す contributes nothing
+
+
+def test_phrase_total_homograph_readings():
+    idx = OccurrenceIndex()
+    idx.add("角を曲がる", "かどをまがる", 7)
+    assert idx.get_total("角", "かど", prefix_matching=True) == 7
+    assert idx.get_total("角", "つの", prefix_matching=True) == 0
+
+
+def test_phrase_kana_only_entry_never_lands_in_kanji_bucket():
+    # A ㋕-flagged phrase is keyed under its kana reading, so its head is kana
+    # and it can never credit a kanji card via the phrase path.
+    idx = _build_index_from_raw([
+        ["手を貸す", "freq", {"reading": "てをかす",
+                              "frequency": {"value": 10, "displayValue": "㋕10"}}],
+    ])
+    assert idx.get_total("手", "て", prefix_matching=True) == 0
+
+
+def test_phrase_total_normalize_kana_end_to_end(monkeypatch):
+    def fake_get_occurrence_index(name, normalize_kana, prefix_matching, honorific_folding):
+        return _build_index_from_raw(
+            [["手を貸す", "freq", {"reading": "テヲカス", "value": 10}]],
+            normalize_kana=normalize_kana,
+        )
+
+    monkeypatch.setattr(dm, "get_occurrence_index", fake_get_occurrence_index)
+    # katakana card reading folds to hiragana before the phrase-reading comparison
+    count = occurrence_count(["D"], "手", "テ", normalize_kana=True, prefix_matching=True)
+    assert count == 10
+
+
+def test_phrase_total_stacks_with_honorific_folding():
+    idx = _build_index_from_raw(
+        [
+            ["手", "freq", {"reading": "て", "value": 5}],
+            ["手を貸す", "freq", {"reading": "てをかす", "value": 10}],
+            ["お手", "freq", {"reading": "おて", "value": 20}],
+        ],
+        honorific_folding=True,
+    )
+    assert idx.get_total("手", "て", prefix_matching=True, honorific_folding=True) == 35
+
+
 # --- CombinedOccurrenceIndex memo eviction ----------------------------------
 
 def test_combined_index_evicts_oldest_when_cap_reached(monkeypatch):

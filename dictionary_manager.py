@@ -5,12 +5,24 @@ from functools import lru_cache
 from typing import Dict, List, Optional, Tuple
 
 try:  # inside Anki: isolated package namespace
-    from .utils import to_hiragana
+    from .utils import is_kanji, to_hiragana
 except ImportError:  # pytest / flat-import context
-    from utils import to_hiragana
+    from utils import is_kanji, to_hiragana
 
 _MIN_PREFIX_LENGTH = 2
 _HONORIFIC_PREFIXES = ("お", "ご", "御")
+_PHRASE_PARTICLES = frozenset("をがのにではもへと")
+
+def _is_phrase_entry(expression: str, reading: Optional[str]) -> bool:
+    """Structural test for the single-kanji phrase rule: kanji head, whitelisted
+    particle second, non-empty tail, and a reading to validate against. Shared
+    with seen_manager.build_seen_day so the counting and boolean sides can't drift."""
+    return (
+        bool(reading)
+        and len(expression) >= 3
+        and expression[1] in _PHRASE_PARTICLES
+        and is_kanji(expression[0])
+    )
 _COMBINED_MEMO_CAP = 50_000
 
 # Reserved child folder under user_files holding the daily seen dicts
@@ -28,6 +40,8 @@ class OccurrenceIndex:
         # Built lazily on first prefix query (see _ensure_prefix_index).
         self._prefix_exprs: Optional[List[str]] = None
         self._prefix_cumsum: List[int] = []
+        # Built lazily on first single-kanji phrase query (see _ensure_phrase_index).
+        self._phrase_index: Optional[Dict[str, List[Tuple[str, str, int]]]] = None
 
     def add(self, expression: str, reading: Optional[str], count: int) -> None:
         if reading:
@@ -67,6 +81,31 @@ class OccurrenceIndex:
             lo += 1  # exclude the exact match (counted separately by get)
         return self._prefix_cumsum[hi] - self._prefix_cumsum[lo]
 
+    def _ensure_phrase_index(self) -> None:
+        if self._phrase_index is not None:
+            return
+        index: Dict[str, List[Tuple[str, str, int]]] = {}
+        for (expr, reading), count in self.expr_reading_to_count.items():
+            if not _is_phrase_entry(expr, reading):
+                continue
+            index.setdefault(expr[0], []).append((expr[1], reading, count))
+        self._phrase_index = index
+
+    def single_kanji_phrase_total(self, expression: str, reading: str) -> int:
+        """Phrase credit for a single-kanji card: sums entries 'X<particle><tail>'
+        whose reading starts with the card's reading + the particle, validating
+        that X is read in-context as the card reads it (手を貸す/てをかす credits
+        手/て but not 手/しゅ). Complements prefix_total, which gates out
+        single-character expressions entirely."""
+        if len(expression) != 1 or not reading or not is_kanji(expression):
+            return 0
+        self._ensure_phrase_index()
+        total = 0
+        for particle, entry_reading, count in self._phrase_index.get(expression, ()):
+            if entry_reading.startswith(reading + particle):
+                total += count
+        return total
+
     def get(self, expression: str, reading: str) -> int:
         if (expression, reading) in self.expr_reading_to_count:
             return self.expr_reading_to_count[(expression, reading)]
@@ -89,6 +128,7 @@ class OccurrenceIndex:
             total += self.prefix_total(expression)
             if combine_word_forms and reading_is_distinct:
                 total += self.prefix_total(reading)
+            total += self.single_kanji_phrase_total(expression, reading)
         if honorific_folding:
             total += self.honorific_to_count.get(expression, 0)
             if combine_word_forms and reading_is_distinct:

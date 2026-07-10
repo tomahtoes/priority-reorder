@@ -142,7 +142,8 @@ Set `"prefix_matching": true` in your config to allow a card to match with the c
 
 - **Semantics**: `final_count = exact_count + Σ(counts of dict entries where card.expression is a proper written prefix)`.
 - **Example**: With `彫刻` as the card expression in your deck, ocurrence dict entries `彫刻家` (100) and `彫刻品` (30) both start with `彫刻`, so `彫刻`'s effective count becomes `exact + 100 + 30`. A threshold like `occurrences:MyDict>=50` can now pick up `彫刻` even if it only appears as a standalone entry a handful of times.
-- **Minimum length**: 2 characters. Single-character cards (e.g. `大`) are never credited via prefix matches, since the relationship is considered too loose to be meaningful.
+- **Minimum length**: 2 characters. Single-character cards (e.g. `大`) are never credited via bare prefix matches, since the relationship is considered too loose to be meaningful (`手` would absorb `手紙`/`手術`, where it is just a morpheme — often with a different reading).
+- **Single-kanji phrase matching**: as a carve-out from the minimum length, a single-kanji card *with a reading* is credited by **particle-linked phrase entries** — entries of the form `X + particle + rest` (particles: `を が の に で は も へ と`) whose reading starts with the card's reading followed by that particle. Example: `手を貸す` (てをかす) credits a `手`/`て` card, because the phrase's reading confirms `手` is being read て — while `手紙` still contributes nothing, and a `手`/`しゅ` card is not credited. The reading gate is what keeps this from degenerating into noise: it excludes on'yomi compounds and okurigana verbs like `積もる`.
 - **Default**: `false`. Note that enabling this flag increases initial index startup time of the addon a bit, but not substantially.
 
 #### Honorific Folding

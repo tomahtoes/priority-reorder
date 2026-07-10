@@ -1,7 +1,8 @@
 # Changelog
 
-## 2026-07-09
+## 2026-07-10
 - `kanji:new` now takes an optional per-kanji target: `kanji:new[3]>=1` matches words with at least one kanji that fewer than 3 of your learned words contain. A kanji counts as "new" until the target number of learned words contain it; plain `kanji:new` is unchanged (equivalent to `kanji:new[1]`).
+- `prefix_matching` now also credits single-kanji cards from particle-linked phrase entries (e.g. `手`/`て` gains `手を貸す`'s count) when the phrase's reading confirms the card's reading. Applies to `occurrences:` and `seen:` alike.
 - Summary window look-and-feel improvements: flatter, more compact layout with clearer rows.
 
 ## 2026-06-19

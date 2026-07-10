@@ -84,7 +84,7 @@
 
 ### `prefix_matching` (bool)
 - **Description**: When enabled, an occurrence lookup for a card's expression additionally credits the counts of every dictionary entry for which the expression is a **proper written prefix** (length ≥ 2).
-- **Behavior**: Final count is `exact_count + Σ(counts of dict entries starting with card.expression)`. Example: a card `彫刻` (exact count 5) sees `彫刻家` (100) and `彫刻品` (30) as prefix matches and resolves to `5 + 100 + 30 = 135`. Single-character expressions are excluded (minimum length is 2, hardcoded). Stacks additively with `combine_word_forms`.
+- **Behavior**: Final count is `exact_count + Σ(counts of dict entries starting with card.expression)`. Example: a card `彫刻` (exact count 5) sees `彫刻家` (100) and `彫刻品` (30) as prefix matches and resolves to `5 + 100 + 30 = 135`. Single-character expressions are excluded from bare prefix matches (minimum length is 2, hardcoded); a single-kanji card with a reading is instead credited via **reading-validated particle phrases** — entries of the form `X + particle + rest` (particles `を が の に で は も へ と`) whose reading starts with the card's reading + the particle, e.g. `手を貸す` (てをかす) credits `手`/`て` but not `手`/`しゅ`. Stacks additively with `combine_word_forms`.
 - **Default**: `false`
 
 ### `honorific_folding` (bool)
