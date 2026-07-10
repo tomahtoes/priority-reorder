@@ -102,7 +102,7 @@ The addon supports several custom filters that you can mix in with standard Anki
 - **`seen:2`**: Filter by words appearing in your recent daily occurrence dictionaries.
 - **`limit=20`**: Limit the number of results from a specific search.
 - **`kanji:num=1`**: Filter by the total number of Kanji.
-- **`kanji:new=1`**: Filter by the number of unknown Kanji.
+- **`kanji:new=1`**: Filter by the number of unknown Kanji (optionally `kanji:new[3]=1` to count a Kanji as new until 3 of your learned words contain it).
 
 ### 1. Frequency Sorting (`f`)
 You can prioritize cards based on the numeric value in their sort field. This is most useful in combination with other filters, if you want to prioritize common words in an occurrence search for example.
@@ -166,8 +166,15 @@ Prioritize words based on your existing Kanji knowledge (scanned from your Revie
 - **`kanji:new=0`**: Matches words where you *already know* all the characters.
 - **`kanji:new=1`**: Matches words with exactly 1 unknown character.
 - **`kanji:new>=2`**: Matches words with 2 or more unknown characters.
+- **`kanji:new[3]>=1`**: Matches words with at least 1 Kanji that fewer than 3 of your learned words contain.
 - **`kanji:num=1`**: Matches words with exactly 1 Kanji.
 - **`kanji:num>=3`**: Matches words with 3 or more Kanji.
+
+By default a Kanji stops counting as *new* as soon as a single learned word contains it. Add a
+bracketed target to raise that bar: with `kanji:new[T]`, a Kanji counts as new until **T** of your
+learned words contain it (`kanji:new` is equivalent to `kanji:new[1]`). Useful when you want to
+keep reinforcing Kanji you've technically "met" but only know from one or two words. The target
+applies to `new` only — `kanji:num` takes no bracket.
 
 ### 4. Recently Seen Words (`seen:`)
 > ⚠️ **Experimental** — `seen:` is a newer, experimental feature and may change or be removed in a future version.

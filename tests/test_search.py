@@ -19,8 +19,8 @@ def freq_recorder(calls, ids=None):
 
 
 def kanji_recorder(calls, ids=None):
-    def resolve(check_type, op, thresh):
-        calls.append((check_type, op, thresh))
+    def resolve(check_type, target, op, thresh):
+        calls.append((check_type, target, op, thresh))
         return ids if ids is not None else [33, 44]
     return resolve
 
@@ -126,13 +126,48 @@ def test_kanji_new():
     calls = []
     out = search.rewrite_query("kanji:new=1", kanji_resolver=kanji_recorder(calls))
     assert out == "(nid:33,44)"
-    assert calls == [("new", "=", 1)]
+    assert calls == [("new", 1, "=", 1)]  # bracketless -> default target 1
 
 
 def test_kanji_num():
     calls = []
     search.rewrite_query("kanji:num>=2", kanji_resolver=kanji_recorder(calls))
-    assert calls == [("num", ">=", 2)]
+    assert calls == [("num", 1, ">=", 2)]
+
+
+def test_kanji_new_bracketed_target():
+    calls = []
+    out = search.rewrite_query("kanji:new[3]>=1", kanji_resolver=kanji_recorder(calls))
+    assert out == "(nid:33,44)"
+    assert calls == [("new", 3, ">=", 1)]
+
+
+def test_kanji_new_zero_target_parses():
+    # Degenerate but consistent (count < 0 is never true), like seen:0.
+    calls = []
+    search.rewrite_query("kanji:new[0]<=0", kanji_resolver=kanji_recorder(calls))
+    assert calls == [("new", 0, "<=", 0)]
+
+
+def test_kanji_bracketed_negation_preserved():
+    out = search.rewrite_query("-kanji:new[3]>=1", kanji_resolver=kanji_recorder([]))
+    assert out == "-(nid:33,44)"
+
+
+def test_kanji_num_rejects_bracket():
+    # The target bracket is only meaningful for `new`; `num[T]` must not match
+    # and falls through to Anki's backend like any other malformed term.
+    calls = []
+    out = search.rewrite_query("kanji:num[3]>=1", kanji_resolver=kanji_recorder(calls))
+    assert out == "kanji:num[3]>=1"
+    assert calls == []
+
+
+def test_kanji_new_empty_bracket_not_matched():
+    calls = []
+    out = search.rewrite_query("kanji:new[]>=1", kanji_resolver=kanji_recorder(calls))
+    assert out == "kanji:new[]>=1"
+    assert calls == []
 
 
 # --- multiple terms in one query -------------------------------------------
@@ -185,5 +220,7 @@ def test_has_custom_term():
     assert search.has_custom_term("occurrences:X>5")
     assert search.has_custom_term("deck:JP f<=10")
     assert search.has_custom_term("kanji:num=2")
+    assert search.has_custom_term("kanji:new[3]>=1")
+    assert not search.has_custom_term("kanji:num[3]>=1")  # bracket is new-only
     assert not search.has_custom_term("deck:JP added:3 flag:1")
     assert not search.has_custom_term("")

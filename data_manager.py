@@ -46,7 +46,7 @@ class DataManager:
         # standard query / custom predicate recurs across many priority searches.
         self._search_cache: Dict[str, List[int]] = {}                 # find_cards by query
         self._occ_count_cache: Dict[Tuple[Tuple[str, ...], int], int] = {}  # (dicts, nid) -> count
-        self._kanji_count_cache: Dict[Tuple[str, int], int] = {}      # (check_type, nid) -> count
+        self._kanji_count_cache: Dict[Tuple[str, int, int], int] = {}  # (check_type, target, nid) -> count
         self._kanji_manager = None  # lazy
 
     def _resolve_field_indices(self, mid: int) -> Tuple[Optional[int], Optional[int], Optional[int]]:
@@ -186,7 +186,7 @@ class DataManager:
             return occ_pred
 
         if kind == "kanji":
-            check_type, op, thresh = args
+            check_type, target, op, thresh = args
             comparator = parse_comparator(op)
             km = self._km()
             km.initialize()  # once per predicate build, not per evaluated card
@@ -194,7 +194,7 @@ class DataManager:
             def kanji_pred(c: Card) -> bool:
                 if not c.data.expression:
                     return False
-                return comparator(self._kanji_count(check_type, c, km), thresh)
+                return comparator(self._kanji_count(check_type, target, c, km), thresh)
 
             return kanji_pred
 
@@ -216,12 +216,12 @@ class DataManager:
             self._occ_count_cache[key] = value
         return value
 
-    def _kanji_count(self, check_type: str, card: Card, km) -> int:
-        key = (check_type, card.note_id)
+    def _kanji_count(self, check_type: str, target: int, card: Card, km) -> int:
+        key = (check_type, target, card.note_id)
         value = self._kanji_count_cache.get(key)
         if value is None:
             if check_type == "new":
-                value = km.get_unknown_kanji_count(card.data.expression)
+                value = km.get_unknown_kanji_count(card.data.expression, target)
             else:  # "num"
                 value = km.get_kanji_count(card.data.expression)
             self._kanji_count_cache[key] = value

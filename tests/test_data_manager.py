@@ -177,6 +177,36 @@ def test_occ_count_cached_per_note_for_the_run(fake_col, monkeypatch):
     assert calls["n"] == 1  # memoized by (dicts, note id) across the whole run
 
 
+def test_kanji_count_cache_is_keyed_by_target(fake_col, monkeypatch):
+    # Regression guard: two kanji:new searches with different [T] targets in the
+    # same run must not share cached counts — the cache key includes the target.
+    fake_col(
+        find_results={"(deck:X) is:new": [1, 2]},
+        rows=[_row(1, 10, "語", "ご", "100"), _row(2, 20, "彙", "い", "100")],
+    )
+
+    class _FakeKM:
+        def __init__(self):
+            self.calls = []
+
+        def initialize(self):
+            pass
+
+        def get_unknown_kanji_count(self, text, target=1):
+            self.calls.append((text, target))
+            return 0 if target == 1 else 1
+
+    km = _FakeKM()
+    monkeypatch.setattr(dmod, "get_kanji_manager", lambda cfg: km)
+
+    dm = DataManager(Config())
+    r1 = dm.get_cards_from_search("deck:X kanji:new[1]>=1")
+    r2 = dm.get_cards_from_search("deck:X kanji:new[2]>=1")
+    assert [c.card_id for c in r1.cards] == []       # target 1 -> count 0 everywhere
+    assert [c.card_id for c in r2.cards] == [1, 2]   # target 2 -> count 1, not the cached 0
+    assert set(km.calls) == {("語", 1), ("彙", 1), ("語", 2), ("彙", 2)}
+
+
 def test_occ_predicate_never_matches_without_expression_or_reading(fake_col, monkeypatch):
     fake_col(
         find_results={"(deck:X) is:new": [1, 2]},

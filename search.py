@@ -33,8 +33,14 @@ OCC_RE = re.compile(
 FREQ_RE = re.compile(
     r"(?<![^\s(-])f(?P<op>>=|<=|!=|=|<|>)(?P<thresh>\d+)(?=\s|\)|$)"
 )
+# `kanji:new` takes an optional bracketed target `[T]` (a kanji counts as "new"
+# until T learned words contain it); the `(?<=new)` lookbehind keeps the bracket
+# off `kanji:num`. That lookbehind relies on the type alternatives staying
+# fixed-width-distinguishable — revisit it if another check type is added.
 KANJI_RE = re.compile(
-    r"(?<![^\s(-])kanji:(?P<type>new|num)(?P<op>>=|<=|!=|=|<|>)(?P<thresh>\d+)"
+    r"(?<![^\s(-])kanji:(?P<type>new|num)"
+    r"(?:(?<=new)\[(?P<target>\d+)\])?"
+    r"(?P<op>>=|<=|!=|=|<|>)(?P<thresh>\d+)"
 )
 # `seen:N` is a date-windowed *presence* lookup over user_files/_seen/<date>/ (see
 # seen_manager): N is the number of trailing daily dicts, and a word matches if it appears in
@@ -65,12 +71,22 @@ def _format_nid_clause(ids) -> str:
     return "(nid:" + ",".join(str(i) for i in ids) + ")"
 
 
+def _kanji_args(m):
+    """(check_type, target, op, thresh) for a KANJI_RE match. `target` is the
+    bracketed [T] on kanji:new — a kanji stays "new" until T learned words
+    contain it — defaulting to 1 (plain kanji:new). The regex forbids a bracket
+    on "num"; target is normalized to 1 there too so tuple shapes and cache
+    keys stay uniform."""
+    t = m.group("target")
+    return m.group("type"), int(t) if t is not None else 1, m.group("op"), int(m.group("thresh"))
+
+
 def parse_custom_terms(query):
     """Pull the custom tokens out of `query` for the reorder post-filter fast path
     (see DataManager.get_cards_from_search). Returns a list of (kind, args, negated):
 
         ("occ",   (dict_str, op, thresh), negated)
-        ("kanji", (check_type, op, thresh), negated)
+        ("kanji", (check_type, target, op, thresh), negated)
         ("freq",  (op, thresh), negated)
 
     `negated` is True when the token was immediately preceded by '-' (Anki's
@@ -84,7 +100,7 @@ def parse_custom_terms(query):
     for m in OCC_RE.finditer(query):
         terms.append(("occ", (m.group("dict"), m.group("op"), int(m.group("thresh"))), negated(m)))
     for m in KANJI_RE.finditer(query):
-        terms.append(("kanji", (m.group("type"), m.group("op"), int(m.group("thresh"))), negated(m)))
+        terms.append(("kanji", _kanji_args(m), negated(m)))
     for m in FREQ_RE.finditer(query):
         terms.append(("freq", (m.group("op"), int(m.group("thresh"))), negated(m)))
     return terms
@@ -141,7 +157,7 @@ def rewrite_query(query, *, occ_resolver=None, freq_resolver=None, kanji_resolve
     Resolvers are injectable for testing and default to the real ones:
       occ_resolver(dict_str, op, thresh) -> list[int]
       freq_resolver(op, thresh) -> list[int]
-      kanji_resolver(check_type, op, thresh) -> list[int]
+      kanji_resolver(check_type, target, op, thresh) -> list[int]
       seen_resolver(n) -> list[int]
     Idempotent: the output contains no custom token.
     """
@@ -190,7 +206,7 @@ def rewrite_query(query, *, occ_resolver=None, freq_resolver=None, kanji_resolve
     if has_kanji:
         query = KANJI_RE.sub(
             lambda m: _format_nid_clause(_call_resolver(
-                kanji, injected, candidate_nids, m.group("type"), m.group("op"), int(m.group("thresh")))),
+                kanji, injected, candidate_nids, *_kanji_args(m))),
             query,
         )
     if has_freq:
@@ -384,9 +400,11 @@ def resolve_frequency(op, thresh, candidate_nids=None):
     return _resolve(("freq", op, thresh), compute, candidate_nids)
 
 
-def resolve_kanji(check_type, op, thresh, candidate_nids=None):
-    """Note ids whose expression has the requested kanji count. Notes with an
-    empty expression are skipped (never matched), mirroring KanjiRule.matches."""
+def resolve_kanji(check_type, target, op, thresh, candidate_nids=None):
+    """Note ids whose expression has the requested kanji count. For "new",
+    `target` is the per-kanji bar: a kanji counts as new until `target` learned
+    words contain it (1 = plain kanji:new). Notes with an empty expression are
+    skipped (never matched), mirroring KanjiRule.matches."""
     from .config_manager import get_config
     from .kanji_manager import get_kanji_manager
 
@@ -403,14 +421,14 @@ def resolve_kanji(check_type, op, thresh, candidate_nids=None):
             if not expression:
                 continue
             if check_type == "new":
-                count = km.get_unknown_kanji_count(expression)
+                count = km.get_unknown_kanji_count(expression, target)
             else:  # "num"
                 count = km.get_kanji_count(expression)
             if comparator(count, thresh):
                 ids.append(nid)
         return ids
 
-    return _resolve(("kanji", check_type, op, thresh), compute, candidate_nids)
+    return _resolve(("kanji", check_type, target, op, thresh), compute, candidate_nids)
 
 
 def resolve_seen(n, candidate_nids=None):

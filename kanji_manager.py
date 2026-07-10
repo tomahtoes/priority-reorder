@@ -115,13 +115,15 @@ class KanjiManager:
             print(f"[priority-reorder] kanji scan failed: {e}")
             traceback.print_exc()
 
-    def get_unknown_kanji_count(self, text: str) -> int:
+    def get_unknown_kanji_count(self, text: str, target: int = 1) -> int:
+        # A kanji counts as unknown ("new") until `target` learned words contain
+        # it; the default of 1 is the classic "no learned word has it".
         # Safety net only: callers evaluating many notes invoke initialize() once
         # per batch (the collection can't change mid-batch), so the per-call
         # mw.col.mod read this used to do is skipped on the hot path.
         if not self.initialized:
             self.initialize()
-        return sum(1 for char in self._extract_kanji(text) if self.known_kanji_counts[char] == 0)
+        return sum(1 for char in self._extract_kanji(text) if self.known_kanji_counts[char] < target)
 
     def get_kanji_count(self, text: str) -> int:
         return len(self._extract_kanji(text))

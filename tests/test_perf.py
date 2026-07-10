@@ -183,6 +183,7 @@ def test_rewrite_unsafe_queries_fall_back_to_full_scan(fake_anki, monkeypatch, q
 
 def test_strip_custom_terms_leaves_standard_part():
     assert search._strip_custom_terms("deck:X occurrences:D>5 f<2000 kanji:new=1").split() == ["deck:X"]
+    assert search._strip_custom_terms("deck:X kanji:new[3]>=1").split() == ["deck:X"]
 
 
 @pytest.mark.parametrize("query,stripped,allowed", [
@@ -200,10 +201,11 @@ def test_candidate_restriction_allowed(query, stripped, allowed):
 # --- parse_custom_terms (reorder post-filter parser) ------------------------
 
 def test_parse_custom_terms_extracts_each_kind():
-    terms = search.parse_custom_terms("deck:X occurrences:MyDict>=5 f<2000 kanji:new=1")
+    terms = search.parse_custom_terms("deck:X occurrences:MyDict>=5 f<2000 kanji:new=1 kanji:new[3]>=1")
     assert ("occ", ("MyDict", ">=", 5), False) in terms
     assert ("freq", ("<", 2000), False) in terms
-    assert ("kanji", ("new", "=", 1), False) in terms
+    assert ("kanji", ("new", 1, "=", 1), False) in terms
+    assert ("kanji", ("new", 3, ">=", 1), False) in terms
 
 
 def test_parse_custom_terms_flags_negation():

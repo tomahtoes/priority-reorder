@@ -1,6 +1,7 @@
 # Changelog
 
 ## 2026-07-09
+- `kanji:new` now takes an optional per-kanji target: `kanji:new[3]>=1` matches words with at least one kanji that fewer than 3 of your learned words contain. A kanji counts as "new" until the target number of learned words contain it; plain `kanji:new` is unchanged (equivalent to `kanji:new[1]`).
 - Summary window look-and-feel improvements: flatter, more compact layout with clearer rows.
 
 ## 2026-06-19

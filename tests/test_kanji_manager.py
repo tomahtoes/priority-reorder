@@ -71,6 +71,18 @@ def test_get_unknown_kanji_count_against_known_set():
     assert km.get_unknown_kanji_count("彫") == 0
 
 
+def test_get_unknown_kanji_count_with_target():
+    # A kanji counts as "new" until `target` learned words contain it.
+    km = KanjiManager(Config())
+    km.initialized = True  # skip the collection scan
+    km.known_kanji_counts = Counter({"彫": 3, "刻": 1})
+    assert km.get_unknown_kanji_count("彫刻") == 0       # default target 1 == old behavior
+    assert km.get_unknown_kanji_count("彫刻", 2) == 1    # 刻 has only 1 learned word
+    assert km.get_unknown_kanji_count("彫刻", 4) == 2    # both below 4
+    assert km.get_unknown_kanji_count("刻刻", 2) == 2    # positions counted, not distinct kanji
+    assert km.get_unknown_kanji_count("彫刻", 0) == 0    # degenerate: count < 0 never true
+
+
 # --- initialize() gating -------------------------------------------------------
 
 def test_initialize_builds_known_counts_from_graduated_notes(fake_col):
