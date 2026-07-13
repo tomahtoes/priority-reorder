@@ -32,8 +32,10 @@ class _FakeModels:
 class _FakeDB:
     def __init__(self, rows_by_cid):
         self.rows_by_cid = rows_by_cid
+        self.all_calls = 0
 
     def all(self, sql):
+        self.all_calls += 1
         inside = sql[sql.rindex("(") + 1 : sql.rindex(")")]
         ids = [int(x) for x in inside.split(",") if x.strip()]
         return [self.rows_by_cid[cid] for cid in ids if cid in self.rows_by_cid]
@@ -133,6 +135,31 @@ def test_plain_query_raw_count_equals_match_count(fake_col):
     assert res.raw_count == len(res.cards) == 1
 
 
+# --- get_cards / bulk load batching ----------------------------------------------
+
+def test_get_cards_bulk_loads_in_one_query(fake_col):
+    # The reorderer hands every candidate id to get_cards in one call; the load
+    # must be a single SQL pass, not one query per id (the get_card miss path).
+    col = fake_col(rows=[_row(i, i * 10, "語", "ご", "1") for i in range(1, 6)])
+    out = DataManager(Config()).get_cards([1, 2, 3, 4, 5])
+    assert sorted(out) == [1, 2, 3, 4, 5]
+    assert col.db.all_calls == 1
+
+
+def test_get_cards_drops_vanished_ids(fake_col):
+    col = fake_col(rows=[_row(1, 10, "語", "ご", "1")])
+    out = DataManager(Config()).get_cards([1, 999])
+    assert list(out) == [1]
+
+
+def test_bulk_load_chunks_large_id_lists(fake_col):
+    ids = list(range(1, 2001))
+    col = fake_col(rows=[_row(i, i, "語", "ご", "1") for i in ids])
+    out = DataManager(Config()).get_cards(ids)
+    assert len(out) == 2000
+    assert col.db.all_calls == 3  # 900 + 900 + 200
+
+
 # --- bulk load field handling ---------------------------------------------------
 
 def test_bulk_load_resolves_fields_and_sort_value(fake_col):
@@ -215,3 +242,55 @@ def test_occ_predicate_never_matches_without_expression_or_reading(fake_col, mon
     monkeypatch.setattr(dmod, "occurrence_count", lambda *a, **k: 99)
     res = DataManager(Config()).get_cards_from_search("deck:X occurrences:D>5")
     assert [c.card_id for c in res.cards] == [2]  # card 1 has no reading
+
+
+# --- seen: on the fast path -------------------------------------------------------
+
+class _FakeWindow:
+    def __init__(self, present):
+        self.present = present
+        self.calls = []
+
+    def contains(self, expression, reading, **flags):
+        self.calls.append((expression, reading, flags))
+        return expression in self.present
+
+
+def test_custom_seen_term_fast_path_filters_via_window(fake_col, monkeypatch):
+    # `deck:X seen:3` must ride the conjunctive fast path (no paren-wrapped
+    # find_cards fallback): window resolved once, per-card membership in Python,
+    # empty-expression cards never match — mirroring resolve_seen.
+    fake_col(
+        find_results={"(deck:X) is:new": [1, 2, 3]},
+        rows=[_row(1, 10, "下駄", "げた", "50"), _row(2, 20, "茶", "ちゃ", "60"),
+              _row(3, 30, "", "", "70")],
+    )
+    window = _FakeWindow(present={"下駄"})
+    built = []
+    monkeypatch.setattr(
+        dmod.seen_manager, "get_seen_window",
+        lambda n, kana, honorific: built.append((n, kana, honorific)) or window,
+    )
+
+    cfg = Config(prefix_matching=True)
+    res = DataManager(cfg).get_cards_from_search("deck:X seen:3")
+
+    assert [c.card_id for c in res.cards] == [1]
+    assert built == [(3, False, False)]               # window resolved once
+    assert [c[:2] for c in window.calls] == [("下駄", "げた"), ("茶", "ちゃ")]  # empty expr skipped
+    assert all(f["prefix_matching"] is True for _, _, f in window.calls)  # config flags forwarded
+
+
+def test_custom_seen_zero_fast_path_matches_nothing(fake_col, monkeypatch):
+    fake_col(
+        find_results={"(deck:X) is:new": [1]},
+        rows=[_row(1, 10, "語", "ご", "1")],
+    )
+
+    def boom(*a, **k):
+        raise AssertionError("seen:0 must not build a window")
+
+    monkeypatch.setattr(dmod.seen_manager, "get_seen_window", boom)
+    res = DataManager(Config()).get_cards_from_search("deck:X seen:0")
+    assert res.cards == []
+    assert res.raw_count == 1

@@ -1,3 +1,4 @@
+import time
 from typing import List, Optional, Set, Tuple, Dict
 from aqt import mw
 from anki.collection import OpChangesWithCount
@@ -37,6 +38,16 @@ class PriorityReorderer:
         self.data_manager = DataManager(config)
 
     def reorder(self) -> OpChangesWithCount:
+        timings: Dict[str, float] = {}
+        t_start = time.perf_counter()
+        last = t_start
+
+        def mark(stage: str) -> None:
+            nonlocal last
+            now = time.perf_counter()
+            timings[stage] = round((now - last) * 1000, 1)
+            last = now
+
         priority_defs, raw_queries = self._parse_definitions()
         if not priority_defs:
             return OpChangesWithCount(count=0)
@@ -44,25 +55,33 @@ class PriorityReorderer:
         summaries = self._init_summaries(priority_defs, raw_queries)
 
         priority_matches, all_candidate_ids, card_id_to_note = self._find_matches(priority_defs, summaries)
+        mark("find_matches")
 
-        all_cards_map = {cid: self.data_manager.get_card(cid) for cid in all_candidate_ids}
-        all_cards_map = {k: v for k, v in all_cards_map.items() if v is not None}
+        all_cards_map = self.data_manager.get_cards(all_candidate_ids)
         for cid, card in all_cards_map.items():
             card_id_to_note[cid] = card.note_id
+        mark("load_cards")
 
         priority_buckets, normal_list = self._assign_initial_buckets(priority_defs, priority_matches, all_candidate_ids, all_cards_map)
+        mark("buckets")
 
         final_priority_buckets, final_normal_list = self._apply_refinement_rules(
             priority_buckets, normal_list, summaries
         )
+        mark("refine")
+
         final_priority_queue, overflow = self._finalize_priority_queue(
             priority_defs, final_priority_buckets, summaries
         )
         final_normal_list.extend(overflow)
+        mark("finalize")
 
-        result = self._apply_reordering(final_priority_queue, final_normal_list)
+        result = self._apply_reordering(final_priority_queue, final_normal_list, timings)
 
-        self._write_log(summaries, final_priority_queue, final_normal_list, result)
+        timings["total"] = round((time.perf_counter() - t_start) * 1000, 1)
+        print("[priority-reorder] timings: " + " ".join(f"{k}={v}ms" for k, v in timings.items()))
+
+        self._write_log(summaries, final_priority_queue, final_normal_list, result, timings)
 
         return result
 
@@ -279,7 +298,19 @@ class PriorityReorderer:
 
         return queue, overflow
 
-    def _apply_reordering(self, priority_queue: List[Card], normal_list: List[Card]) -> OpChangesWithCount:
+    def _apply_reordering(
+        self,
+        priority_queue: List[Card],
+        normal_list: List[Card],
+        timings: Optional[Dict[str, float]] = None,
+    ) -> OpChangesWithCount:
+        def mark(stage: str, since: float) -> float:
+            now = time.perf_counter()
+            if timings is not None:
+                timings[stage] = round((now - since) * 1000, 1)
+            return now
+
+        t = time.perf_counter()
         normal_list = self._sort_cards(normal_list)
 
         final_ids = []
@@ -289,20 +320,25 @@ class PriorityReorderer:
             if card.card_id not in seen:
                 final_ids.append(card.card_id)
                 seen.add(card.card_id)
+        t = mark("final_sort", t)
 
         if not final_ids:
             return OpChangesWithCount(count=0)
 
-        if not self._needs_reorder(final_ids):
+        needs = self._needs_reorder(final_ids)
+        t = mark("needs_reorder", t)
+        if not needs:
             return OpChangesWithCount(count=0)
 
-        return mw.col.sched.reposition_new_cards(
+        result = mw.col.sched.reposition_new_cards(
             card_ids=final_ids,
             starting_from=0,
             step_size=1,
             randomize=False,
             shift_existing=self.config.shift_existing
         )
+        mark("reposition", t)
+        return result
 
     def _needs_reorder(self, new_ids: List[int]) -> bool:
         """Whether repositioning would actually change the new-card order.
@@ -321,8 +357,12 @@ class PriorityReorderer:
             # type = 0 == new cards (the `is:new` domain every search uses).
             # Tie-break by id so equal-due cards order deterministically across
             # runs; otherwise a due collision could flip the order and trigger a
-            # needless reorder.
-            current_ids = mw.col.db.list("select id from cards where type = 0 order by due, id")
+            # needless reorder. Only the first len(new_ids) positions are compared
+            # below, so the scan is capped there; getting fewer rows than the cap
+            # still means fewer new cards exist than we are placing -> reorder.
+            current_ids = mw.col.db.list(
+                f"select id from cards where type = 0 order by due, id limit {len(new_ids)}"
+            )
         except Exception:
             # Even though we can't know for sure, default to reordering to match historical behavior
             return True
@@ -350,6 +390,7 @@ class PriorityReorderer:
         final_priority_queue: List[Card],
         final_normal_list: List[Card],
         result: OpChangesWithCount,
+        timings: Optional[Dict[str, float]] = None,
     ) -> None:
         report: Optional[ReorderReport] = None
         try:
@@ -362,6 +403,7 @@ class PriorityReorderer:
                 total_priority_kept=len(final_priority_queue),
                 total_normal=len(final_normal_list),
                 total_repositioned=getattr(result, "count", 0) or 0,
+                timings_ms=dict(timings or {}),
             )
         except Exception as e:
             import traceback

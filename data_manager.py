@@ -14,6 +14,7 @@ try:  # inside Anki: isolated package namespace
     )
     from .dictionary_manager import expand_dict_names, occurrence_count
     from .kanji_manager import get_kanji_manager
+    from . import seen_manager
 except ImportError:  # pytest / flat-import context
     from models import Card, NoteData
     from config_manager import Config
@@ -26,6 +27,7 @@ except ImportError:  # pytest / flat-import context
     )
     from dictionary_manager import expand_dict_names, occurrence_count
     from kanji_manager import get_kanji_manager
+    import seen_manager
 
 class SearchResult(NamedTuple):
     """Cards matched by a search, plus the standard-query match count from before
@@ -80,11 +82,16 @@ class DataManager:
         if not missing:
             return
 
+        # Chunked so the inlined id list stays bounded — a 100k-card backlog in a
+        # single IN (...) literal makes SQLite parse a multi-MB statement.
+        rows = []
         try:
-            rows = mw.col.db.all(
-                "select c.id, c.nid, n.mid, n.flds from cards c "
-                f"join notes n on n.id = c.nid where c.id in {ids2str(missing)}"
-            )
+            for start in range(0, len(missing), 900):
+                chunk = missing[start:start + 900]
+                rows.extend(mw.col.db.all(
+                    "select c.id, c.nid, n.mid, n.flds from cards c "
+                    f"join notes n on n.id = c.nid where c.id in {ids2str(chunk)}"
+                ))
         except Exception as e:
             import traceback
             print(f"[priority-reorder] bulk card load failed: {e}")
@@ -118,6 +125,13 @@ class DataManager:
         # Fallback single-card path (most callers go through the bulk loader).
         self._bulk_load([card_id])
         return self._card_cache.get(card_id)
+
+    def get_cards(self, card_ids) -> Dict[int, Card]:
+        """Load a batch of cards in one bulk pass and return the found ones as a
+        map. Ids whose card vanished between find_cards and here are dropped."""
+        ids = list(card_ids)
+        self._bulk_load(ids)
+        return {cid: c for cid in ids if (c := self._card_cache.get(cid)) is not None}
 
     def get_cards_from_search(self, search_string: str) -> SearchResult:
         raw = search_string.strip()
@@ -197,6 +211,31 @@ class DataManager:
                 return comparator(self._kanji_count(check_type, target, c, km), thresh)
 
             return kanji_pred
+
+        if kind == "seen":
+            (n,) = args
+            if n <= 0:
+                return lambda c: False  # seen:0 matches nothing (mirrors resolve_seen)
+            cfg = self.config
+            # Resolve the window ONCE per predicate build (one filesystem stat per
+            # day), so the per-card check is a pure in-memory membership lookup.
+            window = seen_manager.get_seen_window(
+                n, cfg.kana_normalization, cfg.honorific_folding
+            )
+
+            def seen_pred(c: Card) -> bool:
+                if not c.data.expression:
+                    return False
+                return window.contains(
+                    c.data.expression,
+                    c.data.reading,
+                    normalize_kana=cfg.kana_normalization,
+                    combine_word_forms=cfg.combine_word_forms,
+                    prefix_matching=cfg.prefix_matching,
+                    honorific_folding=cfg.honorific_folding,
+                )
+
+            return seen_pred
 
         return lambda c: False
 

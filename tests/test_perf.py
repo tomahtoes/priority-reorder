@@ -9,7 +9,8 @@ behaviour so it can't silently regress:
     not run a per-note-type full scan;
   * `rewrite_query` must compute the candidate set from the standard part of a
     conjunctive query and thread it into the resolver, and must fall back to a
-    full scan (candidate=None) for unsafe (disjunctive/grouped/bare) queries.
+    full scan (candidate=None) for unsafe queries (top-level disjunction, bare
+    custom term, custom term inside a group).
 
 They also include a micro-benchmark demonstrating the O(M) vs O(N) gap with real
 occurrence-index lookups (run with `-s` to see the timings).
@@ -164,9 +165,9 @@ def test_rewrite_negated_custom_term_strips_dangling_dash(fake_anki, monkeypatch
 
 
 @pytest.mark.parametrize("query", [
-    "occurrences:MyDict>5",            # bare custom term, no standard part
-    "deck:A OR occurrences:MyDict>5",  # disjunction
-    "(deck:A) occurrences:MyDict>5",   # grouping
+    "occurrences:MyDict>5",              # bare custom term, no standard part
+    "deck:A OR occurrences:MyDict>5",    # top-level disjunction
+    "(deck:A occurrences:MyDict>5)",     # custom term inside a group
 ])
 def test_rewrite_unsafe_queries_fall_back_to_full_scan(fake_anki, monkeypatch, query):
     col = fake_anki(notes=[], find_notes_result=[1, 2, 3])
@@ -179,20 +180,48 @@ def test_rewrite_unsafe_queries_fall_back_to_full_scan(fake_anki, monkeypatch, q
     assert col.find_notes_queries == []    # never narrowed the candidate set
 
 
+def test_rewrite_grouped_conjunctive_query_still_restricts(fake_anki, monkeypatch):
+    # A group at the top level is one standard conjunct; the custom term outside
+    # it applies conjunctively, so restriction to the group's matches is safe.
+    col = fake_anki(notes=[], find_notes_result=[11, 12])
+    record = []
+    monkeypatch.setattr(search, "resolve_occurrences", _record_occ(record))
+
+    out = search.rewrite_query("(deck:A or deck:B) occurrences:MyDict>5")
+
+    assert out == "(deck:A or deck:B) (nid:901,902)"
+    assert record == [{11, 12}]
+    assert col.find_notes_queries == ["(deck:A or deck:B)"]
+
+
 # --- pure helpers -----------------------------------------------------------
 
 def test_strip_custom_terms_leaves_standard_part():
-    assert search._strip_custom_terms("deck:X occurrences:D>5 f<2000 kanji:new=1").split() == ["deck:X"]
+    assert search._strip_custom_terms("deck:X occurrences:D>5 f<2000 kanji:new=1 seen:2").split() == ["deck:X"]
     assert search._strip_custom_terms("deck:X kanji:new[3]>=1").split() == ["deck:X"]
 
 
 @pytest.mark.parametrize("query,stripped,allowed", [
     ("deck:X occurrences:D>5", "deck:X", True),
     ("deck:X -occurrences:D>5", "deck:X -", True),
+    ("deck:X seen:3", "deck:X", True),
     ("occurrences:D>5", "", False),
     ("-occurrences:D>5", "-", False),
     ("deck:A or occurrences:D>5", "deck:A or", False),
-    ("(deck:A) occurrences:D>5", "(deck:A)", False),
+    ("deck:A OR occurrences:D>5", "deck:A OR", False),
+    # Grouped standard parts are fine as long as every custom term sits at the
+    # top level: the group is one conjunct of a top-level conjunction.
+    ("(deck:A) occurrences:D>5", "(deck:A)", True),
+    ("(deck:A or deck:B) occurrences:D>5", "(deck:A or deck:B)", True),
+    ("(deck:A or deck:B) is:new seen:3", "(deck:A or deck:B) is:new", True),
+    ('deck:"A (B)" f<10', 'deck:"A (B)"', True),      # quoted parens don't count
+    ('deck:"a or b" f<10', 'deck:"a or b"', True),    # quoted or isn't an operator
+    ("wordor f<10", "wordor", True),                  # 'or' inside a word isn't either
+    # Custom term inside a group / top-level disjunction / anomalies -> full scan.
+    ("(deck:A occurrences:D>5)", "(deck:A )", False),
+    ("-(occurrences:D>5) deck:A", "-( ) deck:A", False),
+    ("(deck:A occurrences:D>5", "(deck:A", False),    # unbalanced paren
+    ('deck:"A f<10', 'deck:"A', False),               # unterminated quote
 ])
 def test_candidate_restriction_allowed(query, stripped, allowed):
     assert search._candidate_restriction_allowed(query, stripped) is allowed
@@ -201,11 +230,12 @@ def test_candidate_restriction_allowed(query, stripped, allowed):
 # --- parse_custom_terms (reorder post-filter parser) ------------------------
 
 def test_parse_custom_terms_extracts_each_kind():
-    terms = search.parse_custom_terms("deck:X occurrences:MyDict>=5 f<2000 kanji:new=1 kanji:new[3]>=1")
+    terms = search.parse_custom_terms("deck:X occurrences:MyDict>=5 f<2000 kanji:new=1 kanji:new[3]>=1 seen:2")
     assert ("occ", ("MyDict", ">=", 5), False) in terms
     assert ("freq", ("<", 2000), False) in terms
     assert ("kanji", ("new", 1, "=", 1), False) in terms
     assert ("kanji", ("new", 3, ">=", 1), False) in terms
+    assert ("seen", (2,), False) in terms
 
 
 def test_parse_custom_terms_flags_negation():

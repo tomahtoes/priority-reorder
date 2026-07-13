@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 
 @dataclass
@@ -32,6 +32,8 @@ class ReorderReport:
     total_priority_kept: int = 0
     total_normal: int = 0
     total_repositioned: int = 0
+    # Per-stage wall-clock durations of the reorder run, in milliseconds.
+    timings_ms: Dict[str, float] = field(default_factory=dict)
 
 
 def now_timestamp() -> str:

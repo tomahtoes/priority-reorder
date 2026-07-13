@@ -351,3 +351,56 @@ def test_apply_reordering_repositions_when_foreign_card_interleaved(monkeypatch)
 
     assert sched.calls[0][0] == [1, 2, 3]
     assert result.count == 3
+
+
+def test_needs_reorder_scan_is_limited_to_placed_count(monkeypatch):
+    # Only the first len(new_ids) positions are compared, so the scan must not
+    # pull the whole new-card backlog.
+    import reorderer as rmod
+    import types
+
+    class _RecordingDB(_FakeDB):
+        def __init__(self, current_ids):
+            super().__init__(current_ids)
+            self.queries = []
+
+        def list(self, query):
+            self.queries.append(query)
+            return super().list(query)
+
+    sched = _FakeSched()
+    db = _RecordingDB([1, 2, 3])
+    monkeypatch.setattr(rmod.mw, "col", types.SimpleNamespace(sched=sched, db=db), raising=False)
+
+    reorderer()._apply_reordering([card(1, 1), card(2, 2), card(3, 3)], [])
+
+    assert db.queries and db.queries[0].endswith("limit 3")
+
+
+# --- stage timings ----------------------------------------------------------
+
+def test_reorder_records_stage_timings(monkeypatch):
+    import reorderer as rmod
+    from data_manager import SearchResult
+    from reorder_log import get_last_report
+
+    sched = _FakeSched()
+    monkeypatch.setattr(rmod.mw, "col", _col(sched, []), raising=False)
+
+    r = reorderer(priority_search="deck:X")
+    c1 = card(1, 1)
+
+    class _FakeDM:
+        def get_cards_from_search(self, query):
+            return SearchResult([c1], 1)
+
+        def get_cards(self, card_ids):
+            return {c1.card_id: c1}
+
+    r.data_manager = _FakeDM()
+    r.reorder()
+
+    timings = get_last_report().timings_ms
+    for stage in ("find_matches", "load_cards", "buckets", "refine", "finalize",
+                  "final_sort", "needs_reorder", "reposition", "total"):
+        assert stage in timings, stage

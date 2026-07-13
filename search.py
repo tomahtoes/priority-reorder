@@ -88,6 +88,7 @@ def parse_custom_terms(query):
         ("occ",   (dict_str, op, thresh), negated)
         ("kanji", (check_type, target, op, thresh), negated)
         ("freq",  (op, thresh), negated)
+        ("seen",  (n,), negated)
 
     `negated` is True when the token was immediately preceded by '-' (Anki's
     conjunctive NOT — the regexes leave that '-' unconsumed). Order doesn't matter
@@ -103,6 +104,8 @@ def parse_custom_terms(query):
         terms.append(("kanji", _kanji_args(m), negated(m)))
     for m in FREQ_RE.finditer(query):
         terms.append(("freq", (m.group("op"), int(m.group("thresh"))), negated(m)))
+    for m in SEEN_RE.finditer(query):
+        terms.append(("seen", (int(m.group("n")),), negated(m)))
     return terms
 
 
@@ -113,34 +116,71 @@ def _strip_custom_terms(query: str) -> str:
     q = OCC_RE.sub(" ", query)
     q = KANJI_RE.sub(" ", q)
     q = FREQ_RE.sub(" ", q)
+    q = SEEN_RE.sub(" ", q)
     return q
 
 
-def _strip_for_candidates(query: str) -> str:
-    """`_strip_custom_terms` plus `seen:` removal, used only to build the candidate-set
-    base handed to the unpatched find_notes (which doesn't understand `seen:` and would
-    otherwise throw on it). Kept separate from the exported `_strip_custom_terms`: the
-    reorder fast path relies on that one leaving `seen:` in place so it gets resolved by
-    the patched find_cards."""
-    return SEEN_RE.sub(" ", _strip_custom_terms(query))
+# A standalone `or` operator token: bounded by start/end/whitespace/parens, so
+# `for`, `orange` and field words never match. Case-insensitive like Anki's.
+_OR_TOKEN_RE = re.compile(r"(?i)(?<![^\s()])or(?![^\s()])")
 
 
 def _candidate_restriction_allowed(query: str, stripped: str) -> bool:
     """True when resolving the custom terms over only the notes matched by the
     standard part of the query is guaranteed to give the same result as a full
-    scan. That holds exactly when the query is a pure top-level conjunction with a
-    non-empty standard part (`A AND custom ⊆ A`). Conservatively bail otherwise:
+    scan. That holds when the query is a TOP-LEVEL conjunction
 
-      - empty standard part (bare custom term) — nothing to restrict on;
-      - a standalone OR/or token — disjunction would drop valid matches;
-      - parentheses — grouping may hide a disjunction we can't cheaply prove safe.
+        S1 ∧ ... ∧ Sk ∧ (¬)custom ...
+
+    where the Si may internally contain parens/ORs: the candidate set
+    C = matches(S1 ∧ ... ∧ Sk) is a superset of the full query's matches, and a
+    note outside C fails the standard conjuncts of the rewritten query no matter
+    how its custom term resolves — so restricted resolution ≡ full scan (negated
+    terms included: -nid:S only differs on notes in S\\C, all of which the
+    standard part excludes either way). Concretely, allow iff:
+
+      - the stripped standard part is non-empty (else nothing to restrict on);
+      - every custom token sits at paren depth 0, outside double quotes;
+      - no OR operator at depth 0 outside quotes (deeper ORs live inside a
+        single standard conjunct and are fine);
+      - parens balance and quotes terminate — any anomaly bails.
 
     Bailing only costs speed (full scan), never correctness."""
     if not stripped.replace("-", "").strip():
         return False
-    if "(" in query or ")" in query:
+
+    # (depth, in_quotes) before each character; backslash escapes the next char.
+    states = []
+    depth = 0
+    in_quotes = False
+    escaped = False
+    for ch in query:
+        states.append((depth, in_quotes))
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\":
+            escaped = True
+        elif ch == '"':
+            in_quotes = not in_quotes
+        elif not in_quotes:
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth < 0:
+                    return False
+    if depth != 0 or in_quotes:
         return False
-    return not any(tok.lower() == "or" for tok in query.split())
+
+    for regex in (OCC_RE, KANJI_RE, FREQ_RE, SEEN_RE):
+        for m in regex.finditer(query):
+            if states[m.start()] != (0, False):
+                return False
+    for m in _OR_TOKEN_RE.finditer(query):
+        if states[m.start()] == (0, False):
+            return False
+    return True
 
 
 def _call_resolver(resolver, injected, candidate_nids, *args):
@@ -186,9 +226,9 @@ def rewrite_query(query, *, occ_resolver=None, freq_resolver=None, kanji_resolve
     if not injected:
         fn = find_notes if find_notes is not None else _default_find_notes()
         if fn is not None:
-            # _strip_for_candidates also removes seen:, which the unpatched find_notes
-            # can't parse; a bare seen: query then strips to empty -> no restriction.
-            stripped = " ".join(_strip_for_candidates(query).split())
+            # Stripping removes seen: too, which the unpatched find_notes can't
+            # parse; a bare seen: query then strips to empty -> no restriction.
+            stripped = " ".join(_strip_custom_terms(query).split())
             if _candidate_restriction_allowed(query, stripped):
                 base = " ".join(t for t in stripped.split() if t != "-")
                 try:

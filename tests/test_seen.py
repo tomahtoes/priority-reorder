@@ -90,17 +90,13 @@ def test_has_custom_term_includes_seen():
     assert not search.has_custom_term("unseen:2")
 
 
-# --- strip helpers: deliberate asymmetry ------------------------------------
+# --- strip helper ------------------------------------------------------------
 
-def test_strip_for_candidates_removes_seen_and_custom_terms():
-    # The candidate-set base handed to the unpatched find_notes must be free of seen:.
-    assert search._strip_for_candidates("deck:JP occurrences:X>5 seen:2").split() == ["deck:JP"]
-
-
-def test_strip_custom_terms_keeps_seen():
-    # The exported stripper leaves seen: in place so the reorder fast path resolves it
-    # via the patched find_cards instead of dropping it.
-    assert "seen:2" in search._strip_custom_terms("occurrences:X>5 seen:2")
+def test_strip_custom_terms_removes_seen_too():
+    # seen: strips like every custom token: the candidate-set base handed to the
+    # unpatched find_notes must be free of it, and the reorder fast path resolves
+    # it as a Python predicate (data_manager) instead of via find_cards.
+    assert search._strip_custom_terms("deck:JP occurrences:X>5 seen:2").split() == ["deck:JP"]
 
 
 # --- date / window helpers --------------------------------------------------
