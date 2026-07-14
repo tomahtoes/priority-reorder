@@ -197,7 +197,7 @@ def test_rewrite_grouped_conjunctive_query_still_restricts(fake_anki, monkeypatc
 # --- pure helpers -----------------------------------------------------------
 
 def test_strip_custom_terms_leaves_standard_part():
-    assert search._strip_custom_terms("deck:X occurrences:D>5 f<2000 kanji:new=1 seen:2").split() == ["deck:X"]
+    assert search._strip_custom_terms("deck:X occurrences:D>5 f<2000 kanji:new=1 seen:2 length>=3").split() == ["deck:X"]
     assert search._strip_custom_terms("deck:X kanji:new[3]>=1").split() == ["deck:X"]
 
 
@@ -205,6 +205,8 @@ def test_strip_custom_terms_leaves_standard_part():
     ("deck:X occurrences:D>5", "deck:X", True),
     ("deck:X -occurrences:D>5", "deck:X -", True),
     ("deck:X seen:3", "deck:X", True),
+    ("deck:X length>=3", "deck:X", True),
+    ("(deck:A length>=3)", "(deck:A )", False),
     ("occurrences:D>5", "", False),
     ("-occurrences:D>5", "-", False),
     ("deck:A or occurrences:D>5", "deck:A or", False),
@@ -230,12 +232,13 @@ def test_candidate_restriction_allowed(query, stripped, allowed):
 # --- parse_custom_terms (reorder post-filter parser) ------------------------
 
 def test_parse_custom_terms_extracts_each_kind():
-    terms = search.parse_custom_terms("deck:X occurrences:MyDict>=5 f<2000 kanji:new=1 kanji:new[3]>=1 seen:2")
+    terms = search.parse_custom_terms("deck:X occurrences:MyDict>=5 f<2000 kanji:new=1 kanji:new[3]>=1 seen:2 length>=3")
     assert ("occ", ("MyDict", ">=", 5), False) in terms
     assert ("freq", ("<", 2000), False) in terms
     assert ("kanji", ("new", 1, "=", 1), False) in terms
     assert ("kanji", ("new", 3, ">=", 1), False) in terms
     assert ("seen", (2,), False) in terms
+    assert ("length", (">=", 3), False) in terms
 
 
 def test_parse_custom_terms_flags_negation():

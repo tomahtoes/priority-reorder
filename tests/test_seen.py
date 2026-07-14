@@ -167,12 +167,16 @@ def test_seen_window_phrase_normalize_kana():
 
 
 def test_seen_window_honorific_folding():
-    # お茶 present + 茶 present -> honorific folding makes the bare 茶 (and an unseen-as-kanji
-    # card) credited. Here a card present ONLY via the honorific fold:
+    # A kanji-bearing strip folds even when the bare form never appeared on its
+    # own: お得 alone marks 得 as seen (query-time flag still required).
     window = _build_window([[["お得", "freq", 5]]], honorific_folding=True)
-    assert not window.contains("得", "")  # 得 itself never appeared
-    window2 = _build_window([[["お得", "freq", 5], ["得", "freq", 1]]], honorific_folding=True)
-    assert window2.contains("得", "", honorific_folding=True)
+    assert not window.contains("得", "")  # query-time flag off -> no honorific credit
+    assert window.contains("得", "", honorific_folding=True)
+    # Kana-only strips still require the bare form in the same window.
+    kana = _build_window([[["おしゃれ", "freq", 5]]], honorific_folding=True)
+    assert not kana.contains("しゃれ", "", honorific_folding=True)
+    kana2 = _build_window([[["おしゃれ", "freq", 5], ["しゃれ", "freq", 1]]], honorific_folding=True)
+    assert kana2.contains("しゃれ", "", honorific_folding=True)
 
 
 def _ref_seen(day_indices, e, r, **flags):

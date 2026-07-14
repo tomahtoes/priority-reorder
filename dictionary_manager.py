@@ -23,6 +23,15 @@ def _is_phrase_entry(expression: str, reading: Optional[str]) -> bool:
         and expression[1] in _PHRASE_PARTICLES
         and is_kanji(expression[0])
     )
+
+def _honorific_fold_allowed(stripped: str, vocab) -> bool:
+    """Whether an honorific-stripped remainder may be registered as a fold target.
+    Allowed when the dict independently recognizes it, OR when it carries a kanji
+    (お茶の間→茶の間, お金→金 — near-certainly the same lexeme). Kana-only strips
+    stay gated on dict membership: that is where the unrelated-word junk lives
+    (おかず→かず, おはよう→はよう). Shared with seen_manager.build_seen_day so the
+    counting and boolean sides can't drift."""
+    return bool(stripped) and (stripped in vocab or any(is_kanji(ch) for ch in stripped))
 _COMBINED_MEMO_CAP = 50_000
 
 # Reserved child folder under user_files holding the daily seen dicts
@@ -267,7 +276,7 @@ def _build_index_from_raw(data: list, normalize_kana: bool = False, prefix_match
                 continue
             # strip one-character honorific prefix (all entries in the tuple are single chars)
             stripped = expr[1:]
-            if not stripped or stripped not in index.expr_to_count:
+            if not _honorific_fold_allowed(stripped, index.expr_to_count):
                 continue
             index.honorific_to_count[stripped] = index.honorific_to_count.get(stripped, 0) + count
 

@@ -1,12 +1,11 @@
 # Changelog
 
-## Unreleased
-- Faster reorders: card data now loads in bounded batches, `seen:` and grouped queries like `(deck:A or deck:B) occurrences:D>5` are evaluated over only the cards the rest of the query already matches instead of the whole collection, and the skip-when-unchanged check reads far fewer rows.
-
 ## 2026-07-10
 - `kanji:new` now takes an optional per-kanji target: `kanji:new[3]>=1` matches words with at least one kanji that fewer than 3 of your learned words contain. A kanji counts as "new" until the target number of learned words contain it; plain `kanji:new` is unchanged (equivalent to `kanji:new[1]`).
 - `prefix_matching` now also credits single-kanji cards from particle-linked phrase entries (e.g. `手`/`て` gains `手を貸す`'s count) when the phrase's reading confirms the card's reading. Applies to `occurrences:` and `seen:` alike.
 - Summary window look-and-feel improvements: flatter, more compact layout with clearer rows.
+- New `length` search filter — e.g. `length>=3` for words 3 or more characters long, `length=1` for single-character words.
+- Minor changes to improve reorder speeds.
 
 ## 2026-06-19
 - New `seen:N` search term — prioritize words from your recent *daily* occurrence dictionaries (in `user_files/_seen/<YYYY-MM-DD>/`). Matches words appearing in any of the last N days ("seen at all"). Works in the Browse bar, the collection API (AnkiConnect), and config, and honors the occurrence options (prefix matching, etc.).

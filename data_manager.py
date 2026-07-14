@@ -186,6 +186,13 @@ class DataManager:
             comparator = parse_comparator(op)
             return lambda c: comparator(c.data.sort_field_value, thresh)
 
+        if kind == "length":
+            op, thresh = args
+            comparator = parse_comparator(op)
+            # No empty-expression skip: an empty field counts as length 0
+            # (mirrors resolve_length).
+            return lambda c: comparator(len(c.data.expression), thresh)
+
         if kind == "occ":
             dict_str, op, thresh = args
             comparator = parse_comparator(op)

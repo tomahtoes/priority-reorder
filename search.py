@@ -33,6 +33,12 @@ OCC_RE = re.compile(
 FREQ_RE = re.compile(
     r"(?<![^\s(-])f(?P<op>>=|<=|!=|=|<|>)(?P<thresh>\d+)(?=\s|\)|$)"
 )
+# `length<op><n>` filters on the expression field's character count (Unicode code
+# points of the raw value). Same shape as FREQ_RE: the mandatory operator keeps it
+# off a real `length:` field search, the lookbehind off words like `wavelength`.
+LENGTH_RE = re.compile(
+    r"(?<![^\s(-])length(?P<op>>=|<=|!=|=|<|>)(?P<thresh>\d+)(?=\s|\)|$)"
+)
 # `kanji:new` takes an optional bracketed target `[T]` (a kanji counts as "new"
 # until T learned words contain it); the `(?<=new)` lookbehind keeps the bracket
 # off `kanji:num`. That lookbehind relies on the type alternatives staying
@@ -62,6 +68,7 @@ def has_custom_term(query: str) -> bool:
         or KANJI_RE.search(query)
         or FREQ_RE.search(query)
         or SEEN_RE.search(query)
+        or LENGTH_RE.search(query)
     )
 
 
@@ -85,10 +92,11 @@ def parse_custom_terms(query):
     """Pull the custom tokens out of `query` for the reorder post-filter fast path
     (see DataManager.get_cards_from_search). Returns a list of (kind, args, negated):
 
-        ("occ",   (dict_str, op, thresh), negated)
-        ("kanji", (check_type, target, op, thresh), negated)
-        ("freq",  (op, thresh), negated)
-        ("seen",  (n,), negated)
+        ("occ",    (dict_str, op, thresh), negated)
+        ("kanji",  (check_type, target, op, thresh), negated)
+        ("freq",   (op, thresh), negated)
+        ("seen",   (n,), negated)
+        ("length", (op, thresh), negated)
 
     `negated` is True when the token was immediately preceded by '-' (Anki's
     conjunctive NOT — the regexes leave that '-' unconsumed). Order doesn't matter
@@ -106,6 +114,8 @@ def parse_custom_terms(query):
         terms.append(("freq", (m.group("op"), int(m.group("thresh"))), negated(m)))
     for m in SEEN_RE.finditer(query):
         terms.append(("seen", (int(m.group("n")),), negated(m)))
+    for m in LENGTH_RE.finditer(query):
+        terms.append(("length", (m.group("op"), int(m.group("thresh"))), negated(m)))
     return terms
 
 
@@ -117,6 +127,7 @@ def _strip_custom_terms(query: str) -> str:
     q = KANJI_RE.sub(" ", q)
     q = FREQ_RE.sub(" ", q)
     q = SEEN_RE.sub(" ", q)
+    q = LENGTH_RE.sub(" ", q)
     return q
 
 
@@ -173,7 +184,7 @@ def _candidate_restriction_allowed(query: str, stripped: str) -> bool:
     if depth != 0 or in_quotes:
         return False
 
-    for regex in (OCC_RE, KANJI_RE, FREQ_RE, SEEN_RE):
+    for regex in (OCC_RE, KANJI_RE, FREQ_RE, SEEN_RE, LENGTH_RE):
         for m in regex.finditer(query):
             if states[m.start()] != (0, False):
                 return False
@@ -191,7 +202,7 @@ def _call_resolver(resolver, injected, candidate_nids, *args):
     return resolver(*args, candidate_nids=candidate_nids)
 
 
-def rewrite_query(query, *, occ_resolver=None, freq_resolver=None, kanji_resolver=None, seen_resolver=None, find_notes=None) -> str:
+def rewrite_query(query, *, occ_resolver=None, freq_resolver=None, kanji_resolver=None, seen_resolver=None, length_resolver=None, find_notes=None) -> str:
     """Replace every custom token in `query` with a concrete `nid:` clause.
 
     Resolvers are injectable for testing and default to the real ones:
@@ -199,6 +210,7 @@ def rewrite_query(query, *, occ_resolver=None, freq_resolver=None, kanji_resolve
       freq_resolver(op, thresh) -> list[int]
       kanji_resolver(check_type, target, op, thresh) -> list[int]
       seen_resolver(n) -> list[int]
+      length_resolver(op, thresh) -> list[int]
     Idempotent: the output contains no custom token.
     """
     if not query:
@@ -207,15 +219,18 @@ def rewrite_query(query, *, occ_resolver=None, freq_resolver=None, kanji_resolve
     has_kanji = "kanji:" in query
     has_freq = bool(FREQ_RE.search(query))
     has_seen = bool(SEEN_RE.search(query))
-    if not (has_occ or has_kanji or has_freq or has_seen):
+    has_length = bool(LENGTH_RE.search(query))
+    if not (has_occ or has_kanji or has_freq or has_seen or has_length):
         return query  # fast path: nothing to resolve
 
     injected = (occ_resolver is not None or freq_resolver is not None
-                or kanji_resolver is not None or seen_resolver is not None)
+                or kanji_resolver is not None or seen_resolver is not None
+                or length_resolver is not None)
     occ = occ_resolver or resolve_occurrences
     freq = freq_resolver or resolve_frequency
     kanji = kanji_resolver or resolve_kanji
     seen = seen_resolver or resolve_seen
+    length = length_resolver or resolve_length
 
     # Restrict resolution to the notes the standard part of the query already
     # selects, so e.g. `deck:X occurrences:D>5` evaluates the occurrence predicate
@@ -262,6 +277,12 @@ def rewrite_query(query, *, occ_resolver=None, freq_resolver=None, kanji_resolve
                 return _format_nid_clause([])  # seen:0 matches nothing
             return _format_nid_clause(_call_resolver(seen, injected, candidate_nids, n))
         query = SEEN_RE.sub(_seen_sub, query)
+    if has_length:
+        query = LENGTH_RE.sub(
+            lambda m: _format_nid_clause(_call_resolver(
+                length, injected, candidate_nids, m.group("op"), int(m.group("thresh")))),
+            query,
+        )
     return query
 
 
@@ -438,6 +459,31 @@ def resolve_frequency(op, thresh, candidate_nids=None):
         return ids
 
     return _resolve(("freq", op, thresh), compute, candidate_nids)
+
+
+def resolve_length(op, thresh, candidate_nids=None):
+    """Note ids whose expression-field length (Unicode code points of the raw
+    value — no HTML stripping or normalization, like every other consumer of the
+    field) satisfies the threshold. Unlike resolve_kanji there is deliberately no
+    empty-expression skip: an empty field counts as length 0, so `length=0` finds
+    it and `length<3` includes it."""
+    try:  # inside Anki: isolated package namespace
+        from .config_manager import get_config
+    except ImportError:  # pytest / flat-import context
+        from config_manager import get_config
+
+    def compute():
+        cfg = get_config()
+        expr_field = cfg.search_config.expression_field
+        comparator = parse_comparator(op)
+
+        ids = []
+        for nid, values in _iter_candidate_notes((expr_field,), candidate_nids):
+            if comparator(len(values[expr_field]), thresh):
+                ids.append(nid)
+        return ids
+
+    return _resolve(("length", op, thresh), compute, candidate_nids)
 
 
 def resolve_kanji(check_type, target, op, thresh, candidate_nids=None):

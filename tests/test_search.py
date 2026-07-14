@@ -25,6 +25,13 @@ def kanji_recorder(calls, ids=None):
     return resolve
 
 
+def length_recorder(calls, ids=None):
+    def resolve(op, thresh):
+        calls.append((op, thresh))
+        return ids if ids is not None else [55, 66]
+    return resolve
+
+
 # --- fast path / passthrough ------------------------------------------------
 
 def test_no_custom_token_is_passthrough():
@@ -170,16 +177,53 @@ def test_kanji_new_empty_bracket_not_matched():
     assert calls == []
 
 
+# --- length -------------------------------------------------------------------
+
+def test_length_basic():
+    calls = []
+    out = search.rewrite_query("length>=3", length_resolver=length_recorder(calls))
+    assert out == "(nid:55,66)"
+    assert calls == [(">=", 3)]
+
+
+def test_length_all_operators():
+    for op in ("<", "<=", ">", ">=", "=", "!="):
+        calls = []
+        search.rewrite_query(f"length{op}2", length_resolver=length_recorder(calls))
+        assert calls == [(op, 2)]
+
+
+def test_length_negation_preserved():
+    out = search.rewrite_query("-length>=4", length_resolver=length_recorder([]))
+    assert out == "-(nid:55,66)"
+
+
+def test_length_does_not_fire_inside_other_tokens():
+    calls = []
+    # `wavelength>=3` embeds the keyword; `length:5` is a field search (no operator).
+    assert search.rewrite_query("wavelength>=3", length_resolver=length_recorder(calls)) == "wavelength>=3"
+    assert search.rewrite_query("length:5", length_resolver=length_recorder(calls)) == "length:5"
+    assert calls == []
+
+
+def test_length_combined_with_other_clauses():
+    out = search.rewrite_query(
+        "deck:JP length=1 -tag:done", length_resolver=length_recorder([])
+    )
+    assert out == "deck:JP (nid:55,66) -tag:done"
+
+
 # --- multiple terms in one query -------------------------------------------
 
 def test_multiple_distinct_terms():
     out = search.rewrite_query(
-        "occurrences:X>5 kanji:new=1 f<2000",
+        "occurrences:X>5 kanji:new=1 f<2000 length>=2",
         occ_resolver=occ_recorder([], ids=[1]),
         kanji_resolver=kanji_recorder([], ids=[2]),
         freq_resolver=freq_recorder([], ids=[3]),
+        length_resolver=length_recorder([], ids=[4]),
     )
-    assert out == "(nid:1) (nid:2) (nid:3)"
+    assert out == "(nid:1) (nid:2) (nid:3) (nid:4)"
 
 
 # --- resolution cache invalidation -------------------------------------------
@@ -221,6 +265,10 @@ def test_has_custom_term():
     assert search.has_custom_term("deck:JP f<=10")
     assert search.has_custom_term("kanji:num=2")
     assert search.has_custom_term("kanji:new[3]>=1")
+    assert search.has_custom_term("length>=3")
+    assert search.has_custom_term("deck:JP length=1")
     assert not search.has_custom_term("kanji:num[3]>=1")  # bracket is new-only
+    assert not search.has_custom_term("wavelength>=3")
+    assert not search.has_custom_term("length:5")
     assert not search.has_custom_term("deck:JP added:3 flag:1")
     assert not search.has_custom_term("")

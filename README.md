@@ -100,6 +100,7 @@ The addon supports several custom filters that you can mix in with standard Anki
 - **`f<10000`**: Filter by the value in your frequency sort field.
 - **`occurrences:DictionaryName>5`**: Filter by word occurrences in a dictionary.
 - **`seen:2`**: Filter by words appearing in your recent daily occurrence dictionaries.
+- **`length>=3`**: Filter by the character length of the expression.
 - **`limit=20`**: Limit the number of results from a specific search.
 - **`kanji:num=1`**: Filter by the total number of Kanji.
 - **`kanji:new=1`**: Filter by the number of unknown Kanji (optionally `kanji:new[3]=1` to count a Kanji as new until 3 of your learned words contain it).
@@ -147,11 +148,11 @@ Set `"prefix_matching": true` in your config to allow a card to match with the c
 - **Default**: `false`. Note that enabling this flag increases initial index startup time of the addon a bit, but not substantially.
 
 #### Honorific Folding
-Set `"honorific_folding": true` in your config to credit bare-form cards with the counts of dictionary entries that start with an honorific morpheme (`お`, `ご`, `御`) and whose stripped remainder is the same word. Useful when you want to counts for `お茶` or `御社` to also be attributed to the bare forms.
+Set `"honorific_folding": true` in your config to credit bare-form cards with the counts of dictionary entries that start with an honorific morpheme (`お`, `ご`, `御`) and whose stripped remainder is the same word. Useful when you want counts for `お茶` or `御社` to also be attributed to the bare forms.
 
-- **Semantics**: a dict entry `お{X}` aliases its count onto `{X}`, but only when `{X}` is itself an entry in the same dict. Direction is dict-side only — a card for `お茶` is unchanged, but a card for `茶` picks up `お茶`'s count.
-- **Example**: With dict entries `お茶` (50) and `茶` (10), a card for `茶` resolves to `10 + 50 = 60`. A card for `お茶` resolves to 50, unchanged.
-- **Known limitation**: if the dict has `お金` but not bare `金`, a card for `金` is not credited — the gate refuses to alias onto a form the dict doesn't independently recognize.
+- **Semantics**: a dict entry `お{X}` aliases its count onto `{X}` when `{X}` **contains a kanji** (near-certainly the same lexeme: `お茶の間` → `茶の間`, `お金` → `金`) or is itself an entry in the same dict. Kana-only remainders still require that dict entry, which blocks unrelated-word junk like `おかず → かず` or `おはよう → はよう`. Direction is dict-side only — a card for `お茶` is unchanged, but a card for `茶` picks up `お茶`'s count.
+- **Example**: With dict entries `お茶` (50) and `茶` (10), a card for `茶` resolves to `10 + 50 = 60`. A card for `お茶` resolves to 50, unchanged. With only `お茶の間` (9) in the dict, a card for `茶の間` resolves to 9.
+- **False-positive note**: a kanji-bearing remainder is folded even when it is a different word or reading than the honorific form (e.g. a `飯`/`めし` card picks up `ご飯`/`ごはん` counts). In practice this only means such a card can cross an occurrence threshold a bit earlier — counts only ever increase.
 - **Default**: `false`.
 
 #### Updating Occurrence Dictionaries
@@ -198,12 +199,17 @@ user_files/
 ```
 Each `term_meta_bank_*.json` is an ordinary Yomitan occurrence dictionary — the same format as occurrence mining above, and it reuses the same `search_fields` note-type config. The `_seen` folder is **reserved** (the leading underscore keeps it distinct from your real dictionaries): it's never treated as a normal occurrence dictionary, so it's excluded from `occurrences:all` and can't be reached via `occurrences:_seen` — only `seen:N` reads it.
 
-### 5. Multiple Priorities
+### 5. Expression Length (`length`)
+Filter by the character length of the card's expression field.
+- **Syntax**: `length>=3` (3 characters or longer), `length=1` (single-character words). Supports all comparison operators: `=`, `!=`, `<`, `<=`, `>`, `>=`.
+- **Counting**: the raw field value is measured in Unicode characters — no HTML stripping or normalization, so any markup in the field counts toward the length. An empty expression counts as length 0.
+
+### 6. Multiple Priorities
 Match multiple unrelated criteria by using a list.
 - **Sequential**: First match `added:3`, THEN match `tag:ノベルゲーム::銀色、遥か`.
 - **Mix**: Match `added:3` OR `tag:ノベルゲーム::銀色、遥か` and sort them all together.
 
-### 6. Limits and Cutoffs
+### 7. Limits and Cutoffs
 - **`limit=X`**: Use in a search string to take only the top X cards.
   - Example: `added:3 limit=20` (Only the top 20 most frequent recent cards).
 - **`priority_limit`**: Global limit for the priority queue.

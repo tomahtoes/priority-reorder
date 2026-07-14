@@ -126,6 +126,20 @@ def test_negated_custom_term_inverts_the_filter(fake_col):
     assert res.raw_count == 2
 
 
+def test_custom_length_term_fast_path_filters_by_expression_length(fake_col):
+    fake_col(
+        find_results={"(deck:X) is:new": [1, 2, 3, 4]},
+        rows=[_row(1, 10, "", "", "1"), _row(2, 20, "手", "て", "1"),
+              _row(3, 30, "茶の間", "ちゃのま", "1"), _row(4, 40, "下駄箱", "げたばこ", "1")],
+    )
+    dm = DataManager(Config())
+    assert [c.card_id for c in dm.get_cards_from_search("deck:X length>=3").cards] == [3, 4]
+    assert [c.card_id for c in dm.get_cards_from_search("deck:X length=1").cards] == [2]
+    # No empty-expression skip: the empty field counts as length 0.
+    assert [c.card_id for c in dm.get_cards_from_search("deck:X length=0").cards] == [1]
+    assert [c.card_id for c in dm.get_cards_from_search("deck:X -length>=3").cards] == [1, 2]
+
+
 def test_plain_query_raw_count_equals_match_count(fake_col):
     fake_col(
         find_results={"(deck:A) is:new": [1]},

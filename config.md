@@ -4,7 +4,7 @@
 
 ### `priority_search` (string | list)
 - **Description**: The Anki search query used to identify cards for the Priority Queue. These cards will always be shown before the "Normal Queue". It can be a single string or a list of multiple search queries.
-- **Support**: Supports standard Anki syntax plus custom filters like `kanji:new=1`, `kanji:new[3]>=1`, `kanji:num=2`, `f<10000`, or `occurrences:dict>5`.
+- **Support**: Supports standard Anki syntax plus custom filters like `kanji:new=1`, `kanji:new[3]>=1`, `kanji:num=2`, `f<10000`, `length>=3`, or `occurrences:dict>5`.
 - **Default**: `""`
 - **Example**: `"deck:Japanese added:3"`
 
@@ -89,8 +89,7 @@
 
 ### `honorific_folding` (bool)
 - **Description**: When enabled, dictionary entries that begin with an honorific morpheme (`お`, `ご`, `御`) also credit their count onto the bare form. Intended for cases where the stripped remainder is functionally the same word, e.g. `お茶` → `茶`, `お金` → `金`, `御社` → `社`.
-- **Behavior**: Dict-side only — the alias adds to the *bare* form's lookup, not the other way around. A card `茶` with dict `お茶` (50) and `茶` (10) resolves to `10 + 50 = 60`. A card `お茶` resolves unchanged. The alias is only registered when the stripped remainder is itself an entry in the same dict; this filters non-words like `おはよう → はよう` or `御覧 → 覧` that would otherwise credit junk.
-- **Known limitation**: if a dict contains `お金` but not bare `金`, a card for `金` will not be credited — the safety gate refuses to alias onto a form the dict doesn't independently recognize. Workaround: combine with a supplementary dict via `occurrences:[A,B]` that does index the bare form.
+- **Behavior**: Dict-side only — the alias adds to the *bare* form's lookup, not the other way around. A card `茶` with dict `お茶` (50) and `茶` (10) resolves to `10 + 50 = 60`. A card `お茶` resolves unchanged. The alias is registered when the stripped remainder **contains a kanji** (near-certainly the same lexeme — `お茶の間` → `茶の間` and `お金` → `金` work even when the bare form never appears in the dict) or is itself an entry in the same dict. Kana-only remainders still require that dict entry, which filters unrelated-word junk like `おかず → かず` or `おはよう → はよう`.
 - **Note**: Independent of `kana_normalization`, `combine_word_forms`, and `prefix_matching`. All four flags compose additively.
 - **Default**: `false`
 
@@ -98,7 +97,7 @@
 
 ## Search Syntax Cheat Sheet
 
-The `occurrences:`, `f`, `kanji:`, and `seen:` terms below are **real Anki search terms**: besides
+The `occurrences:`, `f`, `kanji:`, `seen:`, and `length` terms below are **real Anki search terms**: besides
 `priority_search`/`normal_search`, they work directly in the **Browse search bar** and through the
 collection API (`col.find_cards` / `col.find_notes`, and therefore **AnkiConnect**). This lets you
 test a priority search interactively in the browser before committing it to config. They honor the
@@ -108,6 +107,7 @@ usual (e.g. `-occurrences:Dict>5`).
 
 - **Anki Standard**: `added:3`, `deck:Japanese`, `tag:mining`, etc.
 - **Frequency**: `f<=2000` — Matches cards where the sort field value is less than or equal to 2000. Useful for prioritizing common words across different search queries. Supports any comparison operator (`=`, `!=`, `<`, `<=`, `>`, `>=`).
+- **Length**: `length>=3` — Matches cards whose expression field is 3 or more characters long (`length=1` for single-character words). Counts Unicode characters of the raw field value (markup included; an empty field is length 0). Supports any comparison operator.
 - **Kanji i+1**: `kanji:new=1` — Matches words where exactly 1 character is unknown to you.
 - **Kanji target**: `kanji:new[3]>=1` — A Kanji counts as "new" until 3 of your learned words contain it; matches words with at least 1 such Kanji. `kanji:new` is equivalent to `kanji:new[1]`.
 - **Kanji Count**: `kanji:num=2` — Matches words containing exactly 2 Kanji.

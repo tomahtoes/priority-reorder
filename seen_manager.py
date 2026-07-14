@@ -238,7 +238,7 @@ def build_seen_day(
                 continue
             # strip one-character honorific prefix (all entries in the tuple are single chars)
             stripped = expr[1:]
-            if stripped and stripped in exprs:
+            if dm._honorific_fold_allowed(stripped, exprs):
                 honorific_stripped.add(stripped)
     return exprs, honorific_stripped, phrase_entries
 

@@ -187,9 +187,37 @@ def test_build_honorific_folding_credits_stripped_base():
     assert idx.get_total("茶", "ちゃ", honorific_folding=True) == 35
 
 
-def test_build_honorific_folding_skips_when_base_absent():
-    idx = _build_index_from_raw([["お土産", "freq", 12]], honorific_folding=True)
+def test_build_honorific_folding_credits_kanji_base_absent_from_dict():
+    # A kanji-bearing stripped form folds even when the dict never contains the
+    # bare form itself — お茶の間-only media must still credit a 茶の間 card.
+    idx = _build_index_from_raw([["お茶の間", "freq", 9]], honorific_folding=True)
+    assert idx.honorific_to_count.get("茶の間") == 9
+    assert idx.get_total("茶の間", "ちゃのま", honorific_folding=True) == 9
+
+
+def test_build_honorific_folding_credits_single_kanji_base():
+    # The documented お金→金 case: single-kanji remainders are wanted folds too.
+    idx = _build_index_from_raw([["お金", "freq", 40]], honorific_folding=True)
+    assert idx.honorific_to_count.get("金") == 40
+
+
+def test_build_honorific_folding_skips_kana_base_absent_from_dict():
+    # Kana-only strips stay gated on dict membership — おかず is not お+かず, and
+    # blind stripping would hand かず (a plausible real card) a phantom count.
+    idx = _build_index_from_raw(
+        [["おかず", "freq", 12], ["おはよう", "freq", 50]],
+        honorific_folding=True,
+    )
     assert idx.honorific_to_count == {}
+
+
+def test_build_honorific_folding_kana_base_present_in_dict_still_folds():
+    # The original dict-membership path is untouched for kana strips.
+    idx = _build_index_from_raw(
+        [["しゃれ", "freq", 3], ["おしゃれ", "freq", 20]],
+        honorific_folding=True,
+    )
+    assert idx.honorific_to_count.get("しゃれ") == 20
 
 
 # --- prefix_total edges -----------------------------------------------------
