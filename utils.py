@@ -14,11 +14,14 @@ def parse_sort_value(sort_val_str: str) -> Tuple[float, bool]:
             pass
     return float("inf"), False
 
+# Katakana U+30A1..U+30F6 fold to hiragana by -0x60; everything else is unchanged.
+# The exclusive range end keeps \u30f6 (U+30F6) inside and \u30f7 (U+30F7) out \u2014 exactly the
+# old inclusive "\u30a1" <= c <= "\u30f6" per-char check, but at C speed via
+# str.translate (this runs per card on the kana-normalized matching paths).
+_KATA_TO_HIRA = {cp: cp - 0x60 for cp in range(0x30A1, 0x30F7)}
+
 def to_hiragana(text: str) -> str:
-    return "".join(
-        chr(ord(c) - 0x60) if "\u30a1" <= c <= "\u30f6" else c
-        for c in text
-    )
+    return text.translate(_KATA_TO_HIRA)
 
 def is_kanji(ch: str) -> bool:
     """True if the single character is a CJK ideograph (Unified, Ext A,

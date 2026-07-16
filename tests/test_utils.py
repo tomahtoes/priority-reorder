@@ -45,6 +45,27 @@ def test_to_hiragana_mixed_string():
     assert to_hiragana("お茶ハ") == "お茶は"  # only the katacana ハ folds to は
 
 
+def test_to_hiragana_matches_reference_char_loop():
+    # Pin the translate-table implementation against the original per-char loop
+    # over the whole kana neighborhood plus ASCII and an astral kanji.
+    def reference(text):
+        return "".join(
+            chr(ord(c) - 0x60) if "ァ" <= c <= "ヶ" else c
+            for c in text
+        )
+
+    probe = "".join(chr(cp) for cp in range(0x3000, 0x3110)) + "abc123 " + "\U00020B9F"
+    assert to_hiragana(probe) == reference(probe)
+
+
+def test_to_hiragana_range_boundaries():
+    assert to_hiragana("゠") == "゠"  # ゠ just below the range: unchanged
+    assert to_hiragana("ァ") == "ぁ"      # first folded code point
+    assert to_hiragana("ヶ") == "ゖ"      # last folded code point (ヶ)
+    assert to_hiragana("ヷ") == "ヷ"  # ヷ just above the range: unchanged
+    assert to_hiragana("ー") == "ー"           # U+30FC length mark: unchanged
+
+
 # --- is_kanji ----------------------------------------------------------------
 
 def test_is_kanji_true_for_ideographs():

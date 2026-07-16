@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, List, Optional
@@ -57,3 +58,32 @@ def clear_last_report() -> None:
 
 def get_last_report() -> Optional[ReorderReport]:
     return _last_report
+
+
+_TIMINGS_LOG_MAX_LINES = 200
+
+
+def _timings_log_path() -> str:
+    # A plain file at the user_files root: invisible to dictionary enumeration
+    # (which filters to directories) and preserved across addon updates.
+    return os.path.join(os.path.dirname(__file__), "user_files", "_timings.log")
+
+
+def append_timings_line(timestamp: str, timings_ms: Dict[str, float]) -> None:
+    """Append one 'ts  k=vms ...' line to the timings log, trimming it to the
+    last _TIMINGS_LOG_MAX_LINES. Opt-in via reorderer._DUMP_TIMINGS_LOG; must
+    never raise — timings logging can never break a reorder."""
+    try:
+        line = timestamp + "  " + " ".join(f"{k}={v}ms" for k, v in timings_ms.items())
+        path = _timings_log_path()
+        lines: List[str] = []
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                lines = f.read().splitlines()
+        except OSError:
+            pass  # missing/unreadable file -> start fresh
+        lines.append(line)
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write("\n".join(lines[-_TIMINGS_LOG_MAX_LINES:]) + "\n")
+    except Exception:
+        pass

@@ -20,6 +20,7 @@ else:
     from .config_manager import get_config
     from .summary_window import show_summary_window
     from .reorder_log import clear_last_report
+    from .data_manager import clear_note_cache
     from . import search
 
     from .updater import JitenUpdater
@@ -182,8 +183,10 @@ else:
         patching Collection methods needs a live collection."""
         gui_hooks.profile_did_open.append(search.install)
         # A freshly opened profile must not show (or open in the browser) the
-        # previous profile's reorder report.
+        # previous profile's reorder report, nor serve the previous profile's
+        # cached note data (note ids are per-collection).
         gui_hooks.profile_did_open.append(clear_last_report)
+        gui_hooks.profile_did_open.append(clear_note_cache)
         # A new profile means we're no longer in a close sequence.
         gui_hooks.profile_did_open.append(_on_profile_did_open)
 

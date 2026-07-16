@@ -404,3 +404,66 @@ def test_reorder_records_stage_timings(monkeypatch):
     for stage in ("find_matches", "load_cards", "buckets", "refine", "finalize",
                   "final_sort", "needs_reorder", "reposition", "total"):
         assert stage in timings, stage
+
+
+def test_reorder_merges_dm_substage_timings(monkeypatch):
+    import reorderer as rmod
+    from data_manager import SearchResult
+    from reorder_log import get_last_report
+
+    sched = _FakeSched()
+    monkeypatch.setattr(rmod.mw, "col", _col(sched, []), raising=False)
+
+    r = reorderer(priority_search="deck:X")
+    c1 = card(1, 1)
+
+    class _FakeDM:
+        stage_ms = {"fc": 1.234, "load": 0.5}
+
+        def get_cards_from_search(self, query):
+            return SearchResult([c1], 1)
+
+        def get_cards(self, card_ids):
+            return {c1.card_id: c1}
+
+    r.data_manager = _FakeDM()
+    r.reorder()
+
+    timings = get_last_report().timings_ms
+    assert timings["fc"] == 1.2   # sub-stage keys merged (rounded)
+    assert timings["load"] == 0.5
+    for stage in ("find_matches", "load_cards", "buckets", "refine", "finalize",
+                  "final_sort", "needs_reorder", "reposition", "total"):
+        assert stage in timings, stage  # top-level stages untouched
+
+
+def test_reorder_writes_timings_log_only_when_flag_enabled(monkeypatch):
+    import reorderer as rmod
+    from data_manager import SearchResult
+
+    sched = _FakeSched()
+    monkeypatch.setattr(rmod.mw, "col", _col(sched, []), raising=False)
+
+    written = []
+    monkeypatch.setattr(rmod, "append_timings_line", lambda ts, t: written.append((ts, dict(t))))
+
+    c1 = card(1, 1)
+
+    class _FakeDM:
+        def get_cards_from_search(self, query):
+            return SearchResult([c1], 1)
+
+        def get_cards(self, card_ids):
+            return {c1.card_id: c1}
+
+    r = reorderer(priority_search="deck:X")
+    r.data_manager = _FakeDM()
+    r.reorder()
+    assert written == []  # off by default
+
+    monkeypatch.setattr(rmod, "_DUMP_TIMINGS_LOG", True)
+    r2 = reorderer(priority_search="deck:X")
+    r2.data_manager = _FakeDM()
+    r2.reorder()
+    assert len(written) == 1
+    assert "total" in written[0][1]

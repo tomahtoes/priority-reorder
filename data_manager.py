@@ -1,3 +1,4 @@
+import time
 from typing import Dict, List, NamedTuple, Optional, Tuple
 from aqt import mw
 from anki.utils import ids2str
@@ -35,11 +36,44 @@ class SearchResult(NamedTuple):
     cards: List[Card]
     raw_count: int
 
+# Ids are inlined via ids2str, so SQLite's bound-parameter limit never applies;
+# the only real bound is statement length (1 MB default), and 5000 ids x ~14
+# bytes is ~70 KB — a 100k-card backlog is 20 round-trips instead of 112.
+_BULK_CHUNK_SIZE = 5000
+
+# Cross-run cache of parsed note data, nid -> (notes.mod, NoteData). Note fields
+# rarely change between reorders, so warm runs only fetch field text for notes
+# whose mod stamp moved. Invalidated per note via mod, and wholesale when the
+# fingerprint (configured field names + notetype layout) changes or the profile
+# switches (see clear_note_cache).
+_note_data_cache: Dict[int, Tuple[int, NoteData]] = {}
+_note_data_cache_fp = None
+
+
+def clear_note_cache() -> None:
+    """Drop the cross-run note cache. Wired to profile_did_open — note ids from
+    one profile must never serve another — and used by tests."""
+    global _note_data_cache_fp
+    _note_data_cache.clear()
+    _note_data_cache_fp = None
+
+
+def _notetypes_mod_sum() -> int:
+    """Cheap fingerprint of notetype layout. Field renames/reorders bump the
+    notetype's mod but not every note's mod, so cached NoteData built with the
+    old field indices must be invalidated through this."""
+    try:
+        return int(mw.col.db.scalar("select coalesce(sum(mod), 0) from notetypes") or 0)
+    except Exception:
+        try:
+            return sum(int(m.get("mod", 0)) for m in mw.col.models.all())
+        except Exception:
+            return -1
+
 class DataManager:
     """Manages loading and caching of Card and Note data."""
     def __init__(self, config: Config) -> None:
         self.config = config
-        self._note_cache: Dict[int, NoteData] = {}
         self._card_cache: Dict[int, Card] = {}
         # mid -> (expression_idx, reading_idx, sort_idx); None when a field is
         # absent from that note type.
@@ -49,7 +83,17 @@ class DataManager:
         self._search_cache: Dict[str, List[int]] = {}                 # find_cards by query
         self._occ_count_cache: Dict[Tuple[Tuple[str, ...], int], int] = {}  # (dicts, nid) -> count
         self._kanji_count_cache: Dict[Tuple[str, int, int], int] = {}  # (check_type, target, nid) -> count
+        self._seen_contains_cache: Dict[Tuple[int, int], bool] = {}   # (n, nid) -> contained
         self._kanji_manager = None  # lazy
+        self._note_fp_checked = False  # cross-run cache validated once per run
+        # Sub-stage wall-clock accumulators (ms), merged into the reorder timings
+        # line. NOT disjoint stages: `load` accumulates across both the
+        # find_matches and load_cards top-level stages, and `kanji_scan` is the
+        # rescan slice of `kanji_init`.
+        self.stage_ms: Dict[str, float] = {}
+
+    def _add_ms(self, key: str, t0: float) -> None:
+        self.stage_ms[key] = self.stage_ms.get(key, 0.0) + (time.perf_counter() - t0) * 1000
 
     def _resolve_field_indices(self, mid: int) -> Tuple[Optional[int], Optional[int], Optional[int]]:
         cached = self._field_idx_cache.get(mid)
@@ -74,49 +118,90 @@ class DataManager:
         self._field_idx_cache[mid] = result
         return result
 
+    def _check_note_cache_fp(self) -> None:
+        """Validate the cross-run note cache once per run: any change to the
+        configured field names or the notetype layout (field renames/reorders
+        don't bump notes.mod) drops the whole cache."""
+        global _note_data_cache_fp
+        if self._note_fp_checked:
+            return
+        self._note_fp_checked = True
+        fp = (
+            self.config.search_config.expression_field,
+            self.config.search_config.expression_reading_field,
+            self.config.sort_field,
+            _notetypes_mod_sum(),
+        )
+        if fp != _note_data_cache_fp:
+            _note_data_cache.clear()
+            _note_data_cache_fp = fp
+
     def _bulk_load(self, card_ids: List[int]) -> None:
-        """Load every not-yet-cached card in a single SQL pass instead of one
-        backend round-trip per card. Field indices are resolved once per note
-        type."""
+        """Load every not-yet-cached card in bulk SQL passes instead of one
+        backend round-trip per card. Two phases: (1) card->note linkage plus each
+        note's mod stamp — no field text; (2) field text for only the notes the
+        cross-run cache doesn't already hold at that mod. On warm runs phase 2
+        shrinks to just the notes edited since the previous reorder."""
         missing = [cid for cid in card_ids if cid not in self._card_cache]
         if not missing:
             return
 
-        # Chunked so the inlined id list stays bounded — a 100k-card backlog in a
-        # single IN (...) literal makes SQLite parse a multi-MB statement.
-        rows = []
+        self._check_note_cache_fp()
+        t0 = time.perf_counter()
         try:
-            for start in range(0, len(missing), 900):
-                chunk = missing[start:start + 900]
-                rows.extend(mw.col.db.all(
-                    "select c.id, c.nid, n.mid, n.flds from cards c "
-                    f"join notes n on n.id = c.nid where c.id in {ids2str(chunk)}"
-                ))
-        except Exception as e:
-            import traceback
-            print(f"[priority-reorder] bulk card load failed: {e}")
-            traceback.print_exc()
-            return
+            links = []
+            try:
+                for start in range(0, len(missing), _BULK_CHUNK_SIZE):
+                    chunk = missing[start:start + _BULK_CHUNK_SIZE]
+                    links.extend(mw.col.db.all(
+                        "select c.id, c.nid, n.mid, n.mod from cards c "
+                        f"join notes n on n.id = c.nid where c.id in {ids2str(chunk)}"
+                    ))
+            except Exception as e:
+                import traceback
+                print(f"[priority-reorder] bulk card load failed: {e}")
+                traceback.print_exc()
+                return
 
-        for cid, nid, mid, flds in rows:
-            expr_i, read_i, sort_i = self._resolve_field_indices(mid)
-            note_data = self._note_cache.get(nid)
-            if note_data is None:
-                fields = flds.split("\x1f")
+            stale = list({
+                nid for _cid, nid, _mid, nmod in links
+                if (entry := _note_data_cache.get(nid)) is None or entry[0] != nmod
+            })
+            if stale:
+                rows = []
+                try:
+                    for start in range(0, len(stale), _BULK_CHUNK_SIZE):
+                        chunk = stale[start:start + _BULK_CHUNK_SIZE]
+                        rows.extend(mw.col.db.all(
+                            f"select id, mid, mod, flds from notes where id in {ids2str(chunk)}"
+                        ))
+                except Exception as e:
+                    import traceback
+                    print(f"[priority-reorder] bulk note load failed: {e}")
+                    traceback.print_exc()
+                    return
 
-                def field_at(i: Optional[int]) -> str:
-                    return fields[i] if i is not None and i < len(fields) else ""
+                for nid, mid, nmod, flds in rows:
+                    expr_i, read_i, sort_i = self._resolve_field_indices(mid)
+                    fields = flds.split("\x1f")
+                    nf = len(fields)
+                    sort_val, has_sort = parse_sort_value(
+                        fields[sort_i] if sort_i is not None and sort_i < nf else ""
+                    )
+                    _note_data_cache[nid] = (nmod, NoteData(
+                        note_id=nid,
+                        expression=fields[expr_i] if expr_i is not None and expr_i < nf else "",
+                        reading=fields[read_i] if read_i is not None and read_i < nf else "",
+                        sort_field_value=sort_val,
+                        has_sort_value=has_sort,
+                    ))
 
-                sort_val, has_sort = parse_sort_value(field_at(sort_i))
-                note_data = NoteData(
-                    note_id=nid,
-                    expression=field_at(expr_i),
-                    reading=field_at(read_i),
-                    sort_field_value=sort_val,
-                    has_sort_value=has_sort,
-                )
-                self._note_cache[nid] = note_data
-            self._card_cache[cid] = Card(card_id=cid, note_id=nid, data=note_data)
+            for cid, nid, _mid, _nmod in links:
+                entry = _note_data_cache.get(nid)
+                if entry is not None:
+                    self._card_cache[cid] = Card(card_id=cid, note_id=nid, data=entry[1])
+        finally:
+            self._add_ms("load", t0)
 
     def get_card(self, card_id: int) -> Optional[Card]:
         if card_id in self._card_cache:
@@ -158,6 +243,7 @@ class DataManager:
         duration of the run (the collection is read-only until repositioning)."""
         card_ids = self._search_cache.get(final_search)
         if card_ids is None:
+            t0 = time.perf_counter()
             try:
                 card_ids = list(mw.col.find_cards(final_search))
             except Exception as e:
@@ -165,6 +251,8 @@ class DataManager:
                 print(f"[priority-reorder] find_cards failed for search {final_search!r}: {e}")
                 traceback.print_exc()
                 return []
+            finally:
+                self._add_ms("fc", t0)
             self._search_cache[final_search] = card_ids
 
         self._bulk_load(card_ids)
@@ -177,7 +265,9 @@ class DataManager:
 
         for kind, args, negated in parse_custom_terms(raw_query):
             pred = self._term_predicate(kind, args)
+            t0 = time.perf_counter()
             cards = [c for c in cards if (not pred(c)) == negated]
+            self._add_ms(f"filter_{kind}", t0)
         return SearchResult(cards, raw_count)
 
     def _term_predicate(self, kind: str, args):
@@ -210,7 +300,13 @@ class DataManager:
             check_type, target, op, thresh = args
             comparator = parse_comparator(op)
             km = self._km()
+            t0 = time.perf_counter()
             km.initialize()  # once per predicate build, not per evaluated card
+            self._add_ms("kanji_init", t0)
+            # getattr: tests inject bare fakes without the timing attribute.
+            scan_ms = getattr(km, "last_scan_ms", None)
+            if scan_ms:
+                self.stage_ms["kanji_scan"] = self.stage_ms.get("kanji_scan", 0.0) + scan_ms
 
             def kanji_pred(c: Card) -> bool:
                 if not c.data.expression:
@@ -224,23 +320,42 @@ class DataManager:
             if n <= 0:
                 return lambda c: False  # seen:0 matches nothing (mirrors resolve_seen)
             cfg = self.config
+            # Hoisted locals: read once per predicate build, not per card.
+            normalize_kana = cfg.kana_normalization
+            combine_word_forms = cfg.combine_word_forms
+            prefix_matching = cfg.prefix_matching
+            honorific_folding = cfg.honorific_folding
             # Resolve the window ONCE per predicate build (one filesystem stat per
             # day), so the per-card check is a pure in-memory membership lookup.
+            t0 = time.perf_counter()
             window = seen_manager.get_seen_window(
-                n, cfg.kana_normalization, cfg.honorific_folding
+                n, normalize_kana, honorific_folding
             )
+            self._add_ms("seen_win", t0)
+            # Memoized per (n, note id) — the flags are fixed for the run, so
+            # they stay out of the key (mirrors _occ_count_cache). If today's
+            # seen file is rewritten mid-run, a later predicate build can see a
+            # newer window while the memo keeps the earlier answers — accepted,
+            # like every other per-run cache here.
+            cache = self._seen_contains_cache
+            contains = window.contains
 
             def seen_pred(c: Card) -> bool:
                 if not c.data.expression:
                     return False
-                return window.contains(
-                    c.data.expression,
-                    c.data.reading,
-                    normalize_kana=cfg.kana_normalization,
-                    combine_word_forms=cfg.combine_word_forms,
-                    prefix_matching=cfg.prefix_matching,
-                    honorific_folding=cfg.honorific_folding,
-                )
+                key = (n, c.note_id)
+                value = cache.get(key)
+                if value is None:
+                    value = contains(
+                        c.data.expression,
+                        c.data.reading,
+                        normalize_kana=normalize_kana,
+                        combine_word_forms=combine_word_forms,
+                        prefix_matching=prefix_matching,
+                        honorific_folding=honorific_folding,
+                    )
+                    cache[key] = value
+                return value
 
             return seen_pred
 

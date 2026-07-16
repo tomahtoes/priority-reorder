@@ -1,10 +1,12 @@
 """Unit tests for DataManager: search building, the custom-term post-filter fast
-path, raw-count reporting, and the per-run caches.
+path, raw-count reporting, and the per-run + cross-run caches.
 
-A fake collection provides find_cards + the bulk-load SQL; rows are
-(cid, nid, mid, flds) like the real `cards join notes` query returns.
+A fake collection provides find_cards + the two bulk-load SQL shapes (the
+cards->notes linkage pass and the notes field fetch); rows are
+(cid, nid, mid, flds) and note mods default to 1 unless a test bumps them.
 """
 
+import math
 import types
 
 import pytest
@@ -30,15 +32,40 @@ class _FakeModels:
 
 
 class _FakeDB:
+    """Serves the two bulk-load query shapes: phase 1 (cards join notes ->
+    (cid, nid, mid, n.mod), no field text) and phase 2 (notes by id ->
+    (nid, mid, mod, flds))."""
+
     def __init__(self, rows_by_cid):
         self.rows_by_cid = rows_by_cid
+        self.note_mods = {}   # nid -> mod, default 1 (bump to simulate a note edit)
         self.all_calls = 0
+        self.link_calls = 0   # phase-1 linkage queries
+        self.flds_calls = 0   # phase-2 field-text queries
+        self.flds_ids = []    # nids requested by phase-2 queries
+
+    @staticmethod
+    def _ids(sql):
+        inside = sql[sql.rindex("(") + 1 : sql.rindex(")")]
+        return [int(x) for x in inside.split(",") if x.strip()]
 
     def all(self, sql):
         self.all_calls += 1
-        inside = sql[sql.rindex("(") + 1 : sql.rindex(")")]
-        ids = [int(x) for x in inside.split(",") if x.strip()]
-        return [self.rows_by_cid[cid] for cid in ids if cid in self.rows_by_cid]
+        ids = self._ids(sql)
+        if "from cards c" in sql:
+            self.link_calls += 1
+            return [
+                (cid, r[1], r[2], self.note_mods.get(r[1], 1))
+                for cid in ids
+                if (r := self.rows_by_cid.get(cid)) is not None
+            ]
+        self.flds_calls += 1
+        self.flds_ids.extend(ids)
+        notes = {
+            nid: (nid, mid, self.note_mods.get(nid, 1), flds)
+            for _cid, nid, mid, flds in self.rows_by_cid.values()
+        }
+        return [notes[nid] for nid in ids if nid in notes]
 
 
 class _FakeCol:
@@ -55,6 +82,14 @@ class _FakeCol:
 
 def _row(cid, nid, expr="", reading="", freq="", mid=1):
     return (cid, nid, mid, "\x1f".join([expr, reading, freq]))
+
+
+@pytest.fixture(autouse=True)
+def _clear_note_cache():
+    # The cross-run note cache is module state; isolate every test.
+    dmod.clear_note_cache()
+    yield
+    dmod.clear_note_cache()
 
 
 @pytest.fixture
@@ -153,11 +188,13 @@ def test_plain_query_raw_count_equals_match_count(fake_col):
 
 def test_get_cards_bulk_loads_in_one_query(fake_col):
     # The reorderer hands every candidate id to get_cards in one call; the load
-    # must be a single SQL pass, not one query per id (the get_card miss path).
+    # must be bulk SQL passes (one linkage + one field fetch on a cold cache),
+    # not one query per id (the get_card miss path).
     col = fake_col(rows=[_row(i, i * 10, "語", "ご", "1") for i in range(1, 6)])
     out = DataManager(Config()).get_cards([1, 2, 3, 4, 5])
     assert sorted(out) == [1, 2, 3, 4, 5]
-    assert col.db.all_calls == 1
+    assert col.db.link_calls == 1
+    assert col.db.flds_calls == 1
 
 
 def test_get_cards_drops_vanished_ids(fake_col):
@@ -167,11 +204,14 @@ def test_get_cards_drops_vanished_ids(fake_col):
 
 
 def test_bulk_load_chunks_large_id_lists(fake_col):
-    ids = list(range(1, 2001))
+    n = 2 * dmod._BULK_CHUNK_SIZE + 200  # forces 3 chunks per phase
+    ids = list(range(1, n + 1))
     col = fake_col(rows=[_row(i, i, "語", "ご", "1") for i in ids])
     out = DataManager(Config()).get_cards(ids)
-    assert len(out) == 2000
-    assert col.db.all_calls == 3  # 900 + 900 + 200
+    assert len(out) == n
+    expected = math.ceil(n / dmod._BULK_CHUNK_SIZE)
+    assert col.db.link_calls == expected
+    assert col.db.flds_calls == expected  # cold cache: every note fetched
 
 
 # --- bulk load field handling ---------------------------------------------------
@@ -308,3 +348,96 @@ def test_custom_seen_zero_fast_path_matches_nothing(fake_col, monkeypatch):
     res = DataManager(Config()).get_cards_from_search("deck:X seen:0")
     assert res.cards == []
     assert res.raw_count == 1
+
+
+def test_seen_contains_memoized_per_note(fake_col, monkeypatch):
+    # Cards 1 and 2 share note 10, and the same seen:3 term runs in two
+    # searches — contains must be called exactly once per distinct note.
+    fake_col(
+        find_results={"(deck:X) is:new": [1, 2]},
+        rows=[_row(1, 10, "下駄", "げた", "50"), _row(2, 10, "下駄", "げた", "50")],
+    )
+    window = _FakeWindow(present={"下駄"})
+    monkeypatch.setattr(dmod.seen_manager, "get_seen_window", lambda n, k, h: window)
+
+    dm = DataManager(Config())
+    r1 = dm.get_cards_from_search("deck:X seen:3")
+    r2 = dm.get_cards_from_search("deck:X seen:3")
+    assert [c.card_id for c in r1.cards] == [1, 2] == [c.card_id for c in r2.cards]
+    assert len(window.calls) == 1
+
+
+def test_seen_memo_keyed_by_n(fake_col, monkeypatch):
+    fake_col(
+        find_results={"(deck:X) is:new": [1]},
+        rows=[_row(1, 10, "下駄", "げた", "50")],
+    )
+    window = _FakeWindow(present={"下駄"})
+    monkeypatch.setattr(dmod.seen_manager, "get_seen_window", lambda n, k, h: window)
+
+    dm = DataManager(Config())
+    dm.get_cards_from_search("deck:X seen:2")
+    dm.get_cards_from_search("deck:X seen:3")
+    assert len(window.calls) == 2  # different n -> no cross-n bleed
+
+
+# --- cross-run note cache ---------------------------------------------------------
+
+def test_warm_run_skips_field_fetch_for_unchanged_notes(fake_col):
+    rows = [_row(1, 10, "語", "ご", "100"), _row(2, 20, "彙", "い", "200")]
+    col1 = fake_col(rows=rows)
+    DataManager(Config()).get_cards([1, 2])
+    assert col1.db.flds_calls == 1
+
+    col2 = fake_col(rows=rows)  # fresh run over an unchanged collection
+    out = DataManager(Config()).get_cards([1, 2])
+    assert col2.db.link_calls == 1
+    assert col2.db.flds_calls == 0  # every note served from the cross-run cache
+    assert out[1].data.expression == "語"
+    assert out[2].data.sort_field_value == 200.0
+
+
+def test_note_edit_refetches_only_that_note(fake_col):
+    rows = [_row(1, 10, "語", "ご", "100"), _row(2, 20, "彙", "い", "200")]
+    fake_col(rows=rows)
+    DataManager(Config()).get_cards([1, 2])
+
+    rows2 = [_row(1, 10, "新", "しん", "100"), _row(2, 20, "彙", "い", "200")]
+    col2 = fake_col(rows=rows2)
+    col2.db.note_mods[10] = 2  # note 10 edited since the previous run
+    out = DataManager(Config()).get_cards([1, 2])
+    assert col2.db.flds_ids == [10]  # only the edited note's text is fetched
+    assert out[1].data.expression == "新"
+    assert out[2].data.expression == "彙"
+
+
+def test_config_field_change_invalidates_note_cache(fake_col):
+    rows = [_row(1, 10, "語", "ご", "100")]
+    fake_col(rows=rows)
+    DataManager(Config()).get_cards([1])
+
+    col2 = fake_col(rows=rows)
+    DataManager(Config(sort_field="Other")).get_cards([1])
+    assert col2.db.flds_calls == 1  # fingerprint changed -> cache dropped
+
+
+def test_clear_note_cache_empties_the_cache(fake_col):
+    fake_col(rows=[_row(1, 10, "語", "ご", "100")])
+    DataManager(Config()).get_cards([1])
+    assert dmod._note_data_cache
+    dmod.clear_note_cache()
+    assert not dmod._note_data_cache
+
+
+# --- sub-stage timing accumulators --------------------------------------------------
+
+def test_stage_ms_accumulates_substage_keys(fake_col):
+    fake_col(
+        find_results={"(deck:X) is:new": [1]},
+        rows=[_row(1, 10, "語", "ご", "50")],
+    )
+    dm = DataManager(Config())
+    dm.get_cards_from_search("deck:X f<100")
+    for key in ("fc", "load", "filter_freq"):
+        assert key in dm.stage_ms, key
+        assert dm.stage_ms[key] >= 0.0

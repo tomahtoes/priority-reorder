@@ -12,6 +12,7 @@ try:  # inside Anki: isolated package namespace
     from .reorder_log import (
         PrioritySearchSummary,
         ReorderReport,
+        append_timings_line,
         now_timestamp,
         set_last_report,
     )
@@ -24,6 +25,7 @@ except ImportError:  # pytest / flat-import context
     from reorder_log import (
         PrioritySearchSummary,
         ReorderReport,
+        append_timings_line,
         now_timestamp,
         set_last_report,
     )
@@ -31,6 +33,11 @@ except ImportError:  # pytest / flat-import context
 # (anki_query, limit) — custom occurrences:/f/kanji: terms stay inside the query
 # and are resolved by the patched Collection.find_cards (see search.py).
 PriorityDef = Tuple[str, Optional[int]]
+
+# Dev switch: flip to True to also append every reorder's timings line to
+# user_files/_timings.log (last 200 runs kept) — useful when Anki runs without
+# a console. Off by default; normal users never see a file appear.
+_DUMP_TIMINGS_LOG = False
 
 class PriorityReorderer:
     def __init__(self, config: Config) -> None:
@@ -78,8 +85,17 @@ class PriorityReorderer:
 
         result = self._apply_reordering(final_priority_queue, final_normal_list, timings)
 
+        # Sub-stage accumulators from the data manager (find_cards, bulk load,
+        # per-term filters, kanji scan, ...). getattr: tests inject bare fakes.
+        dm_stage_ms = getattr(self.data_manager, "stage_ms", None)
+        if dm_stage_ms:
+            for k, v in dm_stage_ms.items():
+                timings[k] = round(v, 1)
+
         timings["total"] = round((time.perf_counter() - t_start) * 1000, 1)
         print("[priority-reorder] timings: " + " ".join(f"{k}={v}ms" for k, v in timings.items()))
+        if _DUMP_TIMINGS_LOG:
+            append_timings_line(now_timestamp(), timings)
 
         self._write_log(summaries, final_priority_queue, final_normal_list, result, timings)
 
