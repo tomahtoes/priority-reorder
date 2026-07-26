@@ -83,14 +83,19 @@
 - **Default**: `false`
 
 ### `prefix_matching` (bool)
-- **Description**: When enabled, an occurrence lookup for a card's expression additionally credits the counts of every dictionary entry for which the expression is a **proper written prefix** (length ≥ 2).
-- **Behavior**: Final count is `exact_count + Σ(counts of dict entries starting with card.expression)`. Example: a card `彫刻` (exact count 5) sees `彫刻家` (100) and `彫刻品` (30) as prefix matches and resolves to `5 + 100 + 30 = 135`. Single-character expressions are excluded from bare prefix matches (minimum length is 2, hardcoded); a single-kanji card with a reading is instead credited via **reading-validated particle phrases** — entries of the form `X + particle + rest` (particles `を が の に で は も へ と`) whose reading starts with the card's reading + the particle, e.g. `手を貸す` (てをかす) credits `手`/`て` but not `手`/`しゅ`. Stacks additively with `combine_word_forms`.
+- **Description**: Also credits a card with the counts of longer dict entries that **start with** its expression (≥ 2 chars). Card `彫刻` (5) picks up `彫刻家` (100) + `彫刻品` (30) → 135.
+- **Single kanji**: excluded from the bare rule; credited only via reading-validated particle phrases — `手を貸す`/てをかす credits `手`/て, not `手`/しゅ (particles `を が の に で は も へ と`).
+- **Default**: `false`
+
+### `suffix_matching` (bool)
+- **Description**: The mirror of `prefix_matching` at the **end** of a word (Japanese is head-final). Groups a head with its family: `学校` ← `小学校`/`中学校`, `出す` ← `思い出す`, `強い` ← `心強い`.
+- **Gate**: card must be **≥ 2 chars and contain a kanji** (real words like 学校/食べる/強い; excludes bare single kanji and pure kana like する/こと).
+- **Single kanji**: excluded from the bare rule; credited only via reading-validated **tail** particle phrases — `母の日`/ははのひ credits `日`/ひ.
 - **Default**: `false`
 
 ### `honorific_folding` (bool)
-- **Description**: When enabled, dictionary entries that begin with an honorific morpheme (`お`, `ご`, `御`) also credit their count onto the bare form. Intended for cases where the stripped remainder is functionally the same word, e.g. `お茶` → `茶`, `お金` → `金`, `御社` → `社`.
-- **Behavior**: Dict-side only — the alias adds to the *bare* form's lookup, not the other way around. A card `茶` with dict `お茶` (50) and `茶` (10) resolves to `10 + 50 = 60`. A card `お茶` resolves unchanged. The alias is registered when the stripped remainder **contains a kanji** (near-certainly the same lexeme — `お茶の間` → `茶の間` and `お金` → `金` work even when the bare form never appears in the dict) or is itself an entry in the same dict. Kana-only remainders still require that dict entry, which filters unrelated-word junk like `おかず → かず` or `おはよう → はよう`.
-- **Note**: Independent of `kana_normalization`, `combine_word_forms`, and `prefix_matching`. All four flags compose additively.
+- **Description**: Credits a bare-form card with the counts of dict entries that start with an honorific (`お`/`ご`/`御`) and strip to the same word — dict-side only (a card `お茶` is unchanged). Card `茶` with `お茶` (50) + `茶` (10) → 60.
+- **Gate**: the stripped remainder must contain a kanji (`お金`→`金`, `お茶の間`→`茶の間`) or itself be a dict entry — kana-only strips need the entry, blocking junk like `おかず`→`かず`.
 - **Default**: `false`
 
 ---
@@ -101,7 +106,7 @@ The `occurrences:`, `f`, `kanji:`, `seen:`, and `length` terms below are **real 
 `priority_search`/`normal_search`, they work directly in the **Browse search bar** and through the
 collection API (`col.find_cards` / `col.find_notes`, and therefore **AnkiConnect**). This lets you
 test a priority search interactively in the browser before committing it to config. They honor the
-same `kana_normalization` / `combine_word_forms` / `prefix_matching` / `honorific_folding` settings,
+same `kana_normalization` / `combine_word_forms` / `prefix_matching` / `suffix_matching` / `honorific_folding` settings,
 and the configured `search_fields` / `sort_field`, as the reorderer. Leading `-` negates a term as
 usual (e.g. `-occurrences:Dict>5`).
 

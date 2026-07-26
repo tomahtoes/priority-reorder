@@ -195,9 +195,10 @@ def _config():
 # ---------------------------------------------------------------------------
 
 _FLAG_COMBOS = [
-    ("none", dict(normalize_kana=False, combine_word_forms=False, prefix_matching=False, honorific_folding=False)),
-    ("prefix", dict(normalize_kana=False, combine_word_forms=False, prefix_matching=True, honorific_folding=False)),
-    ("all", dict(normalize_kana=True, combine_word_forms=True, prefix_matching=True, honorific_folding=True)),
+    ("none", dict(normalize_kana=False, combine_word_forms=False, prefix_matching=False, suffix_matching=False, honorific_folding=False)),
+    ("prefix", dict(normalize_kana=False, combine_word_forms=False, prefix_matching=True, suffix_matching=False, honorific_folding=False)),
+    ("suffix", dict(normalize_kana=False, combine_word_forms=False, prefix_matching=False, suffix_matching=True, honorific_folding=False)),
+    ("all", dict(normalize_kana=True, combine_word_forms=True, prefix_matching=True, suffix_matching=True, honorific_folding=True)),
 ]
 
 
@@ -246,6 +247,7 @@ def test_seen_count_vs_boolean_benchmark(capsys, tmp_path):
             get_total_flags = dict(
                 combine_word_forms=flags["combine_word_forms"],
                 prefix_matching=flags["prefix_matching"],
+                suffix_matching=flags["suffix_matching"],
                 honorific_folding=flags["honorific_folding"],
             )
 
@@ -277,6 +279,8 @@ def test_seen_count_vs_boolean_benchmark(capsys, tmp_path):
                 w = seen_manager._merge_seen_days(bdays)
                 if flags["prefix_matching"]:
                     w._sorted_exprs = sorted(w.exprs)  # one-time prep, attributed to merge
+                if flags["suffix_matching"]:
+                    w._sorted_revs = sorted(e[::-1] for e in w.exprs)  # one-time prep, attributed to merge
                 return w
 
             bmodel, b_merge = _timed(_bool_merge)

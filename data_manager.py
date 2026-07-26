@@ -324,6 +324,7 @@ class DataManager:
             normalize_kana = cfg.kana_normalization
             combine_word_forms = cfg.combine_word_forms
             prefix_matching = cfg.prefix_matching
+            suffix_matching = cfg.suffix_matching
             honorific_folding = cfg.honorific_folding
             # Resolve the window ONCE per predicate build (one filesystem stat per
             # day), so the per-card check is a pure in-memory membership lookup.
@@ -352,6 +353,7 @@ class DataManager:
                         normalize_kana=normalize_kana,
                         combine_word_forms=combine_word_forms,
                         prefix_matching=prefix_matching,
+                        suffix_matching=suffix_matching,
                         honorific_folding=honorific_folding,
                     )
                     cache[key] = value
@@ -372,6 +374,7 @@ class DataManager:
                 normalize_kana=self.config.kana_normalization,
                 combine_word_forms=self.config.combine_word_forms,
                 prefix_matching=self.config.prefix_matching,
+                suffix_matching=self.config.suffix_matching,
                 honorific_folding=self.config.honorific_folding,
             )
             self._occ_count_cache[key] = value

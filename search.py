@@ -330,6 +330,7 @@ def _config_fingerprint():
         cfg.kana_normalization,
         cfg.combine_word_forms,
         cfg.prefix_matching,
+        cfg.suffix_matching,
         cfg.honorific_folding,
         cfg.sort_field,
         cfg.search_config.expression_field,
@@ -430,6 +431,7 @@ def resolve_occurrences(dict_str, op, thresh, candidate_nids=None):
                 normalize_kana=cfg.kana_normalization,
                 combine_word_forms=cfg.combine_word_forms,
                 prefix_matching=cfg.prefix_matching,
+                suffix_matching=cfg.suffix_matching,
                 honorific_folding=cfg.honorific_folding,
             )
             if comparator(count, thresh):
@@ -564,6 +566,7 @@ def resolve_seen(n, candidate_nids=None):
                 normalize_kana=cfg.kana_normalization,
                 combine_word_forms=cfg.combine_word_forms,
                 prefix_matching=cfg.prefix_matching,
+                suffix_matching=cfg.suffix_matching,
                 honorific_folding=cfg.honorific_folding,
             ):
                 ids.append(nid)

@@ -179,6 +179,27 @@ def test_seen_window_honorific_folding():
     assert kana2.contains("しゃれ", "", honorific_folding=True)
 
 
+def test_seen_window_suffix():
+    # suffix: a multi-char 学校 card is credited by the longer 中学校 even when the exact 学校
+    # day is absent; a single-kanji 箱 is NOT credited (length>=2 gate) despite 下駄箱 ending in
+    # it; a pure-kana card (no kanji) is never credited.
+    window = _build_window([[["中学校", "freq", 5], ["下駄箱", "freq", 3]]])
+    assert not window.contains("学校", "")
+    assert window.contains("学校", "", suffix_matching=True)
+    assert not window.contains("箱", "", suffix_matching=True)    # single kanji gated out
+    assert not window.contains("する", "", suffix_matching=True)
+
+
+def test_seen_window_suffix_phrase():
+    # tail particle carve-out (boolean mirror of single_kanji_suffix_phrase_total): 母の日/ははのひ
+    # marks 日/ひ as seen, reading-gated so 日/にち is not, and an empty card reading validates
+    # nothing.
+    window = _build_window([[["母の日", "freq", {"reading": "ははのひ", "frequency": {"value": 6}}]]])
+    assert window.contains("日", "ひ", suffix_matching=True)
+    assert not window.contains("日", "にち", suffix_matching=True)   # reading gate
+    assert not window.contains("日", "", suffix_matching=True)       # nothing to validate
+
+
 def _ref_seen(day_indices, e, r, **flags):
     """Reference presence from the counting index: seen iff the summed total is >= 1."""
     return sum(d.get_total(e, r, **flags) for d in day_indices) >= 1
@@ -198,6 +219,8 @@ def test_seen_contains_matches_counting_presence_incl_homograph():
             ["茶", "freq", {"reading": "ちゃ", "frequency": {"value": 8}}],
             ["手を貸す", "freq", {"reading": "てをかす", "frequency": {"value": 7}}],
             ["最も", "freq", {"reading": "もっとも", "frequency": {"value": 4}}],
+            ["中学校", "freq", {"reading": "ちゅうがっこう", "frequency": {"value": 9}}],
+            ["母の日", "freq", {"reading": "ははのひ", "frequency": {"value": 6}}],
         ],
         [
             ["下駄箱", "freq", {"reading": "げたばこ", "frequency": {"value": 6}}],
@@ -212,16 +235,23 @@ def test_seen_contains_matches_counting_presence_incl_homograph():
     ]
     cards = [("下駄", "げた"), ("角", "かど"), ("茶", "ちゃ"), ("下駄箱", "げたばこ"),
              ("お茶", "おちゃ"), ("ない", ""),
-             # single-kanji phrase path: positive, reading-gated, tail-gated, and
+             # suffix bare path: 学校 credited by 中学校; single-kanji 箱/屋 are NOT (length gate)
+             ("学校", "がっこう"), ("箱", "はこ"), ("屋", "や"),
+             # suffix tail phrase carve-out: positive (母の日→日/ひ) + reading-gated (日/にち)
+             ("日", "ひ"), ("日", "にち"),
+             # single-kanji prefix phrase path: positive, reading-gated, tail-gated, and
              # the documented okurigana truncation edge (積/つ validates 積もる)
              ("手", "て"), ("手", "しゅ"), ("思", "おも"), ("最", "もっと"),
              ("積", "つ"), ("積", "せき")]
     flagsets = [
         {},
         {"prefix_matching": True},
+        {"suffix_matching": True},
+        {"prefix_matching": True, "suffix_matching": True},
         {"combine_word_forms": True},
         {"prefix_matching": True, "combine_word_forms": True},
         {"honorific_folding": True},
+        {"suffix_matching": True, "honorific_folding": True},
         {"prefix_matching": True, "combine_word_forms": True, "honorific_folding": True},
     ]
     for fs in flagsets:

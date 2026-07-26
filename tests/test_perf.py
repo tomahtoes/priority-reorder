@@ -297,3 +297,48 @@ def test_resolution_is_linear_in_candidates_not_collection(capsys):
             f"restricted: {restricted_ms:.1f} ms over {N} notes "
             f"({full_ms / max(restricted_ms, 1e-9):.0f}x)"
         )
+
+
+def _suffix_bench_index(k_terms):
+    idx = OccurrenceIndex()
+    for i in range(k_terms):
+        idx.add(f"{i:05d}学校", f"がっこう{i:05d}", (i % 50) + 1)  # all share the eligible tail 学校
+    return idx
+
+
+def test_suffix_total_is_logarithmic_not_linear(capsys):
+    """suffix_total is O(log n) (two bisects + one cumsum subtraction) even when the matched
+    suffix range is the entire index — asserted by matching a naive endswith scan and showing
+    the speedup. The tail is a multi-char (≥2, kanji) string so it passes the eligibility gate;
+    a bare single kanji is gated out and early-returns 0 (pinned below). Suffix mirror of the
+    prefix_matching lookup benchmark."""
+    K = 20_000
+    idx = _suffix_bench_index(K)
+
+    def naive():
+        return sum(c for e, c in idx.expr_to_count.items() if e.endswith("学校") and e != "学校")
+
+    naive_total = naive()
+    idx.suffix_total("学校")  # warm the lazy reversed index once (real steady state)
+
+    t0 = time.perf_counter()
+    for _ in range(1000):
+        fast_total = idx.suffix_total("学校")
+    fast_ms = (time.perf_counter() - t0) * 1000
+
+    t0 = time.perf_counter()
+    for _ in range(1000):
+        scan_total = naive()
+    naive_ms = (time.perf_counter() - t0) * 1000
+
+    assert fast_total == naive_total == scan_total
+    assert idx.suffix_total("語") == 0   # single kanji is gated out of the bare path (early return)
+    # the log-n lookup must be dramatically faster than the O(K) scan over 20k terms
+    assert fast_ms * 10 < naive_ms
+
+    with capsys.disabled():
+        print(
+            f"\n[perf] suffix_total x1000: {fast_ms:.1f} ms (bisect+cumsum) | "
+            f"naive endswith scan x1000: {naive_ms:.1f} ms over {K} terms "
+            f"({naive_ms / max(fast_ms, 1e-9):.0f}x)"
+        )

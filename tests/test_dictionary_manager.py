@@ -61,7 +61,7 @@ def test_get_total_combine_word_forms():
 def test_occurrence_count_single_dict(monkeypatch):
     captured = {}
 
-    def fake_get_occurrence_index(name, normalize_kana, prefix_matching, honorific_folding):
+    def fake_get_occurrence_index(name, normalize_kana, prefix_matching, suffix_matching, honorific_folding):
         captured["name"] = name
         idx = OccurrenceIndex()
         idx.add("茶", "ちゃ", 42)
@@ -92,7 +92,7 @@ def test_occurrence_count_multi_dict_uses_combined(monkeypatch):
 def test_occurrence_count_normalize_kana(monkeypatch):
     seen = {}
 
-    def fake_get_occurrence_index(name, normalize_kana, prefix_matching, honorific_folding):
+    def fake_get_occurrence_index(name, normalize_kana, prefix_matching, suffix_matching, honorific_folding):
         idx = OccurrenceIndex()
         idx.add("ぎりぎり", "ぎりぎり", 8)  # hiragana key
         return idx
@@ -307,7 +307,7 @@ def test_phrase_kana_only_entry_never_lands_in_kanji_bucket():
 
 
 def test_phrase_total_normalize_kana_end_to_end(monkeypatch):
-    def fake_get_occurrence_index(name, normalize_kana, prefix_matching, honorific_folding):
+    def fake_get_occurrence_index(name, normalize_kana, prefix_matching, suffix_matching, honorific_folding):
         return _build_index_from_raw(
             [["手を貸す", "freq", {"reading": "テヲカス", "value": 10}]],
             normalize_kana=normalize_kana,
@@ -331,12 +331,210 @@ def test_phrase_total_stacks_with_honorific_folding():
     assert idx.get_total("手", "て", prefix_matching=True, honorific_folding=True) == 35
 
 
+# --- suffix_total / suffix_matching -----------------------------------------
+
+def test_suffix_total_excludes_exact_match():
+    idx = OccurrenceIndex()
+    idx.add("学校", None, 5)
+    idx.add("中学校", None, 100)
+    assert idx.suffix_total("学校") == 100  # only the longer term; exact handled by get()
+
+
+def test_suffix_total_head_final_noun_compounds():
+    # Table B: card is the semantic head; longer entries ending in it are its hyponyms.
+    idx = OccurrenceIndex()
+    idx.add("学校", None, 5)
+    idx.add("小学校", None, 40)
+    idx.add("中学校", None, 30)
+    idx.add("高等学校", None, 20)
+    idx.add("学校生活", None, 999)  # starts with 学校 (prefix), does NOT end in it -> excluded
+    assert idx.suffix_total("学校") == 90
+
+
+def test_suffix_total_length_gate_excludes_single_kanji():
+    # A single kanji is excluded from the BARE suffix path (length >= 2 gate): it would
+    # otherwise absorb its whole compound family (語 -> 日本語/英語/…) — the volume/wrongness
+    # the gate exists to prevent. Single kanji return only via the tail phrase carve-out.
+    idx = OccurrenceIndex()
+    idx.add("語", "ご", 5)
+    idx.add("日本語", "にほんご", 100)
+    idx.add("英語", "えいご", 30)
+    assert idx.suffix_total("語") == 0
+    assert idx.get_total("語", "ご", suffix_matching=True) == 5   # only the exact count
+
+
+def test_suffix_total_compound_verb_head_kana_tail_but_kanji_anchored():
+    # Table C: 出す ends in kana but contains a kanji -> eligible; the full-string tail
+    # keeps the match specific to genuine 〜出す compound verbs.
+    idx = OccurrenceIndex()
+    idx.add("出す", None, 5)
+    idx.add("思い出す", None, 40)
+    idx.add("飛び出す", None, 30)
+    idx.add("出発", None, 999)  # starts with 出, does NOT end in 出す -> excluded
+    assert idx.suffix_total("出す") == 70
+
+
+def test_suffix_total_requires_kanji_in_expression():
+    # Table G: a pure-kana card (a bare grammatical string) would match far too broadly,
+    # so the gate excludes it — no suffix credit for する / こと / katakana loanwords.
+    idx = OccurrenceIndex()
+    idx.add("する", "する", 5)
+    idx.add("勉強する", "べんきょうする", 100)
+    idx.add("ラーメン", None, 3)
+    idx.add("インスタントラーメン", None, 200)
+    assert idx.suffix_total("する") == 0
+    assert idx.suffix_total("ラーメン") == 0
+    # via get_total: only the exact count survives
+    assert idx.get_total("する", "する", suffix_matching=True) == 5
+
+
+def test_suffix_total_includes_supplementary_plane_predecessors():
+    # Mirror of the prefix supplementary-plane regression: a term whose char right before
+    # the suffix is a supplementary-plane kanji (𠮟, U+20B9F) must still be found. Exercises
+    # code-point reversal + the U+10FFFF sentinel over reversed strings.
+    idx = OccurrenceIndex()
+    idx.add("漢字", None, 5)
+    idx.add("𠮟漢字", None, 70)
+    assert idx.suffix_total("漢字") == 70
+
+
+def test_suffix_honorific_no_double_count():
+    # BLOCKER guard: honorific_to_count credits 茶の間 from お茶の間, and suffix_total(茶の間)
+    # ALSO includes お茶の間 (a strict written suffix). With both flags on it must be counted
+    # once (60), not twice (110). Uses a MULTI-CHAR card because single kanji are no longer
+    # suffix-eligible. The seen boolean twin can't catch this (OR is idempotent).
+    idx = _build_index_from_raw(
+        [["茶の間", "freq", 10], ["お茶の間", "freq", 50]],
+        honorific_folding=True,
+    )
+    assert idx.get_total("茶の間", "ちゃのま") == 10
+    assert idx.get_total("茶の間", "ちゃのま", suffix_matching=True) == 60          # exact 10 + お茶の間 50
+    assert idx.get_total("茶の間", "ちゃのま", honorific_folding=True) == 60        # exact 10 + fold 50
+    assert idx.get_total("茶の間", "ちゃのま", suffix_matching=True, honorific_folding=True) == 60  # not 110
+
+
+def test_suffix_single_kanji_no_collision_with_honorific():
+    # A single-kanji card (茶) is not suffix-eligible now, so the bare suffix path contributes
+    # nothing and there is no collision to guard — the honorific fold applies once.
+    idx = _build_index_from_raw(
+        [["茶", "freq", 10], ["お茶", "freq", 50]],
+        honorific_folding=True,
+    )
+    assert idx.get_total("茶", "ちゃ", suffix_matching=True) == 10   # suffix ineligible -> exact only
+    assert idx.get_total("茶", "ちゃ", suffix_matching=True, honorific_folding=True) == 60  # exact 10 + fold 50
+
+
+def test_suffix_honorific_kana_fold_not_subsumed():
+    # A kana-only stripped fold (しゃれ←おしゃれ) is NOT suffix-eligible (no kanji), so the
+    # honorific credit must survive when both flags are on — the skip only fires when the
+    # suffix path actually subsumes the fold.
+    idx = _build_index_from_raw(
+        [["しゃれ", "freq", 3], ["おしゃれ", "freq", 20]],
+        honorific_folding=True,
+    )
+    # suffix contributes nothing (しゃれ has no kanji); honorific fold still credits 20
+    assert idx.get_total("しゃれ", "しゃれ", suffix_matching=True, honorific_folding=True) == 23
+
+
+def test_prefix_and_suffix_both_on_additive_disjoint():
+    idx = OccurrenceIndex()
+    idx.add("中学", "ちゅうがく", 5)
+    idx.add("中学生", "ちゅうがくせい", 100)    # prefix: starts with 中学
+    idx.add("私立中学", "しりつちゅうがく", 30)  # suffix: ends with 中学
+    assert idx.get_total("中学", "ちゅうがく", prefix_matching=True) == 105
+    assert idx.get_total("中学", "ちゅうがく", suffix_matching=True) == 35
+    assert idx.get_total("中学", "ちゅうがく", prefix_matching=True, suffix_matching=True) == 135
+
+
+def test_prefix_and_suffix_both_on_reduplicative_double_credits():
+    # A term that both starts and ends with the card is credited by BOTH paths when both
+    # flags are on — accepted, and pinned here so the behavior can't silently change.
+    idx = OccurrenceIndex()
+    idx.add("一歩", "いっぽ", 5)
+    idx.add("一歩一歩", "いっぽいっぽ", 40)
+    assert idx.get_total("一歩", "いっぽ", prefix_matching=True) == 45
+    assert idx.get_total("一歩", "いっぽ", suffix_matching=True) == 45
+    assert idx.get_total("一歩", "いっぽ", prefix_matching=True, suffix_matching=True) == 85
+
+
+def test_suffix_normalize_kana_end_to_end(monkeypatch):
+    # A multi-char kanji-bearing card still triggers after katakana->hiragana folding.
+    def fake_get_occurrence_index(name, normalize_kana, prefix_matching, suffix_matching, honorific_folding):
+        return _build_index_from_raw(
+            [["中学校", "freq", {"reading": "チュウガッコウ", "value": 100}],
+             ["学校", "freq", {"reading": "ガッコウ", "value": 5}]],
+            normalize_kana=normalize_kana,
+        )
+
+    monkeypatch.setattr(dm, "get_occurrence_index", fake_get_occurrence_index)
+    count = occurrence_count(["D"], "学校", "ガッコウ", normalize_kana=True, suffix_matching=True)
+    assert count == 105
+
+
+# --- single-kanji suffix phrase carve-out (mirror of the prefix phrase tests) ----
+
+def test_suffix_phrase_credits_particle_phrase():
+    idx = OccurrenceIndex()
+    idx.add("日", "ひ", 5)
+    idx.add("母の日", "ははのひ", 12)
+    idx.add("子供の日", "こどものひ", 8)
+    idx.add("日本語", "にほんご", 100)  # 日 at the HEAD, no preceding particle -> not a tail phrase
+    assert idx.get_total("日", "ひ") == 5
+    # exact 5 + 母の日 12 + 子供の日 8; 日本語 excluded, and bare single-kanji is gated out
+    assert idx.get_total("日", "ひ", suffix_matching=True) == 25
+    assert idx.suffix_total("日") == 0
+
+
+def test_suffix_phrase_reading_validation():
+    # Rejects a reading mismatch (日/にち not credited by 母の日/ははのひ); credits the matching
+    # homograph but not the mismatched one (敵/かたき ← 目の敵/めのかたき, 敵/てき not) — the tail
+    # mirror of test_phrase_total_homograph_readings.
+    idx = OccurrenceIndex()
+    idx.add("母の日", "ははのひ", 12)
+    idx.add("目の敵", "めのかたき", 7)
+    assert idx.get_total("日", "にち", suffix_matching=True) == 0
+    assert idx.get_total("敵", "てき", suffix_matching=True) == 0
+    assert idx.get_total("敵", "かたき", suffix_matching=True) == 7
+
+
+def test_suffix_phrase_requires_particle_and_tail():
+    idx = OccurrenceIndex()
+    idx.add("の日", "のひ", 4)              # len 2, no head -> fails len>=3
+    idx.add("中学校", "ちゅうがっこう", 30)  # 校 preceded by 学 (not a particle)
+    assert idx.get_total("日", "ひ", suffix_matching=True) == 0
+    assert idx.get_total("校", "こう", suffix_matching=True) == 0
+
+
+def test_suffix_phrase_kana_only_entry_never_lands_in_kanji_bucket():
+    # A ㋕-flagged phrase is keyed under its kana reading, so its effective expression is kana;
+    # its last char is not a kanji -> it never enters the suffix phrase bucket.
+    idx = _build_index_from_raw([
+        ["母の日", "freq", {"reading": "ははのひ",
+                            "frequency": {"value": 12, "displayValue": "㋕12"}}],
+    ])
+    assert idx.get_total("日", "ひ", suffix_matching=True) == 0
+
+
+def test_suffix_phrase_normalize_kana_end_to_end(monkeypatch):
+    # The tail carve-out's reading validation must fold too: a katakana-reading phrase entry
+    # still validates a (folded) single-kanji card reading. Mirror of the prefix phrase version.
+    def fake_get_occurrence_index(name, normalize_kana, prefix_matching, suffix_matching, honorific_folding):
+        return _build_index_from_raw(
+            [["母の日", "freq", {"reading": "ハハノヒ", "value": 12}]],
+            normalize_kana=normalize_kana,
+        )
+
+    monkeypatch.setattr(dm, "get_occurrence_index", fake_get_occurrence_index)
+    count = occurrence_count(["D"], "日", "ヒ", normalize_kana=True, suffix_matching=True)
+    assert count == 12
+
+
 # --- CombinedOccurrenceIndex memo eviction ----------------------------------
 
 def test_combined_index_evicts_oldest_when_cap_reached(monkeypatch):
     monkeypatch.setattr(dm, "_COMBINED_MEMO_CAP", 2)
 
-    def fake_get_occurrence_index(name, normalize_kana, prefix_matching, honorific_folding):
+    def fake_get_occurrence_index(name, normalize_kana, prefix_matching, suffix_matching, honorific_folding):
         return OccurrenceIndex()  # every lookup totals to 0; we only test eviction
 
     monkeypatch.setattr(dm, "get_occurrence_index", fake_get_occurrence_index)
