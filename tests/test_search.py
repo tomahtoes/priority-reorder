@@ -257,6 +257,11 @@ def test_resolution_cache_invalidated_on_config_change(monkeypatch):
     assert search._resolve(key, compute, None) == [1]
     assert calls["n"] == 2  # recomputed
 
+    # every match-affecting flag must be in the fingerprint, including variant_matching
+    cfgs["cur"] = Config(prefix_matching=True, variant_matching=True)
+    assert search._resolve(key, compute, None) == [1]
+    assert calls["n"] == 3
+
 
 # --- has_custom_term --------------------------------------------------------
 

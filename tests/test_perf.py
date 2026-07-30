@@ -22,6 +22,7 @@ import types
 
 import pytest
 
+import dictionary_manager as dm
 import search
 from dictionary_manager import OccurrenceIndex
 
@@ -342,3 +343,113 @@ def test_suffix_total_is_logarithmic_not_linear(capsys):
             f"naive endswith scan x1000: {naive_ms:.1f} ms over {K} terms "
             f"({naive_ms / max(fast_ms, 1e-9):.0f}x)"
         )
+
+
+def _variant_bench_index(k_terms, forms_per_reading=4):
+    """k_terms entries spread over k/forms_per_reading distinct readings, so each reading holds a
+    small bucket of written forms — the shape variant_total's cost actually depends on."""
+    idx = OccurrenceIndex()
+    kanji = "日本語学校子供気持煌燦落葉引越"
+    for i in range(k_terms):
+        reading = f"よみ{i // forms_per_reading:05d}"
+        expr = kanji[i % len(kanji)] + f"{i // forms_per_reading:05d}"
+        idx.add(expr, reading, (i % 50) + 1)
+    return idx
+
+
+def test_variant_total_scales_with_reading_bucket_not_index_size(capsys):
+    """variant_total is O(forms sharing the card's reading) — a dict lookup plus a few set
+    comparisons — NOT O(index). Asserted by holding the bucket size fixed while growing the index
+    10x and showing the per-query time stays flat, plus a naive same-reading scan for contrast."""
+    SMALL, LARGE = 2_000, 20_000
+    small = _variant_bench_index(SMALL)
+    large = _variant_bench_index(LARGE)
+
+    def timed(idx, reps=2000):
+        idx.variant_total("日00001", "よみ00001")  # warm the lazy index (real steady state)
+        t0 = time.perf_counter()
+        for _ in range(reps):
+            idx.variant_total("日00001", "よみ00001")
+        return (time.perf_counter() - t0) * 1000
+
+    small_ms = timed(small)
+    large_ms = timed(large)
+
+    def naive():
+        card = dm._kanji_skeleton("日00001")
+        return sum(
+            c for (e, r), c in large.expr_reading_to_count.items()
+            if r == "よみ00001" and e != "日00001" and dm._variant_kanji_compatible(card, dm._kanji_skeleton(e))
+        )
+
+    t0 = time.perf_counter()
+    for _ in range(2000):
+        naive_total = naive()
+    naive_ms = (time.perf_counter() - t0) * 1000
+
+    assert large.variant_total("日00001", "よみ00001") == naive_total
+    # The index stores (expression, count) only — no cached kanji skeleton. Skeletonizing every
+    # entry up front cost 28% of the build and 35% of the retained memory for buckets that average
+    # under two forms, so it is derived per candidate instead.
+    assert all(len(entry) == 2 for bucket in large._variant_index.values() for entry in bucket)
+    # 10x the index for the same bucket size must not cost ~10x per query
+    assert large_ms < small_ms * 3
+    # and the bucketed lookup must beat a scan over every (expr, reading) pair
+    assert large_ms * 10 < naive_ms
+
+    with capsys.disabled():
+        print(
+            f"\n[perf] variant_total x2000: {small_ms:.1f} ms @ {SMALL} terms -> "
+            f"{large_ms:.1f} ms @ {LARGE} terms (flat in index size) | "
+            f"naive same-reading scan x2000: {naive_ms:.1f} ms ({naive_ms / max(large_ms, 1e-9):.0f}x)"
+        )
+
+
+def test_card_skeleton_computed_once_per_card_not_once_per_dict(monkeypatch):
+    """CombinedOccurrenceIndex derives the card's kanji skeleton ONCE and passes it down, instead of
+    every per-dict variant_total recomputing it — a third of the variant scan time at 10 dicts.
+
+    Counts only calls made with the card expression: variant_total legitimately skeletonizes each
+    surviving candidate too (the index caches none), so a naive total-call counter would not be 1.
+    """
+    N = 10
+    names = [str(i) for i in range(N)]
+
+    def fresh_index():
+        idx = OccurrenceIndex()
+        idx.add("煌く", "きらめく", 5)  # a real candidate, so the loop body actually runs
+        return idx
+
+    indexes = {name: fresh_index() for name in names}
+    monkeypatch.setattr(dm, "get_occurrence_index", lambda name, *flags: indexes[name])
+
+    real = dm._kanji_skeleton
+    calls = []
+
+    def counting_skeleton(expression):
+        calls.append(expression)
+        return real(expression)
+
+    monkeypatch.setattr(dm, "_kanji_skeleton", counting_skeleton)
+
+    combined = dm.CombinedOccurrenceIndex(names, variant_matching=True)
+    assert combined.get("煌めく", "きらめく") == 5 * N  # credited once per dict
+    assert calls.count("煌めく") == 1, "card skeleton must be hoisted out of the per-dict loop"
+    assert calls.count("煌く") == N   # candidates are still derived per dict, by design
+
+    # a memoized repeat must not re-derive it either (the hoist sits after the memo check)
+    calls.clear()
+    assert combined.get("煌めく", "きらめく") == 5 * N
+    assert calls == []
+
+
+def test_variant_index_not_built_when_flag_off(capsys):
+    """The variant index is lazy, so an occurrence lookup with variant_matching off pays nothing
+    — the flag is free until used. (The seen side instead gates collection at build time; see
+    seen_manager.build_seen_day.)"""
+    idx = _variant_bench_index(20_000)
+    for _ in range(1000):
+        idx.get_total("日00001", "よみ00001", prefix_matching=True, suffix_matching=True)
+    assert idx._variant_index is None
+    idx.get_total("日00001", "よみ00001", variant_matching=True)
+    assert idx._variant_index is not None

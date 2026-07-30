@@ -155,6 +155,15 @@ Set `"suffix_matching": true` in your config to allow a card to match with the c
 - **Single-kanji tail phrases**: as the mirror of prefix matching's single-kanji carve-out, a single-kanji card is credited only by **reading-validated tail particle phrases** — entries of the form `word + particle + X` (particles: `を が の に で は も へ と`) whose reading ends with that particle + the card's reading. Example: `母の日` (ははのひ) credits a `日`/`ひ` card because the phrase reading confirms `日` is read ひ — while `今日`/きょう and `日本語` contribute nothing, and a `日`/`にち` card is not credited. Particles sit on a word boundary (no rendaku), so this match is exact and high-precision.
 - **Default**: `false`. Composes additively with the other options (and avoids double-counting `お/ご/御` entries when `honorific_folding` is also on); adds a little to index startup time, like prefix matching.
 
+#### Variant Matching
+Set `"variant_matching": true` in your config to credit a card with the counts of dictionary entries that are *another written form of the same word* — a different okurigana spelling, or an alternate kanji spelling. Prefix and suffix matching structurally cannot reach these: `煌く` is neither a prefix nor a suffix of `煌めく`.
+
+- **Semantics**: an entry counts when its reading is *identical* to the card's **and** the two forms' kanji **nest** — every kanji of one appears in the other, with at least one kanji on each side. `final_count = exact_count + Σ(counts of those entries)`.
+- **Example**: a `煌めく` card picks up `煌く`, but not `燦めく` (no shared kanji) or `きらめく` (no kanji at all). Okurigana families fold together: `落葉`/`落ち葉`, `気持`/`気持ち`, `子供`/`子ども`.
+- **Why nesting and not just one shared kanji**: same-reading homophones usually *do* share a kanji but are different words. Nesting rejects `科学`←`化学`, `保証`←`保障`, `対象`←`対照`.
+- **Kana spellings are excluded** — a kana-only entry has no kanji to share. Enable `combine_word_forms` alongside this if you want those credited too. Entries carrying no reading never match, since the rule identifies a word by its reading.
+- **Default**: `false`. Composes with the other options without double-counting an entry that prefix/suffix matching already credited. Costs nothing while off; when on, each dictionary pays a one-time index build on first use.
+
 #### Honorific Folding
 Set `"honorific_folding": true` in your config to credit bare-form cards with the counts of dictionary entries that start with an honorific morpheme (`お`, `ご`, `御`) and whose stripped remainder is the same word. Useful when you want counts for `お茶` or `御社` to also be attributed to the bare forms.
 
@@ -189,11 +198,11 @@ applies to `new` only — `kanji:num` takes no bracket.
 ### 4. Recently Seen Words (`seen:`)
 > ⚠️ **Experimental** — `seen:` is a newer, experimental feature and may change or be removed in a future version.
 
-Prioritize words you've encountered recently in your immersion, using *daily* occurrence dictionaries. It's resolved through this addon, so the occurrence options above (`prefix_matching`, `kana_normalization`, etc.) apply to `seen:` too.
+Prioritize words you've encountered recently in your immersion, using *daily* occurrence dictionaries. It's resolved through this addon, so the occurrence options above (`prefix_matching`, `variant_matching`, `kana_normalization`, etc.) apply to `seen:` too.
 - **Syntax**: `seen:N` matches words appearing in any of the last **N** daily dictionaries. It's boolean — "seen at all", regardless of how many times. A leading `-` negates (`-seen:30`).
 - **Examples**: `seen:1` (today), `seen:7` (appeared in any of the last 7 days).
 - **Day boundaries**: "today" honors Anki's rollover hour ("Next day starts at" setting).
-- **⚡ Keep windows small**: cost grows with # of days, so **the smaller your window, the faster the reorder** — `seen:1`–`seen:3` are cheap, large windows (`seen:30`+) get noticeably slower, especially with settings like `prefix_matching` on. If you care at all about sorting speed, use the smallest window that still means "recently seen". (Reusing the *same* window across several priority searches is free within a reorder.)
+- **⚡ Keep windows small**: cost grows with # of days, so **the smaller your window, the faster the reorder** — `seen:1`–`seen:3` are cheap, large windows (`seen:30`+) get noticeably slower, especially with settings like `prefix_matching` or `variant_matching` on. If you care at all about sorting speed, use the smallest window that still means "recently seen". (Reusing the *same* window across several priority searches is free within a reorder.)
 
 #### Setup for Seen Dictionaries
 Place your daily occurrence dictionaries in a reserved `_seen` folder under `user_files`, one subfolder per day named `YYYY-MM-DD`:

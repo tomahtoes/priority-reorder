@@ -82,6 +82,12 @@
 - **Note**: Independent of `kana_normalization` — both flags can be enabled together. Normalization is applied first, then the combined lookup runs against the normalized keys.
 - **Default**: `false`
 
+### `variant_matching` (bool)
+- **Description**: Credits a card with the counts of dict entries that are another **written form** of the same word — a different okurigana or kanji spelling. Prefix/suffix matching cannot reach these: `煌く` is neither a prefix nor a suffix of `煌めく`.
+- **Rule**: an entry counts when its reading is *identical* to the card's **and** the two forms' kanji nest (every kanji of one appears in the other), with at least one kanji on each side. Requiring the kanji to nest rather than merely overlap keeps same-reading homophones apart — `科学` is not credited by `化学`.
+- **Kana**: kana-only entries have no kanji to share and never match here; enable `combine_word_forms` too if you want those credited. Entries carrying no reading never match either.
+- **Default**: `false`
+
 ### `prefix_matching` (bool)
 - **Description**: Also credits a card with the counts of longer dict entries that **start with** its expression (≥ 2 chars). Card `彫刻` (5) picks up `彫刻家` (100) + `彫刻品` (30) → 135.
 - **Single kanji**: excluded from the bare rule; credited only via reading-validated particle phrases — `手を貸す`/てをかす credits `手`/て, not `手`/しゅ (particles `を が の に で は も へ と`).
@@ -106,7 +112,7 @@ The `occurrences:`, `f`, `kanji:`, `seen:`, and `length` terms below are **real 
 `priority_search`/`normal_search`, they work directly in the **Browse search bar** and through the
 collection API (`col.find_cards` / `col.find_notes`, and therefore **AnkiConnect**). This lets you
 test a priority search interactively in the browser before committing it to config. They honor the
-same `kana_normalization` / `combine_word_forms` / `prefix_matching` / `suffix_matching` / `honorific_folding` settings,
+same `kana_normalization` / `combine_word_forms` / `variant_matching` / `prefix_matching` / `suffix_matching` / `honorific_folding` settings,
 and the configured `search_fields` / `sort_field`, as the reorderer. Leading `-` negates a term as
 usual (e.g. `-occurrences:Dict>5`).
 

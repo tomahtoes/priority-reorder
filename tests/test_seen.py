@@ -124,8 +124,11 @@ def test_today_date_after_rollover_is_same_day():
 
 # --- SeenWindow.contains: presence + parity with counting -------------------
 
-def _build_window(day_raws, normalize_kana=False, honorific_folding=False):
-    days = [seen_manager.build_seen_day(d, normalize_kana, honorific_folding) for d in day_raws]
+def _build_window(day_raws, normalize_kana=False, honorific_folding=False, variant_matching=False):
+    days = [
+        seen_manager.build_seen_day(d, normalize_kana, honorific_folding, variant_matching)
+        for d in day_raws
+    ]
     return seen_manager._merge_seen_days(days)
 
 
@@ -200,6 +203,44 @@ def test_seen_window_suffix_phrase():
     assert not window.contains("日", "", suffix_matching=True)       # nothing to validate
 
 
+def test_seen_window_variant_matching():
+    # Boolean mirror of variant_total: a 煌く entry marks the 煌めく card as seen (same reading,
+    # nesting kanji) but not 燦めく (no shared kanji), and the query-time flag is required.
+    raw = [[["煌く", "freq", {"reading": "きらめく", "frequency": {"value": 5}}]]]
+    window = _build_window(raw, variant_matching=True)
+    assert not window.contains("煌めく", "きらめく")
+    assert window.contains("煌めく", "きらめく", variant_matching=True)
+    assert not window.contains("燦めく", "きらめく", variant_matching=True)
+    # a superset spelling marks both component forms
+    both = _build_window(
+        [[["煌燦めく", "freq", {"reading": "きらめく", "frequency": {"value": 5}}]]],
+        variant_matching=True,
+    )
+    assert both.contains("煌めく", "きらめく", variant_matching=True)
+    assert both.contains("燦めく", "きらめく", variant_matching=True)
+    # kana-only spellings never participate; same-reading homophones that merely share a kanji
+    # are kept apart
+    kana = _build_window(
+        [[["きらめく", "freq", {"reading": "きらめく", "frequency": {"value": 5}}]]],
+        variant_matching=True,
+    )
+    assert not kana.contains("煌めく", "きらめく", variant_matching=True)
+    homophone = _build_window(
+        [[["化学", "freq", {"reading": "かがく", "frequency": {"value": 5}}]]],
+        variant_matching=True,
+    )
+    assert not homophone.contains("科学", "かがく", variant_matching=True)
+
+
+def test_seen_variant_entries_only_collected_when_asked():
+    # variant_matching is a BUILD flag on the seen side (the entry set spans most of the dict),
+    # so a window built without it collects nothing and cannot answer variant queries.
+    raw = [[["煌く", "freq", {"reading": "きらめく", "frequency": {"value": 5}}]]]
+    assert _build_window(raw).variant_entries == set()
+    assert not _build_window(raw).contains("煌めく", "きらめく", variant_matching=True)
+    assert _build_window(raw, variant_matching=True).variant_entries == {("煌く", "きらめく")}
+
+
 def _ref_seen(day_indices, e, r, **flags):
     """Reference presence from the counting index: seen iff the summed total is >= 1."""
     return sum(d.get_total(e, r, **flags) for d in day_indices) >= 1
@@ -221,6 +262,12 @@ def test_seen_contains_matches_counting_presence_incl_homograph():
             ["最も", "freq", {"reading": "もっとも", "frequency": {"value": 4}}],
             ["中学校", "freq", {"reading": "ちゅうがっこう", "frequency": {"value": 9}}],
             ["母の日", "freq", {"reading": "ははのひ", "frequency": {"value": 6}}],
+            # variant rule: an okurigana variant, a prefix-overlapping variant (気持ち/気持ち
+            # is also a strict prefix match for a 気持 card — the dedup guard), and a
+            # same-reading homophone that merely shares a kanji with 科学
+            ["煌く", "freq", {"reading": "きらめく", "frequency": {"value": 11}}],
+            ["気持ち", "freq", {"reading": "きもち", "frequency": {"value": 12}}],
+            ["化学", "freq", {"reading": "かがく", "frequency": {"value": 13}}],
         ],
         [
             ["下駄箱", "freq", {"reading": "げたばこ", "frequency": {"value": 6}}],
@@ -231,6 +278,7 @@ def test_seen_contains_matches_counting_presence_incl_homograph():
             ["下駄", "freq", {"reading": "げた", "frequency": {"value": 2}}],
             ["下駄屋", "freq", {"reading": "げたや", "frequency": {"value": 8}}],
             ["積もる", "freq", {"reading": "つもる", "frequency": {"value": 3}}],
+            ["きらめく", "freq", {"reading": "きらめく", "frequency": {"value": 4}}],
         ],
     ]
     cards = [("下駄", "げた"), ("角", "かど"), ("茶", "ちゃ"), ("下駄箱", "げたばこ"),
@@ -242,7 +290,11 @@ def test_seen_contains_matches_counting_presence_incl_homograph():
              # single-kanji prefix phrase path: positive, reading-gated, tail-gated, and
              # the documented okurigana truncation edge (積/つ validates 積もる)
              ("手", "て"), ("手", "しゅ"), ("思", "おも"), ("最", "もっと"),
-             ("積", "つ"), ("積", "せき")]
+             ("積", "つ"), ("積", "せき"),
+             # variant rule: credited (煌めく←煌く), not credited (燦めく — no shared kanji),
+             # kana-only card, the prefix-overlap dedup case, and the homophone guard
+             ("煌めく", "きらめく"), ("燦めく", "きらめく"), ("きらめく", "きらめく"),
+             ("気持", "きもち"), ("科学", "かがく")]
     flagsets = [
         {},
         {"prefix_matching": True},
@@ -253,10 +305,17 @@ def test_seen_contains_matches_counting_presence_incl_homograph():
         {"honorific_folding": True},
         {"suffix_matching": True, "honorific_folding": True},
         {"prefix_matching": True, "combine_word_forms": True, "honorific_folding": True},
+        {"variant_matching": True},
+        {"variant_matching": True, "prefix_matching": True},
+        {"variant_matching": True, "suffix_matching": True},
+        {"variant_matching": True, "combine_word_forms": True},
+        {"variant_matching": True, "prefix_matching": True, "suffix_matching": True,
+         "combine_word_forms": True, "honorific_folding": True},
     ]
     for fs in flagsets:
         honor = fs.get("honorific_folding", False)
-        window = _build_window(raws, honorific_folding=honor)
+        variant = fs.get("variant_matching", False)
+        window = _build_window(raws, honorific_folding=honor, variant_matching=variant)
         day_indices = [dm._build_index_from_raw(r, honorific_folding=honor) for r in raws]
         for e, r in cards:
             assert window.contains(e, r, **fs) == _ref_seen(day_indices, e, r, **fs), (e, r, fs)

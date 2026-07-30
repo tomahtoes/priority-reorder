@@ -61,7 +61,7 @@ def test_get_total_combine_word_forms():
 def test_occurrence_count_single_dict(monkeypatch):
     captured = {}
 
-    def fake_get_occurrence_index(name, normalize_kana, prefix_matching, suffix_matching, honorific_folding):
+    def fake_get_occurrence_index(name, normalize_kana, prefix_matching, suffix_matching, variant_matching, honorific_folding):
         captured["name"] = name
         idx = OccurrenceIndex()
         idx.add("茶", "ちゃ", 42)
@@ -92,7 +92,7 @@ def test_occurrence_count_multi_dict_uses_combined(monkeypatch):
 def test_occurrence_count_normalize_kana(monkeypatch):
     seen = {}
 
-    def fake_get_occurrence_index(name, normalize_kana, prefix_matching, suffix_matching, honorific_folding):
+    def fake_get_occurrence_index(name, normalize_kana, prefix_matching, suffix_matching, variant_matching, honorific_folding):
         idx = OccurrenceIndex()
         idx.add("ぎりぎり", "ぎりぎり", 8)  # hiragana key
         return idx
@@ -307,7 +307,7 @@ def test_phrase_kana_only_entry_never_lands_in_kanji_bucket():
 
 
 def test_phrase_total_normalize_kana_end_to_end(monkeypatch):
-    def fake_get_occurrence_index(name, normalize_kana, prefix_matching, suffix_matching, honorific_folding):
+    def fake_get_occurrence_index(name, normalize_kana, prefix_matching, suffix_matching, variant_matching, honorific_folding):
         return _build_index_from_raw(
             [["手を貸す", "freq", {"reading": "テヲカス", "value": 10}]],
             normalize_kana=normalize_kana,
@@ -459,7 +459,7 @@ def test_prefix_and_suffix_both_on_reduplicative_double_credits():
 
 def test_suffix_normalize_kana_end_to_end(monkeypatch):
     # A multi-char kanji-bearing card still triggers after katakana->hiragana folding.
-    def fake_get_occurrence_index(name, normalize_kana, prefix_matching, suffix_matching, honorific_folding):
+    def fake_get_occurrence_index(name, normalize_kana, prefix_matching, suffix_matching, variant_matching, honorific_folding):
         return _build_index_from_raw(
             [["中学校", "freq", {"reading": "チュウガッコウ", "value": 100}],
              ["学校", "freq", {"reading": "ガッコウ", "value": 5}]],
@@ -518,7 +518,7 @@ def test_suffix_phrase_kana_only_entry_never_lands_in_kanji_bucket():
 def test_suffix_phrase_normalize_kana_end_to_end(monkeypatch):
     # The tail carve-out's reading validation must fold too: a katakana-reading phrase entry
     # still validates a (folded) single-kanji card reading. Mirror of the prefix phrase version.
-    def fake_get_occurrence_index(name, normalize_kana, prefix_matching, suffix_matching, honorific_folding):
+    def fake_get_occurrence_index(name, normalize_kana, prefix_matching, suffix_matching, variant_matching, honorific_folding):
         return _build_index_from_raw(
             [["母の日", "freq", {"reading": "ハハノヒ", "value": 12}]],
             normalize_kana=normalize_kana,
@@ -529,12 +529,225 @@ def test_suffix_phrase_normalize_kana_end_to_end(monkeypatch):
     assert count == 12
 
 
+# --- variant_total / variant_matching ---------------------------------------
+
+def _kirameku():
+    """The motivating index: three written forms of きらめく plus the kana spelling."""
+    idx = OccurrenceIndex()
+    idx.add("煌く", "きらめく", 40)      # same kanji as 煌めく, different okurigana
+    idx.add("燦めく", "きらめく", 25)    # alternate kanji spelling
+    idx.add("きらめく", "きらめく", 60)  # kana-only spelling
+    return idx
+
+
+def test_variant_okurigana_difference_credits_shared_kanji_form():
+    # The core case: 煌く is neither a prefix nor a suffix of 煌めく, so only the variant rule
+    # can bridge them. Same reading + nesting kanji ({煌} <= {煌}) -> credited.
+    idx = _kirameku()
+    assert idx.get_total("煌めく", "きらめく") == 0
+    assert idx.get_total("煌めく", "きらめく", variant_matching=True) == 40
+
+
+def test_variant_alternate_kanji_spelling_not_credited():
+    # 燦めく shares no kanji with 煌く, so the 煌く entry must not reach it (and vice versa).
+    idx = _kirameku()
+    assert idx.get_total("燦めく", "きらめく", variant_matching=True) == 25  # its own entry only
+    idx_no_self = OccurrenceIndex()
+    idx_no_self.add("煌く", "きらめく", 40)
+    assert idx_no_self.get_total("燦めく", "きらめく", variant_matching=True) == 0
+
+
+def test_variant_superset_spelling_credits_every_component_form():
+    # Hypothetical 煌燦めく: its kanji {煌,燦} is a superset of both cards' skeletons, so it
+    # credits BOTH 煌めく and 燦めく — one shared kanji is enough to connect the forms.
+    idx = OccurrenceIndex()
+    idx.add("煌燦めく", "きらめく", 15)
+    assert idx.get_total("煌めく", "きらめく", variant_matching=True) == 15
+    assert idx.get_total("燦めく", "きらめく", variant_matching=True) == 15
+    # a card with an unrelated kanji still gets nothing
+    assert idx.get_total("輝めく", "きらめく", variant_matching=True) == 0
+
+
+def test_variant_never_credits_kana_only_spelling():
+    # The measured part: a kana entry has an empty kanji skeleton, so it never participates —
+    # that credit remains combine_word_forms' job.
+    idx = OccurrenceIndex()
+    idx.add("きらめく", "きらめく", 60)
+    assert idx.get_total("煌めく", "きらめく", variant_matching=True) == 0
+    assert idx.get_total("煌めく", "きらめく", variant_matching=True, combine_word_forms=True) == 60
+    # and a kana-only CARD gets no variant credit from the kanji forms
+    assert _kirameku().get_total("きらめく", "きらめく", variant_matching=True) == 60  # exact only
+
+
+def test_variant_rejects_same_reading_homophones_that_merely_share_a_kanji():
+    # Why nesting and not intersection: these pairs share exactly one kanji and read alike but
+    # are different words. Neither skeleton nests, so no credit crosses.
+    idx = OccurrenceIndex()
+    idx.add("化学", "かがく", 500)
+    idx.add("保障", "ほしょう", 300)
+    idx.add("対照", "たいしょう", 200)
+    idx.add("市立", "しりつ", 100)
+    assert idx.get_total("科学", "かがく", variant_matching=True) == 0
+    assert idx.get_total("保証", "ほしょう", variant_matching=True) == 0
+    assert idx.get_total("対象", "たいしょう", variant_matching=True) == 0
+    assert idx.get_total("私立", "しりつ", variant_matching=True) == 0
+
+
+def test_variant_okurigana_and_iteration_mark_families():
+    # Equal kanji sets after dedup: the okurigana-difference family, plus 々 (not a kanji, so
+    # 人々 and 人人 share the skeleton 人).
+    idx = OccurrenceIndex()
+    idx.add("落ち葉", "おちば", 30)
+    idx.add("引っ越し", "ひっこし", 20)
+    idx.add("行なう", "おこなう", 10)
+    idx.add("子ども", "こども", 50)   # subset: {子} <= {子,供}
+    idx.add("人々", "ひとびと", 70)
+    assert idx.get_total("落葉", "おちば", variant_matching=True) == 30
+    assert idx.get_total("引越し", "ひっこし", variant_matching=True) == 20
+    assert idx.get_total("行う", "おこなう", variant_matching=True) == 10
+    assert idx.get_total("子供", "こども", variant_matching=True) == 50
+    assert idx.get_total("人人", "ひとびと", variant_matching=True) == 70
+
+
+def test_variant_requires_identical_reading():
+    # 煌々/こうこう nests with 煌めく ({煌} <= {煌}) but reads differently, so it is not a
+    # variant — the reading is what identifies the word.
+    idx = OccurrenceIndex()
+    idx.add("煌々", "こうこう", 90)
+    assert idx.get_total("煌めく", "きらめく", variant_matching=True) == 0
+
+
+def test_variant_requires_entry_reading():
+    # Entries added without a reading never land in expr_reading_to_count, so they can't be
+    # variant candidates (documented limitation: the dict must carry readings).
+    idx = OccurrenceIndex()
+    idx.add("煌く", None, 40)
+    assert idx.variant_total("煌めく", "きらめく") == 0
+    assert idx.get_total("煌めく", "きらめく", variant_matching=True) == 0
+
+
+def test_variant_total_ignores_kana_only_card_expression():
+    idx = _kirameku()
+    assert idx.variant_total("きらめく", "きらめく") == 0
+    assert idx.variant_total("煌めく", "") == 0
+
+
+def test_variant_prefix_no_double_count():
+    # 気持ち is BOTH a strict written prefix of nothing and a variant of 気持
+    # (same reading, {気,持} == {気,持}) — and 気持 IS a strict prefix of 気持ち, so
+    # prefix_total already credits it. With both flags on it must count once, not twice.
+    idx = OccurrenceIndex()
+    idx.add("気持", "きもち", 5)
+    idx.add("気持ち", "きもち", 100)
+    assert idx.get_total("気持", "きもち", variant_matching=True) == 105        # exact 5 + variant 100
+    assert idx.get_total("気持", "きもち", prefix_matching=True) == 105          # exact 5 + prefix 100
+    assert idx.get_total("気持", "きもち", prefix_matching=True, variant_matching=True) == 105  # not 205
+
+
+def test_variant_suffix_no_double_count():
+    # Tail mirror of the guard. Synthetic: a longer entry with an IDENTICAL reading that also
+    # ends with the card expression is structurally near-impossible in real data (the extra
+    # leading characters would have to be silent), so this pins the guard rather than a real case.
+    idx = OccurrenceIndex()
+    idx.add("菓子", "かし", 5)
+    idx.add("和菓子", "かし", 100)  # ends with 菓子, kanji {和,菓,子} superset of {菓,子}
+    assert idx.get_total("菓子", "かし", variant_matching=True) == 105
+    assert idx.get_total("菓子", "かし", suffix_matching=True) == 105
+    assert idx.get_total("菓子", "かし", suffix_matching=True, variant_matching=True) == 105  # not 205
+
+
+def test_variant_ineligible_prefix_length_keeps_variant_credit():
+    # The prefix guard must reproduce prefix_total's own gate: a 1-char card is below
+    # _MIN_PREFIX_LENGTH, so prefix_total contributes nothing and the variant credit must
+    # survive even with prefix_matching on.
+    idx = OccurrenceIndex()
+    idx.add("摑", "つかむ", 5)
+    idx.add("摑む", "つかむ", 60)
+    assert idx.prefix_total("摑") == 0
+    assert idx.get_total("摑", "つかむ", prefix_matching=True, variant_matching=True) == 65
+
+
+def test_variant_index_built_once_and_lazily():
+    idx = _kirameku()
+    assert idx._variant_index is None  # untouched until the first variant query
+    idx.variant_total("煌めく", "きらめく")
+    built = idx._variant_index
+    assert built is not None
+    idx.variant_total("燦めく", "きらめく")
+    assert idx._variant_index is built  # reused, not rebuilt
+
+
+def test_variant_normalize_kana_end_to_end(monkeypatch):
+    # Variant grouping keys on the reading, so it must see folded readings on both sides.
+    def fake_get_occurrence_index(name, normalize_kana, prefix_matching, suffix_matching, variant_matching, honorific_folding):
+        return _build_index_from_raw(
+            [["煌く", "freq", {"reading": "キラメク", "value": 40}]],
+            normalize_kana=normalize_kana,
+        )
+
+    monkeypatch.setattr(dm, "get_occurrence_index", fake_get_occurrence_index)
+    count = occurrence_count(["D"], "煌めく", "キラメク", normalize_kana=True, variant_matching=True)
+    assert count == 40
+
+
+def test_variant_kana_only_marker_entry_never_participates():
+    # A ㋕-flagged entry is re-keyed under its kana reading, so its effective expression has no
+    # kanji -> it stays out of the variant index (only combine_word_forms can credit it).
+    idx = _build_index_from_raw([
+        ["煌く", "freq", {"reading": "きらめく",
+                          "frequency": {"value": 40, "displayValue": "㋕40"}}],
+    ])
+    assert idx.get_total("煌めく", "きらめく", variant_matching=True) == 0
+    assert idx.get_total("煌めく", "きらめく", variant_matching=True, combine_word_forms=True) == 40
+
+
+def test_variant_katakana_expression_never_credits_kanji_card():
+    # A katakana-written entry folds to hiragana under kana_normalization but still has no kanji,
+    # so it stays out of the variant index — only combine_word_forms bridges kana to a kanji card.
+    idx = _build_index_from_raw(
+        [["キラメク", "freq", {"reading": "キラメク", "value": 25}]],
+        normalize_kana=True,
+    )
+    assert idx.get_total("煌めく", "きらめく", variant_matching=True) == 0
+    assert idx.get_total("煌めく", "きらめく", variant_matching=True, combine_word_forms=True) == 25
+
+
+def test_variant_explicit_card_kanji_matches_derived():
+    # card_kanji is an optimization hint for the multi-dict path: supplying it must give exactly
+    # the total variant_total derives on its own.
+    idx = _kirameku()
+    derived = idx.variant_total("煌めく", "きらめく")
+    assert derived == 40
+    assert idx.variant_total("煌めく", "きらめく", card_kanji=dm._kanji_skeleton("煌めく")) == derived
+
+
+def test_variant_multi_dict_with_kana_normalization(monkeypatch):
+    # The combined path folds katakana ONCE in occurrence_count, before any per-dict lookup, and
+    # the hoisted card skeleton is derived from that folded expression. Every other kana-folding
+    # test uses a single dict, so this is the only cover for that interaction.
+    def fake_get_occurrence_index(name, normalize_kana, prefix_matching, suffix_matching, variant_matching, honorific_folding):
+        return _build_index_from_raw(
+            [["煌く", "freq", {"reading": "キラメク", "value": 20}]],
+            normalize_kana=normalize_kana,
+        )
+
+    monkeypatch.setattr(dm, "get_occurrence_index", fake_get_occurrence_index)
+    dm.get_combined_occurrence_index.cache_clear()
+    try:
+        count = occurrence_count(
+            ["A", "B"], "煌めく", "キラメク", normalize_kana=True, variant_matching=True
+        )
+    finally:
+        dm.get_combined_occurrence_index.cache_clear()
+    assert count == 40  # 20 credited from each of the two dicts
+
+
 # --- CombinedOccurrenceIndex memo eviction ----------------------------------
 
 def test_combined_index_evicts_oldest_when_cap_reached(monkeypatch):
     monkeypatch.setattr(dm, "_COMBINED_MEMO_CAP", 2)
 
-    def fake_get_occurrence_index(name, normalize_kana, prefix_matching, suffix_matching, honorific_folding):
+    def fake_get_occurrence_index(name, normalize_kana, prefix_matching, suffix_matching, variant_matching, honorific_folding):
         return OccurrenceIndex()  # every lookup totals to 0; we only test eviction
 
     monkeypatch.setattr(dm, "get_occurrence_index", fake_get_occurrence_index)

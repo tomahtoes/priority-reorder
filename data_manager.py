@@ -325,12 +325,13 @@ class DataManager:
             combine_word_forms = cfg.combine_word_forms
             prefix_matching = cfg.prefix_matching
             suffix_matching = cfg.suffix_matching
+            variant_matching = cfg.variant_matching
             honorific_folding = cfg.honorific_folding
             # Resolve the window ONCE per predicate build (one filesystem stat per
             # day), so the per-card check is a pure in-memory membership lookup.
             t0 = time.perf_counter()
             window = seen_manager.get_seen_window(
-                n, normalize_kana, honorific_folding
+                n, normalize_kana, honorific_folding, variant_matching
             )
             self._add_ms("seen_win", t0)
             # Memoized per (n, note id) — the flags are fixed for the run, so
@@ -354,6 +355,7 @@ class DataManager:
                         combine_word_forms=combine_word_forms,
                         prefix_matching=prefix_matching,
                         suffix_matching=suffix_matching,
+                        variant_matching=variant_matching,
                         honorific_folding=honorific_folding,
                     )
                     cache[key] = value
@@ -375,6 +377,7 @@ class DataManager:
                 combine_word_forms=self.config.combine_word_forms,
                 prefix_matching=self.config.prefix_matching,
                 suffix_matching=self.config.suffix_matching,
+                variant_matching=self.config.variant_matching,
                 honorific_folding=self.config.honorific_folding,
             )
             self._occ_count_cache[key] = value

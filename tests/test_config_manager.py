@@ -9,6 +9,19 @@ def test_defaults_from_empty_dict():
     assert c.sort_reverse is False
     assert c.priority_cutoff is None
     assert c.reorder_on_sync is True
+    # matching flags are all opt-in
+    assert c.combine_word_forms is False
+    assert c.variant_matching is False
+    assert c.prefix_matching is False
+    assert c.suffix_matching is False
+    assert c.honorific_folding is False
+
+
+def test_matching_flags_parse_and_reject_non_bools():
+    c = Config.from_dict({"variant_matching": True, "prefix_matching": True})
+    assert c.variant_matching is True
+    assert c.prefix_matching is True
+    assert Config.from_dict({"variant_matching": "yes"}).variant_matching is False
 
 
 def test_invalid_mode_falls_back_to_sequential():

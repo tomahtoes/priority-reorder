@@ -258,6 +258,27 @@ def test_occ_count_cached_per_note_for_the_run(fake_col, monkeypatch):
     assert calls["n"] == 1  # memoized by (dicts, note id) across the whole run
 
 
+def test_occ_predicate_forwards_all_matching_flags(fake_col, monkeypatch):
+    # Every config matching flag must reach occurrence_count — a flag that stops being
+    # forwarded silently degrades to the exact-match behavior.
+    fake_col(
+        find_results={"(deck:X) is:new": [1]},
+        rows=[_row(1, 10, "煌めく", "きらめく", "100")],
+    )
+    seen = {}
+
+    def fake_occurrence_count(dict_names, expression, reading, **kwargs):
+        seen.update(kwargs)
+        return 7
+
+    monkeypatch.setattr(dmod, "occurrence_count", fake_occurrence_count)
+    cfg = Config(kana_normalization=True, combine_word_forms=True, prefix_matching=True,
+                 suffix_matching=True, variant_matching=True, honorific_folding=True)
+    DataManager(cfg).get_cards_from_search("deck:X occurrences:D>5")
+    assert seen == dict(normalize_kana=True, combine_word_forms=True, prefix_matching=True,
+                        suffix_matching=True, variant_matching=True, honorific_folding=True)
+
+
 def test_kanji_count_cache_is_keyed_by_target(fake_col, monkeypatch):
     # Regression guard: two kanji:new searches with different [T] targets in the
     # same run must not share cached counts — the cache key includes the target.
@@ -323,14 +344,14 @@ def test_custom_seen_term_fast_path_filters_via_window(fake_col, monkeypatch):
     built = []
     monkeypatch.setattr(
         dmod.seen_manager, "get_seen_window",
-        lambda n, kana, honorific: built.append((n, kana, honorific)) or window,
+        lambda n, kana, honorific, variant: built.append((n, kana, honorific, variant)) or window,
     )
 
     cfg = Config(prefix_matching=True)
     res = DataManager(cfg).get_cards_from_search("deck:X seen:3")
 
     assert [c.card_id for c in res.cards] == [1]
-    assert built == [(3, False, False)]               # window resolved once
+    assert built == [(3, False, False, False)]        # window resolved once
     assert [c[:2] for c in window.calls] == [("下駄", "げた"), ("茶", "ちゃ")]  # empty expr skipped
     assert all(f["prefix_matching"] is True for _, _, f in window.calls)  # config flags forwarded
 
@@ -358,7 +379,7 @@ def test_seen_contains_memoized_per_note(fake_col, monkeypatch):
         rows=[_row(1, 10, "下駄", "げた", "50"), _row(2, 10, "下駄", "げた", "50")],
     )
     window = _FakeWindow(present={"下駄"})
-    monkeypatch.setattr(dmod.seen_manager, "get_seen_window", lambda n, k, h: window)
+    monkeypatch.setattr(dmod.seen_manager, "get_seen_window", lambda n, k, h, v: window)
 
     dm = DataManager(Config())
     r1 = dm.get_cards_from_search("deck:X seen:3")
@@ -373,7 +394,7 @@ def test_seen_memo_keyed_by_n(fake_col, monkeypatch):
         rows=[_row(1, 10, "下駄", "げた", "50")],
     )
     window = _FakeWindow(present={"下駄"})
-    monkeypatch.setattr(dmod.seen_manager, "get_seen_window", lambda n, k, h: window)
+    monkeypatch.setattr(dmod.seen_manager, "get_seen_window", lambda n, k, h, v: window)
 
     dm = DataManager(Config())
     dm.get_cards_from_search("deck:X seen:2")

@@ -195,10 +195,11 @@ def _config():
 # ---------------------------------------------------------------------------
 
 _FLAG_COMBOS = [
-    ("none", dict(normalize_kana=False, combine_word_forms=False, prefix_matching=False, suffix_matching=False, honorific_folding=False)),
-    ("prefix", dict(normalize_kana=False, combine_word_forms=False, prefix_matching=True, suffix_matching=False, honorific_folding=False)),
-    ("suffix", dict(normalize_kana=False, combine_word_forms=False, prefix_matching=False, suffix_matching=True, honorific_folding=False)),
-    ("all", dict(normalize_kana=True, combine_word_forms=True, prefix_matching=True, suffix_matching=True, honorific_folding=True)),
+    ("none", dict(normalize_kana=False, combine_word_forms=False, prefix_matching=False, suffix_matching=False, variant_matching=False, honorific_folding=False)),
+    ("prefix", dict(normalize_kana=False, combine_word_forms=False, prefix_matching=True, suffix_matching=False, variant_matching=False, honorific_folding=False)),
+    ("suffix", dict(normalize_kana=False, combine_word_forms=False, prefix_matching=False, suffix_matching=True, variant_matching=False, honorific_folding=False)),
+    ("varnt", dict(normalize_kana=False, combine_word_forms=False, prefix_matching=False, suffix_matching=False, variant_matching=True, honorific_folding=False)),
+    ("all", dict(normalize_kana=True, combine_word_forms=True, prefix_matching=True, suffix_matching=True, variant_matching=True, honorific_folding=True)),
 ]
 
 
@@ -248,6 +249,7 @@ def test_seen_count_vs_boolean_benchmark(capsys, tmp_path):
                 combine_word_forms=flags["combine_word_forms"],
                 prefix_matching=flags["prefix_matching"],
                 suffix_matching=flags["suffix_matching"],
+                variant_matching=flags["variant_matching"],
                 honorific_folding=flags["honorific_folding"],
             )
 
@@ -271,7 +273,8 @@ def test_seen_count_vs_boolean_benchmark(capsys, tmp_path):
 
             # ---- boolean (production): build x days -> union(+sort) -> contains ----
             bdays, b_build = _timed(lambda: [
-                seen_manager.build_seen_day(d, flags["normalize_kana"], flags["honorific_folding"])
+                seen_manager.build_seen_day(d, flags["normalize_kana"], flags["honorific_folding"],
+                                           flags["variant_matching"])
                 for d in days_raw
             ])
 
@@ -281,6 +284,14 @@ def test_seen_count_vs_boolean_benchmark(capsys, tmp_path):
                     w._sorted_exprs = sorted(w.exprs)  # one-time prep, attributed to merge
                 if flags["suffix_matching"]:
                     w._sorted_revs = sorted(e[::-1] for e in w.exprs)  # one-time prep, attributed to merge
+                if flags["variant_matching"]:
+                    # one-time reading bucketing, attributed to merge (mirrors the sorted views).
+                    # Bare expressions: skeletons are derived per candidate at query time, so the
+                    # shape here must match SeenWindow._variant_present's own lazy build.
+                    by_reading = {}
+                    for expr, entry_reading in w.variant_entries:
+                        by_reading.setdefault(entry_reading, []).append(expr)
+                    w._variant_by_reading = by_reading
                 return w
 
             bmodel, b_merge = _timed(_bool_merge)
