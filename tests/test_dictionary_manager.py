@@ -1,3 +1,7 @@
+import itertools
+
+import pytest
+
 import dictionary_manager as dm
 from dictionary_manager import (
     CombinedOccurrenceIndex,
@@ -61,7 +65,7 @@ def test_get_total_combine_word_forms():
 def test_occurrence_count_single_dict(monkeypatch):
     captured = {}
 
-    def fake_get_occurrence_index(name, normalize_kana, prefix_matching, suffix_matching, variant_matching, honorific_folding):
+    def fake_get_occurrence_index(name, normalize_kana, honorific_folding):
         captured["name"] = name
         idx = OccurrenceIndex()
         idx.add("茶", "ちゃ", 42)
@@ -78,7 +82,7 @@ def test_occurrence_count_multi_dict_uses_combined(monkeypatch):
         def __init__(self):
             self.calls = []
 
-        def get(self, expression, reading):
+        def total(self, expression, reading, card_kanji=None):
             self.calls.append((expression, reading))
             return 99
 
@@ -92,7 +96,7 @@ def test_occurrence_count_multi_dict_uses_combined(monkeypatch):
 def test_occurrence_count_normalize_kana(monkeypatch):
     seen = {}
 
-    def fake_get_occurrence_index(name, normalize_kana, prefix_matching, suffix_matching, variant_matching, honorific_folding):
+    def fake_get_occurrence_index(name, normalize_kana, honorific_folding):
         idx = OccurrenceIndex()
         idx.add("ぎりぎり", "ぎりぎり", 8)  # hiragana key
         return idx
@@ -307,7 +311,7 @@ def test_phrase_kana_only_entry_never_lands_in_kanji_bucket():
 
 
 def test_phrase_total_normalize_kana_end_to_end(monkeypatch):
-    def fake_get_occurrence_index(name, normalize_kana, prefix_matching, suffix_matching, variant_matching, honorific_folding):
+    def fake_get_occurrence_index(name, normalize_kana, honorific_folding):
         return _build_index_from_raw(
             [["手を貸す", "freq", {"reading": "テヲカス", "value": 10}]],
             normalize_kana=normalize_kana,
@@ -459,7 +463,7 @@ def test_prefix_and_suffix_both_on_reduplicative_double_credits():
 
 def test_suffix_normalize_kana_end_to_end(monkeypatch):
     # A multi-char kanji-bearing card still triggers after katakana->hiragana folding.
-    def fake_get_occurrence_index(name, normalize_kana, prefix_matching, suffix_matching, variant_matching, honorific_folding):
+    def fake_get_occurrence_index(name, normalize_kana, honorific_folding):
         return _build_index_from_raw(
             [["中学校", "freq", {"reading": "チュウガッコウ", "value": 100}],
              ["学校", "freq", {"reading": "ガッコウ", "value": 5}]],
@@ -518,7 +522,7 @@ def test_suffix_phrase_kana_only_entry_never_lands_in_kanji_bucket():
 def test_suffix_phrase_normalize_kana_end_to_end(monkeypatch):
     # The tail carve-out's reading validation must fold too: a katakana-reading phrase entry
     # still validates a (folded) single-kanji card reading. Mirror of the prefix phrase version.
-    def fake_get_occurrence_index(name, normalize_kana, prefix_matching, suffix_matching, variant_matching, honorific_folding):
+    def fake_get_occurrence_index(name, normalize_kana, honorific_folding):
         return _build_index_from_raw(
             [["母の日", "freq", {"reading": "ハハノヒ", "value": 12}]],
             normalize_kana=normalize_kana,
@@ -679,7 +683,7 @@ def test_variant_index_built_once_and_lazily():
 
 def test_variant_normalize_kana_end_to_end(monkeypatch):
     # Variant grouping keys on the reading, so it must see folded readings on both sides.
-    def fake_get_occurrence_index(name, normalize_kana, prefix_matching, suffix_matching, variant_matching, honorific_folding):
+    def fake_get_occurrence_index(name, normalize_kana, honorific_folding):
         return _build_index_from_raw(
             [["煌く", "freq", {"reading": "キラメク", "value": 40}]],
             normalize_kana=normalize_kana,
@@ -725,7 +729,7 @@ def test_variant_multi_dict_with_kana_normalization(monkeypatch):
     # The combined path folds katakana ONCE in occurrence_count, before any per-dict lookup, and
     # the hoisted card skeleton is derived from that folded expression. Every other kana-folding
     # test uses a single dict, so this is the only cover for that interaction.
-    def fake_get_occurrence_index(name, normalize_kana, prefix_matching, suffix_matching, variant_matching, honorific_folding):
+    def fake_get_occurrence_index(name, normalize_kana, honorific_folding):
         return _build_index_from_raw(
             [["煌く", "freq", {"reading": "キラメク", "value": 20}]],
             normalize_kana=normalize_kana,
@@ -747,16 +751,182 @@ def test_variant_multi_dict_with_kana_normalization(monkeypatch):
 def test_combined_index_evicts_oldest_when_cap_reached(monkeypatch):
     monkeypatch.setattr(dm, "_COMBINED_MEMO_CAP", 2)
 
-    def fake_get_occurrence_index(name, normalize_kana, prefix_matching, suffix_matching, variant_matching, honorific_folding):
+    def fake_get_occurrence_index(name, normalize_kana, honorific_folding):
         return OccurrenceIndex()  # every lookup totals to 0; we only test eviction
 
     monkeypatch.setattr(dm, "get_occurrence_index", fake_get_occurrence_index)
 
     ci = CombinedOccurrenceIndex(["D1", "D2"])
-    ci.get("x", "rx")
-    ci.get("y", "ry")
-    ci.get("z", "rz")  # cap reached -> oldest ("x","rx") evicted
+    ci.total("x", "rx")
+    ci.total("y", "ry")
+    ci.total("z", "rz")  # cap reached -> oldest ("x","rx") evicted
 
-    assert ("z", "rz") in ci.expr_reading_to_count
-    assert ("x", "rx") not in ci.expr_reading_to_count
-    assert len(ci.expr_reading_to_count) == 2
+    # The memo has its own dict: expr_reading_to_count holds real merged dictionary data, so
+    # evicting from it would drop entries the fold can never rebuild.
+    assert ("z", "rz") in ci._memo
+    assert ("x", "rx") not in ci._memo
+    assert len(ci._memo) == 2
+
+
+# --- merged-index equivalence (drift guard) ---------------------------------
+#
+# CombinedOccurrenceIndex folds N dictionaries into ONE index instead of summing N per-dict
+# get_total calls. That is a pure optimization: the merged answer must equal the per-dict sum
+# EXACTLY, for every flag combination. These tests make that a guarantee rather than a hope —
+# the rest of the suite exercises the base OccurrenceIndex and would not notice a bad fold.
+
+# Four overlapping dictionaries, each carrying an entry shape that stresses part of the fold:
+#   A/B share 茶 with DIFFERENT readings -> get()'s per-dict reading-mismatch fallback, the one
+#                                           term that does not collapse into a merged map
+#   お茶 in A, かず-style strips in C      -> _honorific_fold_allowed reads the DICT's own vocab,
+#                                           so per-dict honorific maps must be summed, never
+#                                           rebuilt from the merged vocabulary
+#   煌く / 煌めく / 煌燦めく split         -> variant grouping by identical reading
+#   手を貸す / 母の日                     -> the single-kanji head/tail phrase carve-outs
+#   ㋕-marked entry                       -> re-keyed under its reading (combine_word_forms)
+_EQUIV_DICTS = {
+    "A": [
+        ["茶", "freq", {"reading": "ちゃ", "value": 10}],
+        # A SECOND reading for 茶 inside one dictionary, so that dict's expr_to_count (15)
+        # exceeds either pair count. That gap is exactly what _base_total's diff term carries;
+        # without a multi-reading expression anywhere, a fold that dropped the term would still
+        # agree with the per-dict sum and the guard would pass while broken.
+        ["茶", "freq", {"reading": "さ", "value": 5}],
+        ["お茶", "freq", {"reading": "おちゃ", "value": 7}],
+        ["煌く", "freq", {"reading": "きらめく", "value": 40}],
+        ["手を貸す", "freq", {"reading": "てをかす", "value": 12}],
+        ["中学校", "freq", {"reading": "ちゅうがっこう", "value": 100}],
+        # Kana-only honorific strip that A alone must NOT fold (A has never heard of かず) but
+        # the MERGED vocabulary would happily admit, because B below knows かず. This pair is
+        # what makes the broad equivalence check sensitive to a honorific fold rebuilt from
+        # merged vocabulary rather than summed per dict.
+        ["おかず", "freq", {"reading": "おかず", "value": 50}],
+    ],
+    "B": [
+        ["茶", "freq", {"reading": "さ", "value": 3}],           # same expr, other reading
+        ["かず", "freq", {"reading": "かず", "value": 1}],        # see おかず in A
+        ["茶碗", "freq", {"reading": "ちゃわん", "value": 21}],    # prefix candidate for 茶
+        ["煌めく", "freq", {"reading": "きらめく", "value": 5}],
+        ["母の日", "freq", {"reading": "ははのひ", "value": 9}],
+        ["学校", "freq", {"reading": "がっこう", "value": 6}],
+    ],
+    "C": [
+        ["ぎりぎり", "freq", {"reading": "ぎりぎり", "value": 8, "displayValue": "8㋕"}],
+        ["お金", "freq", {"reading": "おかね", "value": 15}],     # kanji strip, no bare 金 here
+        ["茶", "freq", {"reading": "ちゃ", "value": 4}],          # expr+reading also present in A
+        ["日", "freq", {"reading": "ひ", "value": 2}],
+    ],
+    "D": [
+        ["茶", "freq", {"value": 33}],                           # no reading at all
+        ["手", "freq", {"reading": "て", "value": 1}],
+        ["煌燦めく", "freq", {"reading": "きらめく", "value": 2}],
+    ],
+}
+
+_EQUIV_PROBES = [
+    ("茶", "ちゃ"), ("茶", "さ"), ("茶", "ばんちゃ"),    # hit, other dict's reading, unknown
+    ("お茶", "おちゃ"), ("金", "かね"), ("茶碗", "ちゃわん"),
+    ("煌めく", "きらめく"), ("煌く", "きらめく"), ("煌燦めく", "きらめく"),
+    ("手", "て"), ("日", "ひ"), ("学校", "がっこう"), ("中学校", "ちゅうがっこう"),
+    ("ぎりぎり", "ぎりぎり"), ("ギリギリ", "ギリギリ"),
+    ("かず", "かず"), ("おかず", "おかず"),                # cross-dict honorific fold gate
+    ("存在しない", "そんざいしない"), ("", ""),            # absent everywhere, empty
+]
+
+_FLAG_NAMES = ("combine_word_forms", "prefix_matching", "suffix_matching",
+               "variant_matching", "honorific_folding")
+
+
+def _all_flag_combos():
+    for bits in itertools.product((False, True), repeat=len(_FLAG_NAMES)):
+        yield dict(zip(_FLAG_NAMES, bits))
+
+
+def _assert_merged_matches_per_dict(names, raw_by_name, normalize_kana):
+    """For every flag combination, the merged total must equal the per-dict sum."""
+    for flags in _all_flag_combos():
+        merged = CombinedOccurrenceIndex(list(names), normalize_kana=normalize_kana, **flags)
+        per_dict = [
+            _build_index_from_raw(raw_by_name[n], normalize_kana=normalize_kana,
+                                  honorific_folding=flags["honorific_folding"])
+            for n in names
+        ]
+        for expression, reading in _EQUIV_PROBES:
+            expr, read = expression, reading
+            if normalize_kana:  # occurrence_count folds before either path sees the strings
+                expr, read = dm.to_hiragana(expr), dm.to_hiragana(read)
+            card_kanji = dm._kanji_skeleton(expr) if flags["variant_matching"] else None
+            expected = sum(ix.get_total(expr, read, card_kanji=card_kanji, **flags)
+                           for ix in per_dict)
+            assert merged.total(expr, read) == expected, (
+                f"merged != per-dict sum for {expression!r}/{reading!r} "
+                f"normalize_kana={normalize_kana} flags={flags}"
+            )
+
+
+@pytest.fixture
+def equiv_dicts(monkeypatch):
+    def fake_get_occurrence_index(name, normalize_kana, honorific_folding):
+        return _build_index_from_raw(_EQUIV_DICTS[name], normalize_kana=normalize_kana,
+                                     honorific_folding=honorific_folding)
+
+    monkeypatch.setattr(dm, "get_occurrence_index", fake_get_occurrence_index)
+    return _EQUIV_DICTS
+
+
+@pytest.mark.parametrize("normalize_kana", [False, True])
+def test_merged_index_equals_per_dict_sum(equiv_dicts, normalize_kana):
+    _assert_merged_matches_per_dict(sorted(equiv_dicts), equiv_dicts, normalize_kana)
+
+
+def test_merged_index_equals_per_dict_sum_for_every_subset(equiv_dicts):
+    """Pairs and triples too — a fold bug can hide behind one particular dict combination."""
+    names = sorted(equiv_dicts)
+    for size in (2, 3):
+        for subset in itertools.combinations(names, size):
+            _assert_merged_matches_per_dict(subset, equiv_dicts, normalize_kana=False)
+
+
+def test_merged_honorific_respects_each_dicts_own_vocabulary_gate(monkeypatch):
+    """The sharpest fold trap, pinned on its own.
+
+    _honorific_fold_allowed lets a KANA-only strip through only when that dictionary itself
+    knows the stripped form. Here おかず lives in X and かず only in Y: per-dict, X may not fold
+    (X has never heard of かず) and Y has no おかず to fold, so かず earns nothing extra.
+    Rebuilding the honorific map from the MERGED vocabulary would wrongly credit it 50."""
+    raw = {
+        "X": [["おかず", "freq", {"reading": "おかず", "value": 50}]],
+        "Y": [["かず", "freq", {"reading": "かず", "value": 1}]],
+    }
+
+    def fake_get_occurrence_index(name, normalize_kana, honorific_folding):
+        return _build_index_from_raw(raw[name], normalize_kana=normalize_kana,
+                                     honorific_folding=honorific_folding)
+
+    monkeypatch.setattr(dm, "get_occurrence_index", fake_get_occurrence_index)
+
+    merged = CombinedOccurrenceIndex(["X", "Y"], honorific_folding=True)
+    assert merged.total("かず", "かず") == 1  # おかず's 50 must NOT fold down into it
+    _assert_merged_matches_per_dict(["X", "Y"], raw, normalize_kana=False)
+
+
+@pytest.mark.skipif(not dm.get_all_dict_names(),
+                    reason="no dictionaries installed in user_files/")
+def test_merged_index_equals_per_dict_sum_on_real_dicts():
+    """Opt-in: the same guarantee against whatever real dictionaries are installed, whose entry
+    shapes are far messier than any fixture. Skipped in a clean checkout (user_files/ is
+    gitignored)."""
+    names = dm.get_all_dict_names()[:4]
+    if len(names) < 2:
+        pytest.skip("need at least two dictionaries to exercise the fold")
+
+    probes = list(dm.get_occurrence_index(names[-1], False, False).expr_reading_to_count)[:150]
+
+    for flags in _all_flag_combos():
+        merged = CombinedOccurrenceIndex(names, **flags)
+        per_dict = [dm.get_occurrence_index(n, False, flags["honorific_folding"]) for n in names]
+        for expr, read in probes:
+            card_kanji = dm._kanji_skeleton(expr) if flags["variant_matching"] else None
+            expected = sum(ix.get_total(expr, read, card_kanji=card_kanji, **flags)
+                           for ix in per_dict)
+            assert merged.total(expr, read) == expected, (expr, read, flags)

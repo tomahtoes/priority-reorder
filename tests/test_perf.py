@@ -405,12 +405,13 @@ def test_variant_total_scales_with_reading_bucket_not_index_size(capsys):
         )
 
 
-def test_card_skeleton_computed_once_per_card_not_once_per_dict(monkeypatch):
-    """CombinedOccurrenceIndex derives the card's kanji skeleton ONCE and passes it down, instead of
-    every per-dict variant_total recomputing it — a third of the variant scan time at 10 dicts.
+def test_skeleton_work_does_not_scale_with_dict_count(monkeypatch):
+    """No kanji-skeleton work may scale with the number of dictionaries.
 
-    Counts only calls made with the card expression: variant_total legitimately skeletonizes each
-    surviving candidate too (the index caches none), so a naive total-call counter would not be 1.
+    CombinedOccurrenceIndex folds every dict into ONE index, so a lookup derives the card's
+    skeleton once and each merged candidate's skeleton once — both independent of N. The old
+    per-dict loop derived the card skeleton once (hoisted) but every candidate N times, once
+    per dict; that N factor is what the merge removes.
     """
     N = 10
     names = [str(i) for i in range(N)]
@@ -433,13 +434,13 @@ def test_card_skeleton_computed_once_per_card_not_once_per_dict(monkeypatch):
     monkeypatch.setattr(dm, "_kanji_skeleton", counting_skeleton)
 
     combined = dm.CombinedOccurrenceIndex(names, variant_matching=True)
-    assert combined.get("煌めく", "きらめく") == 5 * N  # credited once per dict
-    assert calls.count("煌めく") == 1, "card skeleton must be hoisted out of the per-dict loop"
-    assert calls.count("煌く") == N   # candidates are still derived per dict, by design
+    assert combined.total("煌めく", "きらめく") == 5 * N  # every dict's count still credited
+    assert calls.count("煌めく") == 1, "card skeleton must be derived once per card"
+    assert calls.count("煌く") == 1, "merged candidates must not be re-skeletonized per dict"
 
-    # a memoized repeat must not re-derive it either (the hoist sits after the memo check)
+    # a memoized repeat must not re-derive anything (the hoist sits after the memo check)
     calls.clear()
-    assert combined.get("煌めく", "きらめく") == 5 * N
+    assert combined.total("煌めく", "きらめく") == 5 * N
     assert calls == []
 
 

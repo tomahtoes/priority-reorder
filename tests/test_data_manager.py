@@ -275,8 +275,14 @@ def test_occ_predicate_forwards_all_matching_flags(fake_col, monkeypatch):
     cfg = Config(kana_normalization=True, combine_word_forms=True, prefix_matching=True,
                  suffix_matching=True, variant_matching=True, honorific_folding=True)
     DataManager(cfg).get_cards_from_search("deck:X occurrences:D>5")
-    assert seen == dict(normalize_kana=True, combine_word_forms=True, prefix_matching=True,
-                        suffix_matching=True, variant_matching=True, honorific_folding=True)
+    matching_flags = {k: v for k, v in seen.items() if k not in ("prefolded", "card_kanji")}
+    assert matching_flags == dict(normalize_kana=True, combine_word_forms=True,
+                                  prefix_matching=True, suffix_matching=True,
+                                  variant_matching=True, honorific_folding=True)
+    # The note is folded and skeletonized once per run and handed down, so occurrence_count
+    # must be told not to redo either (see DataManager._note_derived).
+    assert seen["prefolded"] is True
+    assert seen["card_kanji"] == "煌"
 
 
 def test_kanji_count_cache_is_keyed_by_target(fake_col, monkeypatch):
@@ -344,7 +350,7 @@ def test_custom_seen_term_fast_path_filters_via_window(fake_col, monkeypatch):
     built = []
     monkeypatch.setattr(
         dmod.seen_manager, "get_seen_window",
-        lambda n, kana, honorific, variant: built.append((n, kana, honorific, variant)) or window,
+        lambda n, kana, honorific, variant, today=None: built.append((n, kana, honorific, variant)) or window,
     )
 
     cfg = Config(prefix_matching=True)
@@ -379,7 +385,7 @@ def test_seen_contains_memoized_per_note(fake_col, monkeypatch):
         rows=[_row(1, 10, "下駄", "げた", "50"), _row(2, 10, "下駄", "げた", "50")],
     )
     window = _FakeWindow(present={"下駄"})
-    monkeypatch.setattr(dmod.seen_manager, "get_seen_window", lambda n, k, h, v: window)
+    monkeypatch.setattr(dmod.seen_manager, "get_seen_window", lambda n, k, h, v, today=None: window)
 
     dm = DataManager(Config())
     r1 = dm.get_cards_from_search("deck:X seen:3")
@@ -394,7 +400,7 @@ def test_seen_memo_keyed_by_n(fake_col, monkeypatch):
         rows=[_row(1, 10, "下駄", "げた", "50")],
     )
     window = _FakeWindow(present={"下駄"})
-    monkeypatch.setattr(dmod.seen_manager, "get_seen_window", lambda n, k, h, v: window)
+    monkeypatch.setattr(dmod.seen_manager, "get_seen_window", lambda n, k, h, v, today=None: window)
 
     dm = DataManager(Config())
     dm.get_cards_from_search("deck:X seen:2")
@@ -462,3 +468,96 @@ def test_stage_ms_accumulates_substage_keys(fake_col):
     for key in ("fc", "load", "filter_freq"):
         assert key in dm.stage_ms, key
         assert dm.stage_ms[key] >= 0.0
+
+
+# --- nested seen windows ----------------------------------------------------
+#
+# seen:1 ⊆ seen:7 ⊆ seen:30, and SeenWindow.contains is monotone in the underlying union
+# sets, so the largest window decides every miss in one probe. These pin both halves: that
+# the short-circuit actually fires, and that it never changes an answer.
+
+class _NestedWindows:
+    """Stands in for seen_manager, serving genuinely nested windows and counting probes."""
+
+    def __init__(self, by_level):
+        self.windows = {n: _FakeWindow(present=p) for n, p in by_level.items()}
+        self.todays = []
+
+    def get_seen_window(self, n, kana, honorific, variant, today=None):
+        self.todays.append(today)
+        return self.windows[n]
+
+    def probes(self, n):
+        return len(self.windows[n].calls)
+
+
+def _nested(monkeypatch, by_level):
+    fake = _NestedWindows(by_level)
+    monkeypatch.setattr(dmod.seen_manager, "get_seen_window", fake.get_seen_window)
+    return fake
+
+
+def test_seen_miss_at_largest_window_settles_every_smaller_level(fake_col, monkeypatch):
+    # 茶 is in no window. The seen:30 probe alone must decide it — seen:1 is never consulted.
+    fake_col(
+        find_results={"(deck:X) is:new": [1]},
+        rows=[_row(1, 10, "茶", "ちゃ", "50")],
+    )
+    fake = _nested(monkeypatch, {1: {"下駄"}, 30: {"下駄"}})
+
+    cfg = Config(priority_search=["deck:X seen:1", "deck:X seen:30"])
+    dm = DataManager(cfg)
+    assert [c.card_id for c in dm.get_cards_from_search("deck:X seen:1").cards] == []
+    assert [c.card_id for c in dm.get_cards_from_search("deck:X seen:30").cards] == []
+
+    assert fake.probes(30) == 1, "the largest window is probed once"
+    assert fake.probes(1) == 0, "a miss at the top must short-circuit every smaller level"
+
+
+def test_seen_hit_at_smaller_window_still_evaluated(fake_col, monkeypatch):
+    # 下駄 is in both windows: the top probe cannot settle a hit, so seen:1 is still checked.
+    fake_col(
+        find_results={"(deck:X) is:new": [1]},
+        rows=[_row(1, 10, "下駄", "げた", "50")],
+    )
+    fake = _nested(monkeypatch, {1: {"下駄"}, 30: {"下駄"}})
+
+    cfg = Config(priority_search=["deck:X seen:1", "deck:X seen:30"])
+    dm = DataManager(cfg)
+    assert [c.card_id for c in dm.get_cards_from_search("deck:X seen:1").cards] == [1]
+    assert fake.probes(30) == 1
+    assert fake.probes(1) == 1
+
+
+def test_seen_short_circuit_preserves_every_answer(fake_col, monkeypatch):
+    # The whole point: identical results to evaluating each window independently.
+    # 下駄 seen recently, 茶 seen only in the wider window, 犬 never seen.
+    fake_col(
+        find_results={"(deck:X) is:new": [1, 2, 3]},
+        rows=[_row(1, 10, "下駄", "げた", "50"), _row(2, 20, "茶", "ちゃ", "60"),
+              _row(3, 30, "犬", "いぬ", "70")],
+    )
+    _nested(monkeypatch, {1: {"下駄"}, 30: {"下駄", "茶"}})
+
+    cfg = Config(priority_search=["deck:X seen:1", "deck:X seen:30"])
+    dm = DataManager(cfg)
+    assert [c.card_id for c in dm.get_cards_from_search("deck:X seen:1").cards] == [1]
+    assert [c.card_id for c in dm.get_cards_from_search("deck:X seen:30").cards] == [1, 2]
+
+
+def test_seen_levels_share_one_reference_date(fake_col, monkeypatch):
+    # Nesting only holds for windows resolved against the same 'today'; two independent
+    # today_date() calls could straddle the rollover hour and break monotonicity.
+    fake_col(
+        find_results={"(deck:X) is:new": [1]},
+        rows=[_row(1, 10, "下駄", "げた", "50")],
+    )
+    fake = _nested(monkeypatch, {1: {"下駄"}, 7: {"下駄"}, 30: {"下駄"}})
+
+    cfg = Config(priority_search=["deck:X seen:1", "deck:X seen:7", "deck:X seen:30"])
+    dm = DataManager(cfg)
+    dm.get_cards_from_search("deck:X seen:7")
+
+    assert len(fake.todays) == 3          # every configured level resolved together
+    assert len(set(fake.todays)) == 1     # against one shared reference date
+    assert fake.todays[0] is not None

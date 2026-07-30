@@ -6,27 +6,27 @@ from anki.utils import ids2str
 try:  # inside Anki: isolated package namespace
     from .models import Card, NoteData
     from .config_manager import Config
-    from .utils import parse_sort_value, parse_comparator
+    from .utils import parse_sort_value, parse_comparator, to_hiragana
     from .search import (
         has_custom_term,
         parse_custom_terms,
         _strip_custom_terms,
         _candidate_restriction_allowed,
     )
-    from .dictionary_manager import expand_dict_names, occurrence_count
+    from .dictionary_manager import expand_dict_names, occurrence_count, _kanji_skeleton
     from .kanji_manager import get_kanji_manager
     from . import seen_manager
 except ImportError:  # pytest / flat-import context
     from models import Card, NoteData
     from config_manager import Config
-    from utils import parse_sort_value, parse_comparator
+    from utils import parse_sort_value, parse_comparator, to_hiragana
     from search import (
         has_custom_term,
         parse_custom_terms,
         _strip_custom_terms,
         _candidate_restriction_allowed,
     )
-    from dictionary_manager import expand_dict_names, occurrence_count
+    from dictionary_manager import expand_dict_names, occurrence_count, _kanji_skeleton
     from kanji_manager import get_kanji_manager
     import seen_manager
 
@@ -84,7 +84,15 @@ class DataManager:
         self._occ_count_cache: Dict[Tuple[Tuple[str, ...], int], int] = {}  # (dicts, nid) -> count
         self._kanji_count_cache: Dict[Tuple[str, int, int], int] = {}  # (check_type, target, nid) -> count
         self._seen_contains_cache: Dict[Tuple[int, int], bool] = {}   # (n, nid) -> contained
+        # nid -> (folded expression, folded reading, kanji skeleton). Kana folding and skeleton
+        # derivation are per-note constants, but every predicate and every seen window used to
+        # redo them; a card checked by `occurrences:` plus seen:1/7/30 paid four folds.
+        self._note_derived_cache: Dict[int, Tuple[str, str, Optional[str]]] = {}
         self._kanji_manager = None  # lazy
+        # Distinct `seen:N` levels across the whole config, and their windows resolved together
+        # against one reference date — see _seen_windows.
+        self._seen_levels: Optional[List[int]] = None
+        self._seen_window_map: Optional[Dict[int, "seen_manager.SeenWindow"]] = None
         self._note_fp_checked = False  # cross-run cache validated once per run
         # Sub-stage wall-clock accumulators (ms), merged into the reorder timings
         # line. NOT disjoint stages: `load` accumulates across both the
@@ -288,11 +296,39 @@ class DataManager:
             comparator = parse_comparator(op)
             dict_names = expand_dict_names(dict_str)
             dkey = tuple(dict_names)
+            cfg = self.config
+            # Hoisted locals: read once per predicate build, not per card (mirrors seen_pred).
+            normalize_kana = cfg.kana_normalization
+            combine_word_forms = cfg.combine_word_forms
+            prefix_matching = cfg.prefix_matching
+            suffix_matching = cfg.suffix_matching
+            variant_matching = cfg.variant_matching
+            honorific_folding = cfg.honorific_folding
+            cache = self._occ_count_cache
+            derived = self._note_derived
 
             def occ_pred(c: Card) -> bool:
                 if not c.data.expression or not c.data.reading:
                     return False
-                return comparator(self._occ_count(dkey, dict_names, c), thresh)
+                key = (dkey, c.note_id)
+                value = cache.get(key)
+                if value is None:
+                    expression, reading, card_kanji = derived(c)
+                    value = occurrence_count(
+                        dict_names,
+                        expression,
+                        reading,
+                        normalize_kana=normalize_kana,
+                        combine_word_forms=combine_word_forms,
+                        prefix_matching=prefix_matching,
+                        suffix_matching=suffix_matching,
+                        variant_matching=variant_matching,
+                        honorific_folding=honorific_folding,
+                        prefolded=True,
+                        card_kanji=card_kanji,
+                    )
+                    cache[key] = value
+                return comparator(value, thresh)
 
             return occ_pred
 
@@ -327,61 +363,145 @@ class DataManager:
             suffix_matching = cfg.suffix_matching
             variant_matching = cfg.variant_matching
             honorific_folding = cfg.honorific_folding
-            # Resolve the window ONCE per predicate build (one filesystem stat per
-            # day), so the per-card check is a pure in-memory membership lookup.
+            # Resolve every level's window ONCE per run (one filesystem stat per day), so the
+            # per-card check is a pure in-memory membership lookup.
             t0 = time.perf_counter()
-            window = seen_manager.get_seen_window(
-                n, normalize_kana, honorific_folding, variant_matching
-            )
+            windows = self._seen_windows(n, normalize_kana, honorific_folding, variant_matching)
             self._add_ms("seen_win", t0)
+            levels = self._seen_levels
+            top = levels[-1]
             # Memoized per (n, note id) — the flags are fixed for the run, so
             # they stay out of the key (mirrors _occ_count_cache). If today's
             # seen file is rewritten mid-run, a later predicate build can see a
             # newer window while the memo keeps the earlier answers — accepted,
             # like every other per-run cache here.
             cache = self._seen_contains_cache
-            contains = window.contains
+            derived = self._note_derived
+            query_flags = dict(
+                normalize_kana=normalize_kana,
+                combine_word_forms=combine_word_forms,
+                prefix_matching=prefix_matching,
+                suffix_matching=suffix_matching,
+                variant_matching=variant_matching,
+                honorific_folding=honorific_folding,
+                prefolded=True,
+            )
 
             def seen_pred(c: Card) -> bool:
                 if not c.data.expression:
                     return False
-                key = (n, c.note_id)
-                value = cache.get(key)
-                if value is None:
-                    value = contains(
-                        c.data.expression,
-                        c.data.reading,
-                        normalize_kana=normalize_kana,
-                        combine_word_forms=combine_word_forms,
-                        prefix_matching=prefix_matching,
-                        suffix_matching=suffix_matching,
-                        variant_matching=variant_matching,
-                        honorific_folding=honorific_folding,
+                nid = c.note_id
+                value = cache.get((n, nid))
+                if value is not None:
+                    return value
+                expression, reading, card_kanji = derived(c)
+
+                # Evaluate the LARGEST level first. The windows nest (seen:1 ⊆ seen:7 ⊆
+                # seen:30 — window_dates(today, n) is the last n days from one shared
+                # reference date) and every branch of contains() is a membership test over
+                # union sets, so it is monotone: a miss at the top is a miss at every level
+                # and settles them all in one probe. A hit says nothing about the smaller
+                # windows, so those are still evaluated — but in a new-card backlog misses
+                # are the overwhelming majority, which is where the three-windows-for-the-
+                # price-of-one saving comes from.
+                top_seen = cache.get((top, nid))
+                if top_seen is None:
+                    top_seen = windows[top].contains(
+                        expression, reading, card_kanji=card_kanji, **query_flags
                     )
-                    cache[key] = value
+                    cache[(top, nid)] = top_seen
+                if not top_seen:
+                    for level in levels:
+                        cache[(level, nid)] = False
+                    return False
+                if n == top:
+                    return True
+
+                value = windows[n].contains(
+                    expression, reading, card_kanji=card_kanji, **query_flags
+                )
+                cache[(n, nid)] = value
+                if value:  # seen within n days => seen within any longer window
+                    for level in levels:
+                        if level >= n:
+                            cache[(level, nid)] = True
                 return value
 
             return seen_pred
 
         return lambda c: False
 
-    def _occ_count(self, dkey: Tuple[str, ...], dict_names: List[str], card: Card) -> int:
-        key = (dkey, card.note_id)
-        value = self._occ_count_cache.get(key)
+    def _note_derived(self, card: Card) -> Tuple[str, str, Optional[str]]:
+        """``(expression, reading, kanji skeleton)`` for a note, computed once per run.
+
+        Kana folding and skeleton derivation depend only on the note and on run-fixed config,
+        yet both the occurrence path and every seen window used to redo them per card. The
+        skeleton is derived from the FOLDED expression, which is what both consumers expect
+        (``to_hiragana`` leaves CJK ideographs untouched, so the two agree either way), and is
+        left None when variant matching is off — nothing reads it then."""
+        nid = card.note_id
+        value = self._note_derived_cache.get(nid)
         if value is None:
-            value = occurrence_count(
-                dict_names,
-                card.data.expression,
-                card.data.reading,
-                normalize_kana=self.config.kana_normalization,
-                combine_word_forms=self.config.combine_word_forms,
-                prefix_matching=self.config.prefix_matching,
-                suffix_matching=self.config.suffix_matching,
-                variant_matching=self.config.variant_matching,
-                honorific_folding=self.config.honorific_folding,
-            )
-            self._occ_count_cache[key] = value
+            expression = card.data.expression
+            reading = card.data.reading
+            if self.config.kana_normalization:
+                expression = to_hiragana(expression)
+                reading = to_hiragana(reading)
+            skeleton = _kanji_skeleton(expression) if self.config.variant_matching else None
+            value = (expression, reading, skeleton)
+            self._note_derived_cache[nid] = value
         return value
+
+    def _seen_level_set(self, n: int) -> List[int]:
+        """Every distinct positive ``seen:N`` in the configured searches, ascending.
+
+        Scanned from the config rather than accumulated as predicates are built, because the
+        short-circuit needs the largest level up front — the first search to carry a `seen:`
+        term must already know whether a bigger window exists elsewhere in the config."""
+        if self._seen_levels is None:
+            queries: List[str] = []
+            raw = self.config.priority_search
+            if isinstance(raw, str):
+                queries.append(raw)
+            elif raw:
+                queries.extend(q for q in raw if isinstance(q, str))
+            if isinstance(self.config.normal_search, str):
+                queries.append(self.config.normal_search)
+
+            levels = set()
+            for query in queries:
+                if not query:
+                    continue
+                try:
+                    for term_kind, term_args, _negated in parse_custom_terms(query):
+                        if term_kind == "seen" and term_args[0] > 0:
+                            levels.add(term_args[0])
+                except Exception:  # a malformed search must not break the reorder
+                    continue
+            levels.add(n)  # the level being built, even if the scan somehow missed it
+            self._seen_levels = sorted(levels)
+        elif n not in self._seen_levels:  # defensive: a caller outside the configured searches
+            self._seen_levels = sorted(set(self._seen_levels) | {n})
+            self._seen_window_map = None  # force a re-resolve that includes the new level
+        return self._seen_levels
+
+    def _seen_windows(self, n: int, normalize_kana: bool, honorific_folding: bool,
+                      variant_matching: bool) -> Dict[int, "seen_manager.SeenWindow"]:
+        """All configured levels' windows, resolved against ONE reference date.
+
+        Sharing `today` across levels is what makes them nest: resolved independently, two
+        windows straddling the rollover hour could disagree about which day is 'today' and the
+        short-circuit's monotonicity assumption would not hold."""
+        levels = self._seen_level_set(n)
+        if self._seen_window_map is None:
+            today = seen_manager.today_date()
+            self._seen_window_map = {
+                level: seen_manager.get_seen_window(
+                    level, normalize_kana, honorific_folding, variant_matching, today=today
+                )
+                for level in levels
+            }
+        return self._seen_window_map
 
     def _kanji_count(self, check_type: str, target: int, card: Card, km) -> int:
         key = (check_type, target, card.note_id)

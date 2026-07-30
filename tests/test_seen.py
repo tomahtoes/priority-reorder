@@ -410,3 +410,48 @@ def test_resolve_seen_memoizes_full_scan_within_signature(monkeypatch):
     search.resolve_seen(7, candidate_nids=None)
 
     assert scans["n"] == 1  # second identical full scan served from _seen_cache
+
+
+# --- merged-window cache growth ---------------------------------------------
+#
+# Today's seen dict is rewritten continuously while immersing, and every rewrite yields a new
+# window signature. The cache must REPLACE the window for a given day set, not accumulate one
+# per rewrite: a seen:30 window with variants and its lazy views measures ~6.7 MB, so a
+# FIFO-only bound let several hundred MB of dead windows pile up over a session.
+
+def test_window_cache_replaces_rather_than_accumulates_on_rewrite(monkeypatch):
+    monkeypatch.setattr(seen_manager.dm, "_load_term_meta_raw", lambda name: None)
+    seen_manager.clear_cache()
+    today = date(2026, 7, 30)
+
+    mtime = {"v": 100.0}
+    monkeypatch.setattr(seen_manager, "_source_mtime", lambda folder: mtime["v"])
+
+    windows = []
+    for tick in range(12):  # twelve saves of today's dict during one immersion session
+        mtime["v"] = 100.0 + tick
+        windows.append(seen_manager.get_seen_window(7, today=today))
+
+    assert len(seen_manager._window_cache) == 1, "each rewrite must replace the stale window"
+    assert windows[-1] is seen_manager._window_cache[next(iter(seen_manager._window_cache))]
+    # Distinct objects per rewrite, i.e. the cache really did rebuild rather than hand back a
+    # stale window — the growth fix must not turn into a correctness bug.
+    assert windows[0] is not windows[-1]
+
+
+def test_window_cache_keeps_distinct_levels_and_flags(monkeypatch):
+    monkeypatch.setattr(seen_manager.dm, "_load_term_meta_raw", lambda name: None)
+    seen_manager.clear_cache()
+    monkeypatch.setattr(seen_manager, "_source_mtime", lambda folder: 100.0)
+    today = date(2026, 7, 30)
+
+    a = seen_manager.get_seen_window(1, today=today)
+    b = seen_manager.get_seen_window(7, today=today)
+    c = seen_manager.get_seen_window(30, today=today)
+    d = seen_manager.get_seen_window(7, variant_matching=True, today=today)
+
+    # Different day sets and different BUILD flags are genuinely different windows; pruning
+    # keys on both, so none of these may evict another.
+    assert len({id(a), id(b), id(c), id(d)}) == 4
+    assert len(seen_manager._window_cache) == 4
+    assert seen_manager.get_seen_window(7, today=today) is b  # still cached, still served

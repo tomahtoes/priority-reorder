@@ -1,13 +1,13 @@
 # Changelog
 
-## 2026-07-29
+## 2026-07-30
 - New `variant_matching` occurrence option — credits a card with the counts of dictionary entries that are another *written form* of the same word, differing in okurigana or kanji spelling. An entry counts when its reading matches the card's and the two forms' kanji nest, which keeps same-reading homophones apart; kana-only spellings never match here. Applies to `occurrences:` and `seen:` alike.
 - New `suffix_matching` occurrence option — the mirror of `prefix_matching` at the *end* of a word. A card is credited with the counts of dictionary entries that end with its expression, so a head morpheme aggregates its family: `学校` ← `小学校`/`中学校`, and head-final compound verbs/adjectives like `出す` ← `思い出す` or `強い` ← `心強い`. Restricted to real words (≥ 2 characters with a kanji); a bare single kanji matches only via reading-validated particle phrases (`母の日` credits `日`). Applies to `occurrences:` and `seen:` alike.
 - `kanji:new` now takes an optional per-kanji target: `kanji:new[3]>=1` matches words with at least one kanji that fewer than 3 of your learned words contain. A kanji counts as "new" until the target number of learned words contain it; plain `kanji:new` is unchanged (equivalent to `kanji:new[1]`).
 - `prefix_matching` now also credits single-kanji cards from particle-linked phrase entries (e.g. `手`/`て` gains `手を貸す`'s count) when the phrase's reading confirms the card's reading. Applies to `occurrences:` and `seen:` alike.
 - Summary window look-and-feel improvements: flatter, more compact layout with clearer rows.
 - New `length` search filter — e.g. `length>=3` for words 3 or more characters long, `length=1` for single-character words.
-- Minor changes to improve reorder speeds.
+- Performance enhancements and lower memory use.
 
 ## 2026-06-19
 - New `seen:N` search term — prioritize words from your recent *daily* occurrence dictionaries (in `user_files/_seen/<YYYY-MM-DD>/`). Matches words appearing in any of the last N days ("seen at all"). Works in the Browse bar, the collection API (AnkiConnect), and config, and honors the occurrence options (prefix matching, etc.).

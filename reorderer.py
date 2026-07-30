@@ -1,3 +1,4 @@
+import itertools
 import time
 from typing import List, Optional, Set, Tuple, Dict
 from aqt import mw
@@ -61,12 +62,10 @@ class PriorityReorderer:
 
         summaries = self._init_summaries(priority_defs, raw_queries)
 
-        priority_matches, all_candidate_ids, card_id_to_note = self._find_matches(priority_defs, summaries)
+        priority_matches, all_candidate_ids = self._find_matches(priority_defs, summaries)
         mark("find_matches")
 
         all_cards_map = self.data_manager.get_cards(all_candidate_ids)
-        for cid, card in all_cards_map.items():
-            card_id_to_note[cid] = card.note_id
         mark("load_cards")
 
         priority_buckets, normal_list = self._assign_initial_buckets(priority_defs, priority_matches, all_candidate_ids, all_cards_map)
@@ -134,10 +133,9 @@ class PriorityReorderer:
         self,
         priority_defs: List[PriorityDef],
         summaries: List[PrioritySearchSummary],
-    ) -> Tuple[Dict[int, Set[int]], Set[int], Dict[int, int]]:
+    ) -> Tuple[Dict[int, Set[int]], Set[int]]:
         priority_matches: Dict[int, Set[int]] = {}
         all_ids: Set[int] = set()
-        card_id_to_note: Dict[int, int] = {}
 
         for i, (anki_query, _) in enumerate(priority_defs):
             # get_cards_from_search returns the already-filtered match set: a
@@ -145,8 +143,6 @@ class PriorityReorderer:
             # part once and post-filtering the custom terms in Python; only
             # disjunctive/grouped queries fall through to the patched find_cards.
             result = self.data_manager.get_cards_from_search(anki_query)
-            for c in result.cards:
-                card_id_to_note[c.card_id] = c.note_id
 
             matched_ids = {c.card_id for c in result.cards}
             priority_matches[i] = matched_ids
@@ -155,18 +151,16 @@ class PriorityReorderer:
             all_ids.update(matched_ids)
 
         normal_cards = self.data_manager.get_cards_from_search(self.config.normal_search).cards
-        for c in normal_cards:
-            card_id_to_note[c.card_id] = c.note_id
         all_ids.update(c.card_id for c in normal_cards)
 
-        return priority_matches, all_ids, card_id_to_note
+        return priority_matches, all_ids
 
     def _assign_initial_buckets(self, defs: List[PriorityDef], matches: Dict[int, Set[int]], all_ids: Set[int], card_map: Dict[int, Card]) -> Tuple[List[List[Card]], List[Card]]:
         priority_buckets = []
+        matched_ids = set().union(*matches.values())
 
         if self.config.priority_search_mode == "mix":
-            combined_ids = set().union(*matches.values())
-            bucket = [card_map[cid] for cid in combined_ids if cid in card_map]
+            bucket = [card_map[cid] for cid in matched_ids if cid in card_map]
             priority_buckets.append(bucket)
         else:
             for i in range(len(defs)):
@@ -174,7 +168,7 @@ class PriorityReorderer:
                 bucket = [card_map[cid] for cid in ids if cid in card_map]
                 priority_buckets.append(bucket)
 
-        normal_ids = all_ids - set().union(*matches.values())
+        normal_ids = all_ids - matched_ids
         normal_list = [card_map[cid] for cid in normal_ids if cid in card_map]
 
         return priority_buckets, normal_list
@@ -332,7 +326,7 @@ class PriorityReorderer:
         final_ids = []
         seen = set()
 
-        for card in priority_queue + normal_list:
+        for card in itertools.chain(priority_queue, normal_list):
             if card.card_id not in seen:
                 final_ids.append(card.card_id)
                 seen.add(card.card_id)

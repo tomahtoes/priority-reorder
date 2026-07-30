@@ -188,7 +188,7 @@ class SeenWindow:
             for particle, entry_reading in self._suffix_phrase_by_last.get(expression, ())
         )
 
-    def _variant_present(self, expression: str, reading: str) -> bool:
+    def _variant_present(self, expression: str, reading: str, card_kanji: Optional[str] = None) -> bool:
         """Boolean analogue of ``OccurrenceIndex.variant_total``: True if some entry with the
         identical reading is another written form of the same word (kanji sets nest — see
         ``dm._variant_kanji_compatible``).
@@ -205,8 +205,14 @@ class SeenWindow:
 
         Reads ``variant_entries``, which ``build_seen_day`` only fills when built with
         ``variant_matching`` — so this answers False on a window built without it. Callers pass the
-        one config flag to both ``get_seen_window`` and ``contains``, keeping the two in step."""
-        card_kanji = dm._kanji_skeleton(expression)
+        one config flag to both ``get_seen_window`` and ``contains``, keeping the two in step.
+
+        ``card_kanji`` is an optional precomputed ``_kanji_skeleton(expression)``, mirroring
+        ``OccurrenceIndex.variant_total``: a card checked against several windows would otherwise
+        re-derive the identical skeleton once per window. It must always equal what this function
+        would derive itself; it can never change the result. Left None, it is derived here."""
+        if card_kanji is None:
+            card_kanji = dm._kanji_skeleton(expression)
         if not card_kanji or not reading:
             return False
         if self._variant_by_reading is None:
@@ -231,10 +237,18 @@ class SeenWindow:
         suffix_matching: bool = False,
         variant_matching: bool = False,
         honorific_folding: bool = False,
+        prefolded: bool = False,
+        card_kanji: Optional[str] = None,
     ) -> bool:
         """Whether ``(expression, reading)`` was seen anywhere in the window. Pure in-memory —
-        safe to call once per note."""
-        if normalize_kana:
+        safe to call once per note.
+
+        ``prefolded`` says the caller already applied ``to_hiragana`` to both strings, so the
+        fold here would be a pure re-allocation. ``card_kanji`` is a precomputed skeleton passed
+        through to ``_variant_present``. Both are optimizations for callers that evaluate one
+        card against several windows (or against both the occurrence and seen paths); neither
+        can change the answer. See ``DataManager._note_derived``."""
+        if normalize_kana and not prefolded:
             expression = to_hiragana(expression)
             reading = to_hiragana(reading)
         if expression in self.exprs:
@@ -255,7 +269,7 @@ class SeenWindow:
                 return True
             if self._suffix_phrase_present(expression, reading):
                 return True
-        if variant_matching and self._variant_present(expression, reading):
+        if variant_matching and self._variant_present(expression, reading, card_kanji):
             return True
         if honorific_folding:
             if expression in self.honorific_stripped:
@@ -417,8 +431,16 @@ def _merge_seen_days(days) -> "SeenWindow":
     return SeenWindow(exprs, honorific, phrases, suffix_phrases, variants)
 
 
-# Merged-window cache: signature (per-day (folder, mtime) + build flags) -> SeenWindow. Bounded
-# FIFO; the per-day _day_cache underneath does the actual file parsing.
+# Merged-window cache: signature (per-day (folder, mtime) + build flags) -> SeenWindow. Keyed on
+# mtimes so it self-invalidates, and pruned by folder set (see get_seen_window) so a window is
+# REPLACED rather than accumulated when a day's file is rewritten. The per-day _day_cache
+# underneath does the actual file parsing.
+#
+# Pruning is what keeps this bounded in practice: today's seen dict is rewritten repeatedly while
+# immersing, and each rewrite yields a new signature. Without pruning every stale window stayed
+# resident (holding its own copies of the union sets — a seen:30 window with variants and its
+# lazy views measures ~6.7 MB), so the cap alone allowed several hundred MB of dead windows. The
+# cap remains only as a backstop for configs with many distinct seen:N values.
 _WINDOW_CACHE_CAP = 64
 _window_cache: Dict[Tuple, "SeenWindow"] = {}
 
@@ -464,6 +486,15 @@ def get_seen_window(
         return cached
     days = [_seen_day_for(f, m, normalize_kana, honorific_folding, variant_matching) for f, m in zip(folders, mtimes)]
     window = _merge_seen_days(days)
+
+    # Drop any window built over these same days and build flags at an older set of mtimes: a
+    # rewrite of today's dict must REPLACE its windows, not stack a fresh one beside every
+    # previous version. Mirrors the stale-entry prune in _seen_day_for.
+    identity = (tuple(folders),) + sig[-3:]
+    for stale in [k for k in _window_cache
+                  if (tuple(f for f, _m in k[:-3]),) + k[-3:] == identity]:
+        del _window_cache[stale]
+
     if len(_window_cache) >= _WINDOW_CACHE_CAP:
         _window_cache.pop(next(iter(_window_cache)))
     _window_cache[sig] = window

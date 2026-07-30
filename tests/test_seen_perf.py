@@ -257,7 +257,6 @@ def test_seen_count_vs_boolean_benchmark(capsys, tmp_path):
             day_indices, c_build = _timed(lambda: [
                 dm._build_index_from_raw(
                     d, normalize_kana=flags["normalize_kana"],
-                    prefix_matching=flags["prefix_matching"],
                     honorific_folding=flags["honorific_folding"],
                 ) for d in days_raw
             ])
