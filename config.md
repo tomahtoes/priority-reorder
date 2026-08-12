@@ -90,7 +90,7 @@
 
 ### `prefix_matching` (bool)
 - **Description**: Also credits a card with the counts of longer dict entries that **start with** its expression (≥ 2 chars). Card `彫刻` (5) picks up `彫刻家` (100) + `彫刻品` (30) → 135.
-- **Single kanji**: excluded from the bare rule; credited only via reading-validated particle phrases — `手を貸す`/てをかす credits `手`/て, not `手`/しゅ (particles `を が の に で は も へ と`).
+- **Single kanji**: excluded from the bare rule; credited only via reading-validated particle entries — `手を貸す`/てをかす and `俗に`/ぞくに credit `手`/て and `俗`/ぞく, but not `手`/しゅ (particles `を が の に で は も へ と`; anything after the particle is optional).
 - **Default**: `false`
 
 ### `suffix_matching` (bool)

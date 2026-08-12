@@ -16,11 +16,13 @@ _PHRASE_PARTICLES = frozenset("をがのにではもへと")
 
 def _is_phrase_entry(expression: str, reading: Optional[str]) -> bool:
     """Structural test for the single-kanji phrase rule: kanji head, whitelisted
-    particle second, non-empty tail, and a reading to validate against. Shared
-    with seen_manager.build_seen_day so the counting and boolean sides can't drift."""
+    particle second, and a reading to validate against. The tail is OPTIONAL — a bare
+    'X<particle>' adverbial (俗に, 特に, 既に) is as much a use of X as 'X<particle><tail>'
+    is, and requiring a tail was the only thing keeping those out. Shared with
+    seen_manager.build_seen_day so the counting and boolean sides can't drift."""
     return (
         bool(reading)
-        and len(expression) >= 3
+        and len(expression) >= 2
         and expression[1] in _PHRASE_PARTICLES
         and is_kanji(expression[0])
     )
@@ -200,11 +202,11 @@ class OccurrenceIndex:
         self._phrase_index = index
 
     def single_kanji_phrase_total(self, expression: str, reading: str) -> int:
-        """Phrase credit for a single-kanji card: sums entries 'X<particle><tail>'
-        whose reading starts with the card's reading + the particle, validating
-        that X is read in-context as the card reads it (手を貸す/てをかす credits
-        手/て but not 手/しゅ). Complements prefix_total, which gates out
-        single-character expressions entirely."""
+        """Phrase credit for a single-kanji card: sums entries 'X<particle>' with an
+        optional tail, whose reading starts with the card's reading + the particle,
+        validating that X is read in-context as the card reads it (手を貸す/てをかす and
+        俗に/ぞくに credit 手/て and 俗/ぞく, but 手/しゅ gets nothing). Complements
+        prefix_total, which gates out single-character expressions entirely."""
         if len(expression) != 1 or not reading or not is_kanji(expression):
             return 0
         self._ensure_phrase_index()

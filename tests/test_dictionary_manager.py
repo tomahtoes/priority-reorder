@@ -275,11 +275,17 @@ def test_phrase_total_reading_validation_excludes_mismatches():
     assert idx.get_total("積", "つ", prefix_matching=True) == 6
 
 
-def test_phrase_total_requires_non_empty_tail():
+def test_phrase_total_credits_bare_particle_form():
     idx = OccurrenceIndex()
-    idx.add("最も", "もっとも", 12)
-    # reading would validate (もっとも starts with もっと+も) but there is no tail
-    assert idx.get_total("最", "もっと", prefix_matching=True) == 0
+    idx.add("俗", "ぞく", 3)
+    idx.add("俗に", "ぞくに", 120)        # bare 'X<particle>' — the tail is optional
+    idx.add("俗に言う", "ぞくにいう", 40)  # ...and a tailed phrase still counts alongside it
+    idx.add("特に", "とくに", 100)
+    assert idx.get_total("俗", "ぞく") == 3
+    assert idx.get_total("俗", "ぞく", prefix_matching=True) == 163
+    assert idx.get_total("特", "とく", prefix_matching=True) == 100
+    # the reading gate is still what decides which head a bare form credits
+    assert idx.get_total("特", "しょく", prefix_matching=True) == 0
 
 
 def test_phrase_total_requires_kanji_head_and_reading():

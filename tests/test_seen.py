@@ -159,6 +159,14 @@ def test_seen_window_single_kanji_phrase():
     assert not window.contains("手", "", prefix_matching=True)      # nothing to validate
 
 
+def test_seen_window_bare_particle_form():
+    # the carve-out's tail is optional: a bare 俗に day marks 俗/ぞく seen
+    window = _build_window([[["俗に", "freq", {"reading": "ぞくに", "frequency": {"value": 5}}]]])
+    assert not window.contains("俗", "ぞく")
+    assert window.contains("俗", "ぞく", prefix_matching=True)
+    assert not window.contains("俗", "しゅ", prefix_matching=True)  # reading gate
+
+
 def test_seen_window_phrase_normalize_kana():
     # The retained phrase reading must be folded at build so a katakana-reading
     # entry still validates a (folded) card reading.
@@ -260,6 +268,7 @@ def test_seen_contains_matches_counting_presence_incl_homograph():
             ["茶", "freq", {"reading": "ちゃ", "frequency": {"value": 8}}],
             ["手を貸す", "freq", {"reading": "てをかす", "frequency": {"value": 7}}],
             ["最も", "freq", {"reading": "もっとも", "frequency": {"value": 4}}],
+            ["俗に", "freq", {"reading": "ぞくに", "frequency": {"value": 5}}],
             ["中学校", "freq", {"reading": "ちゅうがっこう", "frequency": {"value": 9}}],
             ["母の日", "freq", {"reading": "ははのひ", "frequency": {"value": 6}}],
             # variant rule: an okurigana variant, a prefix-overlapping variant (気持ち/気持ち
@@ -287,10 +296,10 @@ def test_seen_contains_matches_counting_presence_incl_homograph():
              ("学校", "がっこう"), ("箱", "はこ"), ("屋", "や"),
              # suffix tail phrase carve-out: positive (母の日→日/ひ) + reading-gated (日/にち)
              ("日", "ひ"), ("日", "にち"),
-             # single-kanji prefix phrase path: positive, reading-gated, tail-gated, and
-             # the documented okurigana truncation edge (積/つ validates 積もる)
+             # single-kanji prefix phrase path: tailed positive (手を貸す), bare positive
+             # (俗に), reading-gated, and the okurigana truncation edge (積/つ validates 積もる)
              ("手", "て"), ("手", "しゅ"), ("思", "おも"), ("最", "もっと"),
-             ("積", "つ"), ("積", "せき"),
+             ("俗", "ぞく"), ("積", "つ"), ("積", "せき"),
              # variant rule: credited (煌めく←煌く), not credited (燦めく — no shared kanji),
              # kana-only card, the prefix-overlap dedup case, and the homophone guard
              ("煌めく", "きらめく"), ("燦めく", "きらめく"), ("きらめく", "きらめく"),

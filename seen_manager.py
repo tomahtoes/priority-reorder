@@ -160,7 +160,8 @@ class SeenWindow:
 
     def _phrase_present(self, expression: str, reading: str) -> bool:
         """Boolean analogue of ``OccurrenceIndex.single_kanji_phrase_total``: True if some
-        particle-phrase entry 'X<particle><tail>' validates the single-kanji card's reading."""
+        particle-phrase entry 'X<particle>' (tail optional) validates the single-kanji card's
+        reading."""
         if len(expression) != 1 or not reading or not is_kanji(expression):
             return False
         if self._phrase_by_first is None:
@@ -291,9 +292,9 @@ def build_seen_day(
     normalization), but records mere presence in a set instead of accumulating counts — base
     presence reduces to the expression set, so there is no ``(expr, reading)`` map. The
     exceptions keep their ``(expression, reading)`` pair so a reading can be compared at query
-    time: ``phrase_entries`` ('X<particle><tail>' — kanji head) and ``suffix_phrase_entries``
-    ('<head><particle>X' — kanji tail), each a sliver of any dict and so retained
-    unconditionally, plus ``variant_entries`` — every kanji-bearing entry, i.e. most of the dict,
+    time: ``phrase_entries`` ('X<particle>' with an optional tail — kanji head) and
+    ``suffix_phrase_entries`` ('<head><particle>X' — kanji tail), each a sliver of any dict
+    and so retained unconditionally, plus ``variant_entries`` — every kanji-bearing entry, i.e. most of the dict,
     which is why it is gated on ``variant_matching`` rather than always built (retaining it
     unconditionally cost ~70% on this function). A drift-guard test pins these against the
     counting index's ``get_total(...) >= 1``."""
