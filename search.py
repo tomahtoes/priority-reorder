@@ -314,6 +314,21 @@ _seen_cache = {}
 _seen_sig = None
 
 
+def clear_resolution_caches() -> None:
+    """Drop every memoized resolution result.
+
+    Needed because both memos are invalidated by *collection* and *config* changes only
+    (see the signatures below), and a dictionary update changes neither — it rewrites files
+    on disk. Without this, a Browse-bar `occurrences:` search keeps serving pre-update note
+    ids until something happens to touch the collection. Called by the updater alongside the
+    dictionary index caches."""
+    global _resolution_sig, _seen_sig
+    _resolution_cache.clear()
+    _resolution_sig = None
+    _seen_cache.clear()
+    _seen_sig = None
+
+
 def _config_fingerprint():
     """The addon-config values resolution results depend on (occurrence flags,
     field names, sort_field). Editing the config doesn't bump mw.col.mod, so these
@@ -410,14 +425,24 @@ def resolve_occurrences(dict_str, op, thresh, candidate_nids=None):
     threshold. Notes missing either field are skipped (never matched), mirroring
     the former OccurrenceRule.matches early-out."""
     from .config_manager import get_config
-    from .dictionary_manager import expand_dict_names, occurrence_count
+    from .dictionary_manager import expand_dict_names, occurrence_counter
 
     def compute():
         cfg = get_config()
         expr_field = cfg.search_config.expression_field
         read_field = cfg.search_config.expression_reading_field
-        dict_names = expand_dict_names(dict_str)
         comparator = parse_comparator(op)
+        # Index resolution and flag dispatch hoisted out of the note loop; see
+        # dictionary_manager.occurrence_counter.
+        count_occurrences = occurrence_counter(
+            expand_dict_names(dict_str),
+            normalize_kana=cfg.kana_normalization,
+            combine_word_forms=cfg.combine_word_forms,
+            prefix_matching=cfg.prefix_matching,
+            suffix_matching=cfg.suffix_matching,
+            variant_matching=cfg.variant_matching,
+            honorific_folding=cfg.honorific_folding,
+        )
 
         ids = []
         for nid, values in _iter_candidate_notes((expr_field, read_field), candidate_nids):
@@ -425,18 +450,7 @@ def resolve_occurrences(dict_str, op, thresh, candidate_nids=None):
             reading = values[read_field]
             if not expression or not reading:
                 continue
-            count = occurrence_count(
-                dict_names,
-                expression,
-                reading,
-                normalize_kana=cfg.kana_normalization,
-                combine_word_forms=cfg.combine_word_forms,
-                prefix_matching=cfg.prefix_matching,
-                suffix_matching=cfg.suffix_matching,
-                variant_matching=cfg.variant_matching,
-                honorific_folding=cfg.honorific_folding,
-            )
-            if comparator(count, thresh):
+            if comparator(count_occurrences(expression, reading), thresh):
                 ids.append(nid)
         return ids
 
@@ -586,12 +600,22 @@ def resolve_seen(n, candidate_nids=None):
     global _seen_sig
     from aqt import mw
 
-    sig = (mw.col.mod, _config_fingerprint(), today, seen_manager.window_mtimes(n, today))
+    # The window mtimes belong in the KEY, not the signature: they depend on n, so keying
+    # on (n,) under a signature that included them made seen:1 and seen:7 clear each
+    # other's entry and rescan every time. What's left in the signature is the part every
+    # level shares.
+    sig = (mw.col.mod, _config_fingerprint(), today)
     if sig != _seen_sig:
         _seen_cache.clear()
         _seen_sig = sig
-    key = (n,)
+    key = (n, seen_manager.window_mtimes(n, today))
     if key not in _seen_cache:
+        # Today's dict is rewritten repeatedly while immersing, and each rewrite yields a
+        # new key for every window containing today. Drop this level's older entries so a
+        # long session replaces them instead of accumulating one dead nid list per save
+        # (mirrors the prune in seen_manager.get_seen_window).
+        for stale in [k for k in _seen_cache if k[0] == n]:
+            del _seen_cache[stale]
         _seen_cache[key] = compute()
     return _seen_cache[key]
 

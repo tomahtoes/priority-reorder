@@ -421,6 +421,44 @@ def test_resolve_seen_memoizes_full_scan_within_signature(monkeypatch):
     assert scans["n"] == 1  # second identical full scan served from _seen_cache
 
 
+def test_resolve_seen_memo_survives_a_different_level(monkeypatch):
+    # The window mtimes depend on n, so keeping them in the cache SIGNATURE made every
+    # level clear the previous one's entry: seen:1 then seen:7 then seen:1 rescanned all
+    # three times. They belong in the key instead.
+    notes = _install_fake_seen_env(monkeypatch, note_count=50)
+
+    scans = {"n": 0}
+
+    def counting_iter(fields, cand=None):
+        scans["n"] += 1
+        return iter(notes)
+
+    monkeypatch.setattr(search, "_iter_candidate_notes", counting_iter)
+    monkeypatch.setattr(seen_manager, "_source_mtime", lambda folder: 111.0)
+
+    search.resolve_seen(1, candidate_nids=None)
+    search.resolve_seen(7, candidate_nids=None)
+    search.resolve_seen(1, candidate_nids=None)
+
+    assert scans["n"] == 2  # one scan per level, not one per call
+
+
+def test_resolve_seen_memo_replaces_a_level_when_the_day_is_rewritten(monkeypatch):
+    # Today's dict is rewritten repeatedly while immersing; each rewrite gives that level a
+    # new key, so the stale entry has to be dropped rather than accumulated.
+    notes = _install_fake_seen_env(monkeypatch, note_count=20)
+    monkeypatch.setattr(search, "_iter_candidate_notes", lambda fields, cand=None: iter(notes))
+
+    mtime = {"v": 100.0}
+    monkeypatch.setattr(seen_manager, "_source_mtime", lambda folder: mtime["v"])
+
+    for tick in range(5):
+        mtime["v"] = 100.0 + tick
+        search.resolve_seen(7, candidate_nids=None)
+
+    assert len(search._seen_cache) == 1
+
+
 # --- merged-window cache growth ---------------------------------------------
 #
 # Today's seen dict is rewritten continuously while immersing, and every rewrite yields a new

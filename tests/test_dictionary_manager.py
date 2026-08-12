@@ -82,7 +82,7 @@ def test_occurrence_count_multi_dict_uses_combined(monkeypatch):
         def __init__(self):
             self.calls = []
 
-        def total(self, expression, reading, card_kanji=None):
+        def total(self, expression, reading, card_kanji=None, **flags):
             self.calls.append((expression, reading))
             return 99
 
@@ -774,6 +774,21 @@ def test_combined_index_evicts_oldest_when_cap_reached(monkeypatch):
     assert len(ci._memo) == 2
 
 
+def test_combined_index_memo_resets_when_query_flags_change(monkeypatch):
+    # The merged index is now shared across query-flag combinations (they are no longer in
+    # the lru_cache key), so the per-card memo — whose values DO depend on them — must not
+    # serve one combination's totals to another.
+    index = OccurrenceIndex()
+    index.add("学校", "がっこう", 3)
+    index.add("小学校", "しょうがっこう", 10)
+    monkeypatch.setattr(dm, "get_occurrence_index", lambda *a: index)
+
+    ci = CombinedOccurrenceIndex(["D1"])
+    assert ci.total("学校", "がっこう") == 3                          # exact only
+    assert ci.total("学校", "がっこう", suffix_matching=True) == 13    # + 小学校
+    assert ci.total("学校", "がっこう") == 3                          # and back again
+
+
 # --- merged-index equivalence (drift guard) ---------------------------------
 #
 # CombinedOccurrenceIndex folds N dictionaries into ONE index instead of summing N per-dict
@@ -848,10 +863,22 @@ def _all_flag_combos():
         yield dict(zip(_FLAG_NAMES, bits))
 
 
+def _split_flags(flags):
+    """(build-time kwargs, query-time kwargs). honorific_folding is a BUILD flag —
+    honorific_to_count only exists when the per-dict indexes were built with it — while the
+    other four are passed per lookup so one merged index serves every combination."""
+    return (
+        {"honorific_folding": flags["honorific_folding"]},
+        {k: v for k, v in flags.items() if k != "honorific_folding"},
+    )
+
+
 def _assert_merged_matches_per_dict(names, raw_by_name, normalize_kana):
     """For every flag combination, the merged total must equal the per-dict sum."""
     for flags in _all_flag_combos():
-        merged = CombinedOccurrenceIndex(list(names), normalize_kana=normalize_kana, **flags)
+        build_flags, query_flags = _split_flags(flags)
+        merged = CombinedOccurrenceIndex(list(names), normalize_kana=normalize_kana,
+                                         **build_flags)
         per_dict = [
             _build_index_from_raw(raw_by_name[n], normalize_kana=normalize_kana,
                                   honorific_folding=flags["honorific_folding"])
@@ -864,7 +891,7 @@ def _assert_merged_matches_per_dict(names, raw_by_name, normalize_kana):
             card_kanji = dm._kanji_skeleton(expr) if flags["variant_matching"] else None
             expected = sum(ix.get_total(expr, read, card_kanji=card_kanji, **flags)
                            for ix in per_dict)
-            assert merged.total(expr, read) == expected, (
+            assert merged.total(expr, read, **query_flags) == expected, (
                 f"merged != per-dict sum for {expression!r}/{reading!r} "
                 f"normalize_kana={normalize_kana} flags={flags}"
             )
@@ -929,10 +956,11 @@ def test_merged_index_equals_per_dict_sum_on_real_dicts():
     probes = list(dm.get_occurrence_index(names[-1], False, False).expr_reading_to_count)[:150]
 
     for flags in _all_flag_combos():
-        merged = CombinedOccurrenceIndex(names, **flags)
+        build_flags, query_flags = _split_flags(flags)
+        merged = CombinedOccurrenceIndex(names, **build_flags)
         per_dict = [dm.get_occurrence_index(n, False, flags["honorific_folding"]) for n in names]
         for expr, read in probes:
             card_kanji = dm._kanji_skeleton(expr) if flags["variant_matching"] else None
             expected = sum(ix.get_total(expr, read, card_kanji=card_kanji, **flags)
                            for ix in per_dict)
-            assert merged.total(expr, read) == expected, (expr, read, flags)
+            assert merged.total(expr, read, **query_flags) == expected, (expr, read, flags)

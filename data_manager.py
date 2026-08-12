@@ -13,7 +13,7 @@ try:  # inside Anki: isolated package namespace
         _strip_custom_terms,
         _candidate_restriction_allowed,
     )
-    from .dictionary_manager import expand_dict_names, occurrence_count, _kanji_skeleton
+    from .dictionary_manager import expand_dict_names, occurrence_counter, _kanji_skeleton
     from .kanji_manager import get_kanji_manager
     from . import seen_manager
 except ImportError:  # pytest / flat-import context
@@ -26,7 +26,7 @@ except ImportError:  # pytest / flat-import context
         _strip_custom_terms,
         _candidate_restriction_allowed,
     )
-    from dictionary_manager import expand_dict_names, occurrence_count, _kanji_skeleton
+    from dictionary_manager import expand_dict_names, occurrence_counter, _kanji_skeleton
     from kanji_manager import get_kanji_manager
     import seen_manager
 
@@ -48,6 +48,13 @@ _BULK_CHUNK_SIZE = 5000
 # switches (see clear_note_cache).
 _note_data_cache: Dict[int, Tuple[int, NoteData]] = {}
 _note_data_cache_fp = None
+
+# Relative per-card cost of each custom term, used to order the post-filter passes in
+# _get_cards_filtered. `freq`/`length` read an already-loaded attribute; `kanji` walks the
+# expression against a counter; `seen` is set membership plus a binary search; `occ` sums
+# the dictionary rules. Measured on a 120k-entry dictionary at 0.07 / 0.10 / 4.9 / 10.4
+# microseconds per card for freq / length / seen / occ with every matching flag on.
+_TERM_COST = {"length": 0, "freq": 1, "kanji": 2, "seen": 3, "occ": 4}
 
 
 def clear_note_cache() -> None:
@@ -80,10 +87,13 @@ class DataManager:
         self._field_idx_cache: Dict[int, Tuple[Optional[int], Optional[int], Optional[int]]] = {}
         # Per-run caches shared across every search in a single reorder: the same
         # standard query / custom predicate recurs across many priority searches.
-        self._search_cache: Dict[str, List[int]] = {}                 # find_cards by query
-        self._occ_count_cache: Dict[Tuple[Tuple[str, ...], int], int] = {}  # (dicts, nid) -> count
-        self._kanji_count_cache: Dict[Tuple[str, int, int], int] = {}  # (check_type, target, nid) -> count
-        self._seen_contains_cache: Dict[Tuple[int, int], bool] = {}   # (n, nid) -> contained
+        self._search_cache: Dict[str, List[Card]] = {}                # find_cards by query
+        # Nested one level so the per-card probe is an int-keyed lookup: the outer key is
+        # fixed when the predicate is built, so hoisting it there keeps the inner loop from
+        # allocating and hashing a tuple per card.
+        self._occ_count_cache: Dict[Tuple[str, ...], Dict[int, int]] = {}   # dicts -> nid -> count
+        self._kanji_count_cache: Dict[Tuple[str, int], Dict[int, int]] = {}  # (type, target) -> nid -> count
+        self._seen_contains_cache: Dict[int, Dict[int, bool]] = {}           # n -> nid -> contained
         # nid -> (folded expression, folded reading, kanji skeleton). Kana folding and skeleton
         # derivation are per-note constants, but every predicate and every seen window used to
         # redo them; a card checked by `occurrences:` plus seen:1/7/30 paid four folds.
@@ -248,30 +258,54 @@ class DataManager:
 
     def _cards_for_search(self, final_search: str) -> List[Card]:
         """find_cards(final_search) -> loaded Cards, memoized by query string for the
-        duration of the run (the collection is read-only until repositioning)."""
-        card_ids = self._search_cache.get(final_search)
-        if card_ids is None:
-            t0 = time.perf_counter()
-            try:
-                card_ids = list(mw.col.find_cards(final_search))
-            except Exception as e:
-                import traceback
-                print(f"[priority-reorder] find_cards failed for search {final_search!r}: {e}")
-                traceback.print_exc()
-                return []
-            finally:
-                self._add_ms("fc", t0)
-            self._search_cache[final_search] = card_ids
+        duration of the run (the collection is read-only until repositioning).
+
+        The finished Card list is what's memoized, not the id list: a config with several
+        priority searches over the same deck hits this repeatedly, and re-resolving ids to
+        Cards each time cost two more passes over the whole backlog per hit.
+
+        Returns the SHARED list — callers must treat it as read-only. Both do: _find_matches
+        only reads card ids out of it, and _get_cards_filtered rebinds its local to a new
+        filtered list rather than mutating in place."""
+        cards = self._search_cache.get(final_search)
+        if cards is not None:
+            return cards
+
+        t0 = time.perf_counter()
+        try:
+            card_ids = list(mw.col.find_cards(final_search))
+        except Exception as e:
+            import traceback
+            print(f"[priority-reorder] find_cards failed for search {final_search!r}: {e}")
+            traceback.print_exc()
+            return []
+        finally:
+            self._add_ms("fc", t0)
 
         self._bulk_load(card_ids)
-        return [c for cid in card_ids if (c := self._card_cache.get(cid)) is not None]
+        cards = [c for cid in card_ids if (c := self._card_cache.get(cid)) is not None]
+        self._search_cache[final_search] = cards
+        return cards
 
     def _get_cards_filtered(self, raw_query: str, stripped: str) -> SearchResult:
         base = " ".join(t for t in stripped.split() if t != "-")  # drop stray '-' from negation
         cards = self._cards_for_search(f"({base}) is:new" if base else "is:new")
         raw_count = len(cards)
 
-        for kind, args, negated in parse_custom_terms(raw_query):
+        # The terms are a pure conjunction of independent predicates, so any evaluation
+        # order yields the same set in the same order — but parse_custom_terms emits by
+        # kind, which happens to be close to most-expensive-first. Cheapest first shrinks
+        # the list before the dictionary and seen lookups run over it (measured ~150x
+        # between an `f` comparison and an all-flags `occurrences:` lookup), and it can
+        # never cost more work overall: the per-note memos are shared across every search,
+        # so any note whose expensive value is still needed computes it exactly once.
+        for kind, args, negated in sorted(parse_custom_terms(raw_query),
+                                          key=lambda t: _TERM_COST.get(t[0], 9)):
+            # Before _term_predicate, not after: building the kanji and seen predicates
+            # scans the collection / stats and parses the daily dicts, which an empty
+            # candidate list must never pay for.
+            if not cards:
+                break
             pred = self._term_predicate(kind, args)
             t0 = time.perf_counter()
             cards = [c for c in cards if (not pred(c)) == negated]
@@ -295,39 +329,34 @@ class DataManager:
             dict_str, op, thresh = args
             comparator = parse_comparator(op)
             dict_names = expand_dict_names(dict_str)
-            dkey = tuple(dict_names)
             cfg = self.config
-            # Hoisted locals: read once per predicate build, not per card (mirrors seen_pred).
-            normalize_kana = cfg.kana_normalization
-            combine_word_forms = cfg.combine_word_forms
-            prefix_matching = cfg.prefix_matching
-            suffix_matching = cfg.suffix_matching
-            variant_matching = cfg.variant_matching
-            honorific_folding = cfg.honorific_folding
-            cache = self._occ_count_cache
+            # Index resolution and flag dispatch happen once here rather than per card —
+            # they used to be ~79% of the warm multi-dict lookup. `prefolded` because
+            # _note_derived already kana-folded both strings for the whole run.
+            count_occurrences = occurrence_counter(
+                dict_names,
+                normalize_kana=cfg.kana_normalization,
+                combine_word_forms=cfg.combine_word_forms,
+                prefix_matching=cfg.prefix_matching,
+                suffix_matching=cfg.suffix_matching,
+                variant_matching=cfg.variant_matching,
+                honorific_folding=cfg.honorific_folding,
+                prefolded=True,
+            )
+            cache = self._occ_count_cache.setdefault(tuple(dict_names), {})
             derived = self._note_derived
 
             def occ_pred(c: Card) -> bool:
-                if not c.data.expression or not c.data.reading:
+                data = c.data
+                if not data.expression or not data.reading:
                     return False
-                key = (dkey, c.note_id)
-                value = cache.get(key)
+                nid = c.note_id
+                value = cache.get(nid)
                 if value is None:
-                    expression, reading, card_kanji = derived(c)
-                    value = occurrence_count(
-                        dict_names,
-                        expression,
-                        reading,
-                        normalize_kana=normalize_kana,
-                        combine_word_forms=combine_word_forms,
-                        prefix_matching=prefix_matching,
-                        suffix_matching=suffix_matching,
-                        variant_matching=variant_matching,
-                        honorific_folding=honorific_folding,
-                        prefolded=True,
-                        card_kanji=card_kanji,
-                    )
-                    cache[key] = value
+                    # derived(c) is (folded expression, folded reading, kanji skeleton) —
+                    # exactly the counter's signature.
+                    value = count_occurrences(*derived(c))
+                    cache[nid] = value
                 return comparator(value, thresh)
 
             return occ_pred
@@ -343,11 +372,22 @@ class DataManager:
             scan_ms = getattr(km, "last_scan_ms", None)
             if scan_ms:
                 self.stage_ms["kanji_scan"] = self.stage_ms.get("kanji_scan", 0.0) + scan_ms
+            cache = self._kanji_count_cache.setdefault((check_type, target), {})
+            count_kanji = (
+                (lambda text: km.get_unknown_kanji_count(text, target))
+                if check_type == "new" else km.get_kanji_count
+            )
 
             def kanji_pred(c: Card) -> bool:
-                if not c.data.expression:
+                expression = c.data.expression
+                if not expression:
                     return False
-                return comparator(self._kanji_count(check_type, target, c, km), thresh)
+                nid = c.note_id
+                value = cache.get(nid)
+                if value is None:
+                    value = count_kanji(expression)
+                    cache[nid] = value
+                return comparator(value, thresh)
 
             return kanji_pred
 
@@ -370,12 +410,16 @@ class DataManager:
             self._add_ms("seen_win", t0)
             levels = self._seen_levels
             top = levels[-1]
-            # Memoized per (n, note id) — the flags are fixed for the run, so
+            # Memoized per level, then per note id — the flags are fixed for the run, so
             # they stay out of the key (mirrors _occ_count_cache). If today's
             # seen file is rewritten mid-run, a later predicate build can see a
             # newer window while the memo keeps the earlier answers — accepted,
             # like every other per-run cache here.
-            cache = self._seen_contains_cache
+            by_level = {
+                level: self._seen_contains_cache.setdefault(level, {}) for level in levels
+            }
+            own = by_level[n]
+            top_cache = by_level[top]
             derived = self._note_derived
             query_flags = dict(
                 normalize_kana=normalize_kana,
@@ -391,7 +435,7 @@ class DataManager:
                 if not c.data.expression:
                     return False
                 nid = c.note_id
-                value = cache.get((n, nid))
+                value = own.get(nid)
                 if value is not None:
                     return value
                 expression, reading, card_kanji = derived(c)
@@ -404,15 +448,15 @@ class DataManager:
                 # windows, so those are still evaluated — but in a new-card backlog misses
                 # are the overwhelming majority, which is where the three-windows-for-the-
                 # price-of-one saving comes from.
-                top_seen = cache.get((top, nid))
+                top_seen = top_cache.get(nid)
                 if top_seen is None:
                     top_seen = windows[top].contains(
                         expression, reading, card_kanji=card_kanji, **query_flags
                     )
-                    cache[(top, nid)] = top_seen
+                    top_cache[nid] = top_seen
                 if not top_seen:
-                    for level in levels:
-                        cache[(level, nid)] = False
+                    for level_cache in by_level.values():
+                        level_cache[nid] = False
                     return False
                 if n == top:
                     return True
@@ -420,11 +464,17 @@ class DataManager:
                 value = windows[n].contains(
                     expression, reading, card_kanji=card_kanji, **query_flags
                 )
-                cache[(n, nid)] = value
-                if value:  # seen within n days => seen within any longer window
-                    for level in levels:
+                own[nid] = value
+                # Monotone in both directions: seen within n days => seen within any
+                # longer window, and NOT seen within n days => not seen within any
+                # shorter one. Filling both sides settles every configured level from
+                # the two probes above.
+                for level, level_cache in by_level.items():
+                    if value:
                         if level >= n:
-                            cache[(level, nid)] = True
+                            level_cache[nid] = True
+                    elif level <= n:
+                        level_cache[nid] = False
                 return value
 
             return seen_pred
@@ -502,17 +552,6 @@ class DataManager:
                 for level in levels
             }
         return self._seen_window_map
-
-    def _kanji_count(self, check_type: str, target: int, card: Card, km) -> int:
-        key = (check_type, target, card.note_id)
-        value = self._kanji_count_cache.get(key)
-        if value is None:
-            if check_type == "new":
-                value = km.get_unknown_kanji_count(card.data.expression, target)
-            else:  # "num"
-                value = km.get_kanji_count(card.data.expression)
-            self._kanji_count_cache[key] = value
-        return value
 
     def _km(self):
         if self._kanji_manager is None:

@@ -12,8 +12,10 @@ from typing import Any, Optional
 
 try:  # inside Anki: isolated package namespace
     from .dictionary_manager import get_occurrence_index, get_combined_occurrence_index, SEEN_FOLDER
+    from .search import clear_resolution_caches
 except ImportError:  # pytest / flat-import context
     from dictionary_manager import get_occurrence_index, get_combined_occurrence_index, SEEN_FOLDER
+    from search import clear_resolution_caches
 
 class JitenUpdater:
     def __init__(self) -> None:
@@ -208,7 +210,12 @@ class JitenUpdater:
             elif res == -1:
                 failed_count += 1
 
-        self.clear_caches()
+        # Only when something actually changed. Every sync runs this check when
+        # auto_update_dicts is on, and rebuilding a dictionary index costs on the order of
+        # a second each — paying that on every sync to re-derive byte-identical indexes was
+        # pure waste.
+        if updated_count:
+            self.clear_caches()
 
         return updated_count, failed_count
 
@@ -218,3 +225,6 @@ class JitenUpdater:
         # dictionary contents to take effect without restarting Anki.
         get_occurrence_index.cache_clear()
         get_combined_occurrence_index.cache_clear()
+        # The resolved-nid memos too: their signatures track the collection and the addon
+        # config, neither of which moves when dictionary files change on disk.
+        clear_resolution_caches()

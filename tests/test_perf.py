@@ -433,14 +433,14 @@ def test_skeleton_work_does_not_scale_with_dict_count(monkeypatch):
 
     monkeypatch.setattr(dm, "_kanji_skeleton", counting_skeleton)
 
-    combined = dm.CombinedOccurrenceIndex(names, variant_matching=True)
-    assert combined.total("煌めく", "きらめく") == 5 * N  # every dict's count still credited
+    combined = dm.CombinedOccurrenceIndex(names)
+    assert combined.total("煌めく", "きらめく", variant_matching=True) == 5 * N  # every dict counted
     assert calls.count("煌めく") == 1, "card skeleton must be derived once per card"
     assert calls.count("煌く") == 1, "merged candidates must not be re-skeletonized per dict"
 
     # a memoized repeat must not re-derive anything (the hoist sits after the memo check)
     calls.clear()
-    assert combined.total("煌めく", "きらめく") == 5 * N
+    assert combined.total("煌めく", "きらめく", variant_matching=True) == 5 * N
     assert calls == []
 
 

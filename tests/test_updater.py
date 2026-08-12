@@ -136,6 +136,53 @@ def test_successful_update_replaces_contents_and_stamps_index(updater, tmp_path)
     assert sorted(p.name for p in tmp_path.iterdir()) == ["MyDict"]
 
 
+# --- cache invalidation --------------------------------------------------------------
+
+def _count_cache_clears(monkeypatch):
+    """Record every cache drop JitenUpdater.clear_caches performs."""
+    import dictionary_manager as dm
+    import search
+    import updater as umod
+
+    cleared = []
+    monkeypatch.setattr(dm.get_occurrence_index, "cache_clear",
+                        lambda: cleared.append("occ"), raising=False)
+    monkeypatch.setattr(dm.get_combined_occurrence_index, "cache_clear",
+                        lambda: cleared.append("combined"), raising=False)
+    monkeypatch.setattr(umod, "clear_resolution_caches", lambda: cleared.append("resolution"))
+    monkeypatch.setattr(search, "clear_resolution_caches", lambda: cleared.append("resolution"),
+                        raising=False)
+    return cleared
+
+
+def test_caches_are_not_cleared_when_nothing_was_updated(updater, tmp_path, monkeypatch):
+    # Every sync runs the updater when auto_update_dicts is on. Dropping the parsed indexes
+    # each time made the reorder that follows re-read and re-build every dictionary from
+    # JSON — on the order of a second each — to produce byte-identical results.
+    cleared = _count_cache_clears(monkeypatch)
+    d = _dict_dir(tmp_path, index=dict(JITEN_INDEX, deckId=7))
+    (d / "term_meta_bank_1.json").write_text("[]", encoding="utf-8")
+    updater.session = _FakeSession(zip_bytes=_make_zip({"index.json": json.dumps({"revision": "r1"})}))
+
+    assert updater.update_dictionaries(manual=False, next_day_cutoff=0) == (0, 0)
+    assert cleared == []
+
+
+def test_successful_update_clears_resolved_nid_memos_too(updater, tmp_path, monkeypatch):
+    # search._resolution_cache keys on (collection mod, addon config), neither of which moves
+    # when dictionary files change on disk — so without this a Browse-bar `occurrences:`
+    # search keeps serving pre-update note ids.
+    cleared = _count_cache_clears(monkeypatch)
+    _dict_dir(tmp_path, index=dict(JITEN_INDEX, deckId=7))
+    updater.session = _FakeSession(zip_bytes=_make_zip({
+        "index.json": json.dumps(dict(JITEN_INDEX, revision="r2")),
+        "term_meta_bank_1.json": "[]",
+    }))
+
+    assert updater.update_dictionaries(manual=True) == (1, 0)
+    assert set(cleared) == {"occ", "combined", "resolution"}
+
+
 # --- B1 regression: failure must not destroy the dictionary --------------------------
 
 def test_failed_extract_preserves_existing_contents(updater, tmp_path, monkeypatch):

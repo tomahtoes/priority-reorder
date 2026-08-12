@@ -161,13 +161,17 @@ class OccurrenceIndex:
     def _ensure_suffix_index(self) -> None:
         if self._suffix_revs is not None:
             return
-        # Sort by the reversed expression; the stored reversed keys are then in ascending
-        # order, so bisect works exactly as it does over the (forward-sorted) prefix index.
-        items = sorted(self.expr_to_count.items(), key=lambda kv: kv[0][::-1])
-        self._suffix_revs = [expr[::-1] for expr, _ in items]
+        # Reverse each expression ONCE into a keyed map, then sort the reversed strings
+        # directly. Sorting the forward keys under a `key=lambda kv: kv[0][::-1]` reversed
+        # every expression a second time when materializing the list below; sorting
+        # (reversed, count) tuples instead trades string comparison for tuple comparison
+        # and is slower still. The reversal is injective, so no two entries collide.
+        rev_to_count = {expr[::-1]: count for expr, count in self.expr_to_count.items()}
+        revs = sorted(rev_to_count)
         cumsum = [0]
-        for _, count in items:
-            cumsum.append(cumsum[-1] + count)
+        for rev in revs:
+            cumsum.append(cumsum[-1] + rev_to_count[rev])
+        self._suffix_revs = revs
         self._suffix_cumsum = cumsum
 
     def suffix_total(self, expression: str) -> int:
@@ -396,16 +400,20 @@ class CombinedOccurrenceIndex(OccurrenceIndex):
         ``_fold``.
 
     A drift-guard test pins merged totals against the per-dict sum across every flag
-    combination."""
+    combination.
 
-    def __init__(self, dict_names: List[str], normalize_kana: bool = False, combine_word_forms: bool = False, prefix_matching: bool = False, suffix_matching: bool = False, variant_matching: bool = False, honorific_folding: bool = False) -> None:
+    Only the two BUILD-time flags are constructor state, for the same reason
+    ``get_occurrence_index`` keys on only those: combine/prefix/suffix/variant are
+    query-time flags that neither the fold nor any lazy view reads, so an index built
+    under one combination is byte-identical to one built under another. They are passed
+    to ``total`` instead — keeping them in the cache key left up to 16 identical merged
+    copies of every dictionary resident after a few config flips, and a merged copy is an
+    order of magnitude larger than a single-dict index."""
+
+    def __init__(self, dict_names: List[str], normalize_kana: bool = False, honorific_folding: bool = False) -> None:
         super().__init__()
         self.dict_names = sorted(dict_names)
         self.normalize_kana = normalize_kana
-        self.combine_word_forms = combine_word_forms
-        self.prefix_matching = prefix_matching
-        self.suffix_matching = suffix_matching
-        self.variant_matching = variant_matching
         self.honorific_folding = honorific_folding
         # (expression, reading) -> what the per-dict `get` fallback would have summed to.
         # Filled by _fold; a pair absent from every dict falls back to expr_to_count.
@@ -413,8 +421,11 @@ class CombinedOccurrenceIndex(OccurrenceIndex):
         self._folded = False
         # Per-card memo of finished totals. MUST stay separate from expr_reading_to_count:
         # that now holds real dictionary data, and the FIFO eviction below would silently
-        # delete entries the fold can never recompute.
+        # delete entries the fold can never recompute. Totals depend on the query-time
+        # flags, which are fixed for a run but not for the object's lifetime, so the memo
+        # is dropped whenever they change (see total) rather than widening every key.
         self._memo: Dict[Tuple[str, str], int] = {}
+        self._memo_flags: Optional[Tuple[bool, bool, bool, bool]] = None
 
     def _fold(self) -> None:
         """Merge every dictionary into this index. Lazy: a combined index that is never
@@ -465,18 +476,40 @@ class CombinedOccurrenceIndex(OccurrenceIndex):
             return value
         return self.expr_to_count.get(expression, 0)
 
-    def total(self, expression: str, reading: str, card_kanji: Optional[str] = None) -> int:
+    def total(
+        self,
+        expression: str,
+        reading: str,
+        card_kanji: Optional[str] = None,
+        *,
+        combine_word_forms: bool = False,
+        prefix_matching: bool = False,
+        suffix_matching: bool = False,
+        variant_matching: bool = False,
+    ) -> int:
         """Flag-inclusive total across every dict for one card — the entry point
-        ``occurrence_count`` uses, memoized per card.
+        ``occurrence_count``/``occurrence_counter`` use, memoized per card.
 
         PRECONDITION: ``expression``/``reading`` must already be kana-folded when
-        ``normalize_kana`` is set — ``occurrence_count`` does that unconditionally before it
-        reaches either the single-dict or the combined path, and the indexes are keyed on
-        folded strings.
+        ``normalize_kana`` is set — the callers do that unconditionally before reaching
+        either the single-dict or the combined path, and the indexes are keyed on folded
+        strings.
+
+        The four query-time flags are arguments rather than constructor state so the merged
+        index can be shared across flag combinations (see the class docstring);
+        ``honorific_folding`` stays on the instance because it is a build flag —
+        ``honorific_to_count`` is only populated when the per-dict indexes were built with it.
 
         ``card_kanji`` is an optional precomputed skeleton; see ``variant_total``."""
-        key = (expression, reading)
+        flags = (combine_word_forms, prefix_matching, suffix_matching, variant_matching)
         memo = self._memo
+        if flags != self._memo_flags:
+            # Run-fixed in practice; this only fires when a config flag is flipped between
+            # reorders, or in the drift-guard tests that sweep every combination.
+            memo.clear()
+            self._memo_flags = flags
+
+        key = (expression, reading)
         cached = memo.get(key)
         if cached is not None:
             return cached
@@ -487,16 +520,16 @@ class CombinedOccurrenceIndex(OccurrenceIndex):
         # to_hiragana leaves CJK ideographs untouched, so this is identical whether or not
         # the caller folded — see the precondition above. Derived after the memo check so
         # repeat lookups don't pay for it, and skipped entirely when the caller already has it.
-        if card_kanji is None and self.variant_matching:
+        if card_kanji is None and variant_matching:
             card_kanji = _kanji_skeleton(expression)
 
         total_count = self.get_total(
             expression,
             reading,
-            combine_word_forms=self.combine_word_forms,
-            prefix_matching=self.prefix_matching,
-            suffix_matching=self.suffix_matching,
-            variant_matching=self.variant_matching,
+            combine_word_forms=combine_word_forms,
+            prefix_matching=prefix_matching,
+            suffix_matching=suffix_matching,
+            variant_matching=variant_matching,
             honorific_folding=self.honorific_folding,
             card_kanji=card_kanji,
         )
@@ -627,10 +660,16 @@ def get_occurrence_index(dict_name: str, normalize_kana: bool = False, honorific
         return OccurrenceIndex()
     return _build_index_from_raw(data, normalize_kana, honorific_folding)
 
-@lru_cache(maxsize=32)
-def get_combined_occurrence_index(dict_names_tuple: Tuple[str, ...], normalize_kana: bool = False, combine_word_forms: bool = False, prefix_matching: bool = False, suffix_matching: bool = False, variant_matching: bool = False, honorific_folding: bool = False) -> CombinedOccurrenceIndex:
+@lru_cache(maxsize=4)
+def get_combined_occurrence_index(dict_names_tuple: Tuple[str, ...], normalize_kana: bool = False, honorific_folding: bool = False) -> CombinedOccurrenceIndex:
+    """Merged index for one combinator, memoized for the session.
+
+    Keyed on the same two BUILD-time flags as ``get_occurrence_index``, for the same reason
+    (see ``CombinedOccurrenceIndex``). ``maxsize`` is small on purpose: an entry holds a full
+    merged copy of every dictionary in the combinator plus its lazy views — tens to hundreds
+    of MB — while a real config has a handful of distinct dict tuples at most."""
     sorted_dict_names = tuple(sorted(dict_names_tuple))
-    return CombinedOccurrenceIndex(list(sorted_dict_names), normalize_kana, combine_word_forms, prefix_matching, suffix_matching, variant_matching, honorific_folding)
+    return CombinedOccurrenceIndex(list(sorted_dict_names), normalize_kana, honorific_folding)
 
 def expand_dict_names(dict_str: str) -> List[str]:
     """Resolve the dict spec of an ``occurrences:`` term to a de-duplicated list of
@@ -653,6 +692,75 @@ def expand_dict_names(dict_str: str) -> List[str]:
     # can never reach the daily seen dicts — only `seen:N` may.
     return [name for name in dict.fromkeys(dict_names) if name != SEEN_FOLDER]
 
+def occurrence_counter(
+    dict_names: List[str],
+    *,
+    normalize_kana: bool = False,
+    combine_word_forms: bool = False,
+    prefix_matching: bool = False,
+    suffix_matching: bool = False,
+    variant_matching: bool = False,
+    honorific_folding: bool = False,
+    prefolded: bool = False,
+):
+    """``(expression, reading, card_kanji=None) -> int``, with index resolution and flag
+    dispatch hoisted OUT of the per-card loop.
+
+    Semantically identical to ``occurrence_count`` — that function is now a one-shot wrapper
+    around this one, so the two cannot drift. The difference is purely where the work
+    happens: ``occurrence_count`` re-did the dict-name tuple allocation, the ``lru_cache``
+    probe on a seven-element key, and the eight-way keyword binding for *every card*, which
+    measured as 79% of the warm multi-dict path. Callers evaluating many notes against one
+    term (``DataManager._term_predicate``, ``search.resolve_occurrences``) should build the
+    counter once and call it per note.
+
+    ``prefolded`` says the caller already kana-folded both strings, so the fold here would be
+    a pure re-allocation; ``card_kanji`` is a precomputed ``_kanji_skeleton``. Both are for
+    callers that evaluate one note against several predicates (see
+    ``DataManager._note_derived``) and neither can change the result."""
+    fold = normalize_kana and not prefolded
+
+    if len(dict_names) == 1:
+        index = get_occurrence_index(dict_names[0], normalize_kana, honorific_folding)
+
+        def count(expression: str, reading: str, card_kanji: Optional[str] = None) -> int:
+            if fold:
+                expression = to_hiragana(expression)
+                reading = to_hiragana(reading)
+            return index.get_total(
+                expression,
+                reading,
+                combine_word_forms=combine_word_forms,
+                prefix_matching=prefix_matching,
+                suffix_matching=suffix_matching,
+                variant_matching=variant_matching,
+                honorific_folding=honorific_folding,
+                card_kanji=card_kanji,
+            )
+
+        return count
+
+    combined = get_combined_occurrence_index(
+        tuple(dict_names), normalize_kana, honorific_folding
+    )
+
+    def count(expression: str, reading: str, card_kanji: Optional[str] = None) -> int:
+        if fold:
+            expression = to_hiragana(expression)
+            reading = to_hiragana(reading)
+        return combined.total(
+            expression,
+            reading,
+            card_kanji,
+            combine_word_forms=combine_word_forms,
+            prefix_matching=prefix_matching,
+            suffix_matching=suffix_matching,
+            variant_matching=variant_matching,
+        )
+
+    return count
+
+
 def occurrence_count(
     dict_names: List[str],
     expression: str,
@@ -674,28 +782,15 @@ def occurrence_count(
     a note missing either should be treated as a non-match upstream rather than
     fed a 0 here.
 
-    ``prefolded`` says the caller already kana-folded both strings, so the fold here would be
-    a pure re-allocation; ``card_kanji`` is a precomputed ``_kanji_skeleton``. Both are for
-    callers that evaluate one note against several predicates (see
-    ``DataManager._note_derived``) and neither can change the result."""
-    if normalize_kana and not prefolded:
-        expression = to_hiragana(expression)
-        reading = to_hiragana(reading)
-
-    if len(dict_names) == 1:
-        index = get_occurrence_index(dict_names[0], normalize_kana, honorific_folding)
-        return index.get_total(
-            expression,
-            reading,
-            combine_word_forms=combine_word_forms,
-            prefix_matching=prefix_matching,
-            suffix_matching=suffix_matching,
-            variant_matching=variant_matching,
-            honorific_folding=honorific_folding,
-            card_kanji=card_kanji,
-        )
-
-    combined_index = get_combined_occurrence_index(
-        tuple(dict_names), normalize_kana, combine_word_forms, prefix_matching, suffix_matching, variant_matching, honorific_folding
-    )
-    return combined_index.total(expression, reading, card_kanji)
+    One-shot convenience wrapper over ``occurrence_counter``; anything evaluating more than
+    a handful of notes should build the counter once instead."""
+    return occurrence_counter(
+        dict_names,
+        normalize_kana=normalize_kana,
+        combine_word_forms=combine_word_forms,
+        prefix_matching=prefix_matching,
+        suffix_matching=suffix_matching,
+        variant_matching=variant_matching,
+        honorific_folding=honorific_folding,
+        prefolded=prefolded,
+    )(expression, reading, card_kanji)

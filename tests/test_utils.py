@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from utils import is_kanji, parse_sort_value, to_hiragana, parse_comparator
+from utils import KANJI_RE, is_kanji, parse_sort_value, to_hiragana, parse_comparator
 
 
 # --- parse_sort_value -------------------------------------------------------
@@ -77,6 +77,28 @@ def test_is_kanji_true_for_ideographs():
 def test_is_kanji_false_for_kana_ascii_symbols():
     for ch in ("て", "ヲ", "a", "1", "㋕", "々"):
         assert not is_kanji(ch), ch
+
+
+# --- KANJI_RE ---------------------------------------------------------------
+
+def test_kanji_re_agrees_with_is_kanji():
+    # The two must stay interchangeable: kanji_manager scans whole strings with the regex
+    # while dictionary_manager._kanji_skeleton tests characters with is_kanji, and a
+    # narrower regex silently made kanji:num/kanji:new blind to Ext A / compatibility /
+    # Ext B characters the skeleton counted.
+    probes = list(range(0x2E00, 0x10000)) + list(range(0x10000, 0x40000, 13))
+    disagreements = [
+        hex(cp) for cp in probes
+        if bool(KANJI_RE.match(chr(cp))) != is_kanji(chr(cp))
+    ]
+    assert disagreements == []
+
+
+def test_kanji_re_finds_supplementary_and_compatibility_ideographs():
+    assert KANJI_RE.findall("𠮟る") == ["𠮟"]   # U+20B9F, Ext B
+    assert KANJI_RE.findall("﨑") == ["﨑"]      # U+FA11, compatibility
+    assert KANJI_RE.findall("彫刻abcの12") == ["彫", "刻"]
+    assert KANJI_RE.findall("ひらがなカナ") == []
 
 
 # --- parse_comparator -------------------------------------------------------

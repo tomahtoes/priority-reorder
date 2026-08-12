@@ -175,6 +175,58 @@ def test_custom_length_term_fast_path_filters_by_expression_length(fake_col):
     assert [c.card_id for c in dm.get_cards_from_search("deck:X -length>=3").cards] == [1, 2]
 
 
+def test_filter_order_does_not_change_the_result(fake_col, monkeypatch):
+    # The post-filter reorders terms cheapest-first, which is only sound because they form
+    # a pure conjunction of independent predicates. Whatever order the query writes them
+    # in, the surviving cards and their order must be identical.
+    counts = {10: 9, 20: 1, 30: 9, 40: 1}
+
+    def build():
+        fake_col(
+            find_results={"(deck:X) is:new": [1, 2, 3, 4]},
+            rows=[_row(1, 10, "茶の間", "ちゃのま", "50"), _row(2, 20, "茶の間", "ちゃのま", "50"),
+                  _row(3, 30, "手", "て", "500"), _row(4, 40, "手", "て", "500")],
+        )
+        monkeypatch.setattr(
+            dmod, "occurrence_counter",
+            lambda *a, **k: (lambda expression, reading, card_kanji=None: 0),
+            raising=False,
+        )
+        return DataManager(Config())
+
+    a = build().get_cards_from_search("deck:X f<100 length>=3")
+    b = build().get_cards_from_search("deck:X length>=3 f<100")
+    assert [c.card_id for c in a.cards] == [c.card_id for c in b.cards] == [1, 2]
+    assert a.raw_count == b.raw_count == 4
+
+
+def test_expensive_predicate_is_never_built_once_nothing_is_left(fake_col, monkeypatch):
+    # Building the kanji predicate initializes the known-kanji set (a collection scan), and
+    # the seen predicate resolves and parses the daily dicts. A cheap term that already
+    # emptied the candidate list must not pay for either.
+    fake_col(
+        find_results={"(deck:X) is:new": [1]},
+        rows=[_row(1, 10, "語", "ご", "5000")],
+    )
+
+    class _FakeKM:
+        def __init__(self):
+            self.inits = 0
+
+        def initialize(self):
+            self.inits += 1
+
+        def get_unknown_kanji_count(self, text, target=1):
+            return 1
+
+    km = _FakeKM()
+    monkeypatch.setattr(dmod, "get_kanji_manager", lambda cfg: km)
+
+    res = DataManager(Config()).get_cards_from_search("deck:X kanji:new>=1 f<100")
+    assert [c.card_id for c in res.cards] == []  # f<100 eliminates the only card
+    assert km.inits == 0, "kanji predicate must not be built for an empty candidate list"
+
+
 def test_plain_query_raw_count_equals_match_count(fake_col):
     fake_col(
         find_results={"(deck:A) is:new": [1]},
@@ -245,11 +297,13 @@ def test_occ_count_cached_per_note_for_the_run(fake_col, monkeypatch):
     )
     calls = {"n": 0}
 
-    def fake_occurrence_count(dict_names, expression, reading, **kwargs):
-        calls["n"] += 1
-        return 7
+    def fake_occurrence_counter(dict_names, **kwargs):
+        def count(expression, reading, card_kanji=None):
+            calls["n"] += 1
+            return 7
+        return count
 
-    monkeypatch.setattr(dmod, "occurrence_count", fake_occurrence_count)
+    monkeypatch.setattr(dmod, "occurrence_counter", fake_occurrence_counter)
 
     dm = DataManager(Config())
     r1 = dm.get_cards_from_search("deck:X occurrences:D>5")
@@ -259,30 +313,37 @@ def test_occ_count_cached_per_note_for_the_run(fake_col, monkeypatch):
 
 
 def test_occ_predicate_forwards_all_matching_flags(fake_col, monkeypatch):
-    # Every config matching flag must reach occurrence_count — a flag that stops being
-    # forwarded silently degrades to the exact-match behavior.
+    # Every config matching flag must reach occurrence_counter — a flag that stops being
+    # forwarded silently degrades to the exact-match behavior. The flags are bound when the
+    # counter is BUILT (once per predicate), not per card.
     fake_col(
         find_results={"(deck:X) is:new": [1]},
         rows=[_row(1, 10, "煌めく", "きらめく", "100")],
     )
-    seen = {}
+    built = {}
+    calls = []
 
-    def fake_occurrence_count(dict_names, expression, reading, **kwargs):
-        seen.update(kwargs)
-        return 7
+    def fake_occurrence_counter(dict_names, **kwargs):
+        built.update(kwargs)
 
-    monkeypatch.setattr(dmod, "occurrence_count", fake_occurrence_count)
+        def count(expression, reading, card_kanji=None):
+            calls.append((expression, reading, card_kanji))
+            return 7
+
+        return count
+
+    monkeypatch.setattr(dmod, "occurrence_counter", fake_occurrence_counter)
     cfg = Config(kana_normalization=True, combine_word_forms=True, prefix_matching=True,
                  suffix_matching=True, variant_matching=True, honorific_folding=True)
     DataManager(cfg).get_cards_from_search("deck:X occurrences:D>5")
-    matching_flags = {k: v for k, v in seen.items() if k not in ("prefolded", "card_kanji")}
+    matching_flags = {k: v for k, v in built.items() if k != "prefolded"}
     assert matching_flags == dict(normalize_kana=True, combine_word_forms=True,
                                   prefix_matching=True, suffix_matching=True,
                                   variant_matching=True, honorific_folding=True)
-    # The note is folded and skeletonized once per run and handed down, so occurrence_count
+    # The note is folded and skeletonized once per run and handed down, so the counter
     # must be told not to redo either (see DataManager._note_derived).
-    assert seen["prefolded"] is True
-    assert seen["card_kanji"] == "煌"
+    assert built["prefolded"] is True
+    assert calls == [("煌めく", "きらめく", "煌")]
 
 
 def test_kanji_count_cache_is_keyed_by_target(fake_col, monkeypatch):
@@ -320,7 +381,7 @@ def test_occ_predicate_never_matches_without_expression_or_reading(fake_col, mon
         find_results={"(deck:X) is:new": [1, 2]},
         rows=[_row(1, 10, "語", "", "100"), _row(2, 20, "語", "ご", "100")],
     )
-    monkeypatch.setattr(dmod, "occurrence_count", lambda *a, **k: 99)
+    monkeypatch.setattr(dmod, "occurrence_counter", lambda *a, **k: lambda *args: 99)
     res = DataManager(Config()).get_cards_from_search("deck:X occurrences:D>5")
     assert [c.card_id for c in res.cards] == [2]  # card 1 has no reading
 
@@ -527,6 +588,27 @@ def test_seen_hit_at_smaller_window_still_evaluated(fake_col, monkeypatch):
     assert [c.card_id for c in dm.get_cards_from_search("deck:X seen:1").cards] == [1]
     assert fake.probes(30) == 1
     assert fake.probes(1) == 1
+
+
+def test_seen_miss_at_middle_window_settles_smaller_levels(fake_col, monkeypatch):
+    # The downward half of the same monotonicity: 茶 is in seen:30 but not seen:7, so it
+    # cannot be in seen:1 either. Two probes must settle all three levels.
+    fake_col(
+        find_results={"(deck:X) is:new": [1]},
+        rows=[_row(1, 10, "茶", "ちゃ", "50")],
+    )
+    fake = _nested(monkeypatch, {1: {"茶"}, 7: set(), 30: {"茶"}})
+
+    cfg = Config(priority_search=["deck:X seen:1", "deck:X seen:7", "deck:X seen:30"])
+    dm = DataManager(cfg)
+    assert [c.card_id for c in dm.get_cards_from_search("deck:X seen:7").cards] == []
+    assert [c.card_id for c in dm.get_cards_from_search("deck:X seen:1").cards] == []
+
+    assert fake.probes(30) == 1
+    assert fake.probes(7) == 1
+    # The seen:1 window is deliberately stocked with 茶 so that consulting it would give the
+    # WRONG answer — nesting says a seen:7 miss is a seen:1 miss.
+    assert fake.probes(1) == 0, "a miss at seen:7 must settle every smaller level"
 
 
 def test_seen_short_circuit_preserves_every_answer(fake_col, monkeypatch):

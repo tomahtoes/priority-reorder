@@ -7,7 +7,7 @@
 - `prefix_matching` now also credits single-kanji cards from particle-linked entries (e.g. `手`/`て` gains `手を貸す`'s count) when the entry's reading confirms the card's reading. Bare particle forms count too, so `俗`/`ぞく` gains `俗に` and `特`/`とく` gains `特に` — no need for a separate card for the particle form. Applies to `occurrences:` and `seen:` alike.
 - Summary window look-and-feel improvements: flatter, more compact layout with clearer rows.
 - New `length` search filter — e.g. `length>=3` for words 3 or more characters long, `length=1` for single-character words.
-- Performance enhancements and lower memory use.
+- Performance enhancements, lower memory use, and assorted bug fixes.
 
 ## 2026-06-19
 - New `seen:N` search term — prioritize words from your recent *daily* occurrence dictionaries (in `user_files/_seen/<YYYY-MM-DD>/`). Matches words appearing in any of the last N days ("seen at all"). Works in the Browse bar, the collection API (AnkiConnect), and config, and honors the occurrence options (prefix matching, etc.).

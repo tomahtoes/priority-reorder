@@ -9,6 +9,7 @@ import pytest
 import kanji_manager as kmod
 from config_manager import Config, SearchConfig
 from kanji_manager import KanjiManager, get_kanji_manager
+from utils import is_kanji
 
 
 class _FakeModels:
@@ -77,6 +78,15 @@ def test_get_kanji_count_counts_cjk_chars_only():
     km = KanjiManager(Config())
     assert km.get_kanji_count("彫刻abcの12") == 2
     assert km.get_kanji_count("ひらがなカナ") == 0
+
+
+def test_get_kanji_count_uses_the_shared_kanji_class():
+    # This used to be a local `[一-龯]`, narrower than utils.is_kanji, so kanji:num and
+    # kanji:new silently ignored characters variant matching counted.
+    km = KanjiManager(Config())
+    assert km.get_kanji_count("𠮟る") == 1   # U+20B9F, Ext B
+    assert km.get_kanji_count("﨑") == 1      # U+FA11, compatibility ideograph
+    assert km._extract_kanji("彫刻𠮟﨑の") == [c for c in "彫刻𠮟﨑の" if is_kanji(c)]
 
 
 def test_get_unknown_kanji_count_against_known_set():

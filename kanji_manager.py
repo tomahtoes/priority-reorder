@@ -1,4 +1,3 @@
-import re
 import time
 from aqt import mw
 from anki.utils import ids2str
@@ -7,8 +6,10 @@ from typing import Dict, List, Optional, Tuple
 
 try:  # inside Anki: isolated package namespace
     from .config_manager import Config
+    from .utils import KANJI_RE
 except ImportError:  # pytest / flat-import context
     from config_manager import Config
+    from utils import KANJI_RE
 
 _kanji_manager_instance = None
 
@@ -47,10 +48,13 @@ class KanjiManager:
         # Wall-clock ms of the last initialize() that actually rebuilt or synced;
         # None when the call was a no-op. Read by the reorder timings.
         self.last_scan_ms: Optional[float] = None
-        self._kanji_pattern = re.compile(r'[\u4e00-\u9faf]')
 
     def _extract_kanji(self, text: str) -> List[str]:
-        return self._kanji_pattern.findall(text)
+        # utils.KANJI_RE, not a local pattern: this used to be a narrower
+        # `[一-龯]`, so kanji:num/kanji:new silently ignored Ext A, the
+        # compatibility ideographs (﨑/塚) and all of Ext B — characters utils.is_kanji,
+        # and therefore variant matching, counts.
+        return KANJI_RE.findall(text)
 
     def initialize(self) -> None:
         # A "known" kanji comes from a word that is graduated and not suspended.
@@ -61,20 +65,38 @@ class KanjiManager:
         self._mod_seen = mod
 
         sig = self._known_signature()
-        if self.initialized and sig == self._scan_sig:
+        # `sig is not None` matters: a failed signature query returns None, and storing
+        # that below would otherwise make the NEXT failure compare None == None and skip
+        # the rescan it was supposed to force.
+        if self.initialized and sig is not None and sig == self._scan_sig:
             return
 
         t0 = time.perf_counter()
-        if self.initialized and self._note_kanji:
-            try:
-                self._sync_known_notes()
-            except Exception as e:
-                import traceback
-                print(f"[priority-reorder] incremental kanji sync failed: {e}")
-                traceback.print_exc()
+        try:
+            if self.initialized and self._note_kanji:
+                try:
+                    self._sync_known_notes()
+                except Exception as e:
+                    import traceback
+                    print(f"[priority-reorder] incremental kanji sync failed: {e}")
+                    traceback.print_exc()
+                    self._rebuild_all()
+            else:
                 self._rebuild_all()
-        else:
-            self._rebuild_all()
+        except Exception as e:
+            # A failed rebuild leaves a partial counter. Don't stamp it as current —
+            # clearing both gates makes the next call retry instead of serving half the
+            # known set for the rest of the session. `initialized` is still set, because
+            # get_unknown_kanji_count's safety net would otherwise re-enter this per card.
+            # The reorder continues on best-effort counts rather than aborting outright.
+            import traceback
+            print(f"[priority-reorder] kanji scan failed; counts may be incomplete: {e}")
+            traceback.print_exc()
+            self._scan_sig = None
+            self._mod_seen = None
+            self.initialized = True
+            self.last_scan_ms = (time.perf_counter() - t0) * 1000
+            return
         self.last_scan_ms = (time.perf_counter() - t0) * 1000
         self._scan_sig = sig
         self.initialized = True
@@ -131,6 +153,9 @@ class KanjiManager:
         self._scan_all()
 
     def _scan_all(self) -> None:
+        """Credit every known note's kanji. Raises on a failed scan rather than leaving a
+        half-built counter behind: initialize() would otherwise stamp the partial result as
+        authoritative and never rescan."""
         expression_field, idx_by_mid = self._expression_field_indices()
         if not expression_field:
             return
@@ -145,6 +170,7 @@ class KanjiManager:
             import traceback
             print(f"[priority-reorder] kanji scan failed: {e}")
             traceback.print_exc()
+            raise
 
     def _sync_known_notes(self) -> None:
         """Diff the known-note set against the per-note snapshot: subtract notes

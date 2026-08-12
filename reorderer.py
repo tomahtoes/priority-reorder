@@ -1,4 +1,5 @@
 import itertools
+import operator
 import time
 from typing import List, Optional, Set, Tuple, Dict
 from aqt import mw
@@ -39,6 +40,11 @@ PriorityDef = Tuple[str, Optional[int]]
 # user_files/_timings.log (last 200 runs kept) — useful when Anki runs without
 # a console. Off by default; normal users never see a file appear.
 _DUMP_TIMINGS_LOG = False
+
+# Sort keys for _sort_cards. attrgetter is a C-level call, measurably cheaper than a
+# bound method or a lambda over the tens of thousands of cards a reorder sorts.
+_SORT_VALUE = operator.attrgetter("data.sort_field_value")
+_CARD_ID = operator.attrgetter("card_id")
 
 class PriorityReorderer:
     def __init__(self, config: Config) -> None:
@@ -185,14 +191,26 @@ class PriorityReorderer:
 
         def split_by_threshold(cards: List[Card], threshold: Optional[int]) -> Tuple[List[Card], List[Card]]:
             """Partition into (over, rest) by the sort value exceeding `threshold`
-            in the configured direction; a None threshold puts everything in rest."""
+            in the configured direction; a None threshold puts everything in rest.
+
+            `over` is the "worse" side at both call sites — cutoff drops it out of
+            priority, prioritization leaves it in normal. A card with no usable sort
+            value therefore always belongs there, matching _sort_cards ("always trail,
+            in either sort direction"). Testing the raw +inf sentinel instead got that
+            right only under reverse=False; under reverse=True `inf < threshold` is
+            False, so value-less cards survived the cutoff AND were promoted into the
+            priority queue."""
             if threshold is None:
                 return [], list(cards)
             over: List[Card] = []
             rest: List[Card] = []
             for card in cards:
-                val = card.data.sort_field_value
-                exceeds = val < threshold if reverse else val > threshold
+                data = card.data
+                if not data.has_sort_value:
+                    exceeds = True
+                else:
+                    val = data.sort_field_value
+                    exceeds = val < threshold if reverse else val > threshold
                 (over if exceeds else rest).append(card)
             return over, rest
 
@@ -359,9 +377,30 @@ class PriorityReorderer:
         the cards for sync, so a no-op reorder leaves the sync button stuck on
         "changes pending". Skipping the reposition when the order is already
         correct is the only way to avoid that churn.
+
+        The two shift_existing modes need different tests, because they write
+        different things — see the branches below.
         """
         if not new_ids:
             return False
+
+        if not self.config.shift_existing:
+            # Without shift_existing, reposition writes due = index for exactly these
+            # cards and moves nothing else. So "already applied" is a per-card test,
+            # and it MUST be: comparing against the global new-card order churns
+            # forever on a new card outside every configured search whose due happens
+            # to land inside 0..N-1 — nothing can move it, so the order never matches
+            # and every reorder re-dirties the whole backlog for sync.
+            #
+            # Bounded by `due < N` rather than inlining the ids: a 100k-card backlog
+            # would blow past SQLite's statement-length limit (see _BULK_CHUNK_SIZE).
+            try:
+                due_by_id = dict(mw.col.db.all(
+                    f"select id, due from cards where type = 0 and due < {len(new_ids)}"
+                ))
+            except Exception:
+                return True
+            return any(due_by_id.get(cid) != i for i, cid in enumerate(new_ids))
 
         try:
             # type = 0 == new cards (the `is:new` domain every search uses).
@@ -382,16 +421,29 @@ class PriorityReorderer:
 
         return current_ids[:len(new_ids)] != new_ids
 
-    def _get_sort_key(self, card: Card) -> float:
-        return card.data.sort_field_value
-
     def _sort_cards(self, cards: List[Card]) -> List[Card]:
         # Cards with no usable sort value always trail, in either sort direction
         # (a single numeric sentinel can't do this: reverse=True would float it
         # to the top).
-        present = [c for c in cards if c.data.has_sort_value]
-        missing = [c for c in cards if not c.data.has_sort_value]
-        present.sort(key=self._get_sort_key, reverse=self.config.sort_reverse)
+        present: List[Card] = []
+        missing: List[Card] = []
+        for card in cards:
+            (present if card.data.has_sort_value else missing).append(card)
+
+        # Equal sort values (and the whole `missing` group) used to keep their input
+        # order, which traces back to iterating sets of card ids in
+        # _assign_initial_buckets — an order that shifts when the card set changes.
+        # A handful of cards graduating could then permute a tie group, which is
+        # exactly what makes _needs_reorder see a different order and reposition the
+        # whole backlog for nothing. Breaking ties on card id makes the produced order
+        # reproducible and matches _needs_reorder's own `order by due, id`.
+        #
+        # Two stable passes rather than a (value, id) tuple key: reverse=True would
+        # also reverse the id component, and the tuple key measured slower than both
+        # attrgetter sorts combined.
+        present.sort(key=_CARD_ID)
+        present.sort(key=_SORT_VALUE, reverse=self.config.sort_reverse)
+        missing.sort(key=_CARD_ID)
         return present + missing
 
     def _write_log(

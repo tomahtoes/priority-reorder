@@ -63,6 +63,29 @@ def test_sort_reverse_missing_values_still_trail():
     assert ids(out) == [1, 4, 2, 3]  # 5,3,1 descending then the value-less card
 
 
+def test_sort_breaks_ties_on_card_id_regardless_of_input_order():
+    # The input order comes from iterating sets of card ids, which reshuffles when the
+    # card set changes. Without a tie-break the output would follow it, so a few cards
+    # graduating could permute a tie group -> _needs_reorder sees a different order ->
+    # the whole backlog is repositioned and re-dirtied for sync.
+    tied = [card(5, 10), card(2, 10), card(9, 10), card(7, 10)]
+    valueless = [card(30, None), card(11, None), card(22, None)]
+    r = reorderer(sort_reverse=False)
+
+    forward = ids(r._sort_cards(tied + valueless))
+    backward = ids(r._sort_cards(list(reversed(valueless)) + list(reversed(tied))))
+    assert forward == backward == [2, 5, 7, 9, 11, 22, 30]
+
+
+def test_sort_tie_break_stays_ascending_under_reverse():
+    # A single (value, card_id) tuple key would reverse the id component too; the ids
+    # must stay ascending within a tie group in both directions, matching the
+    # `order by due, id` that _needs_reorder compares against.
+    r = reorderer(sort_reverse=True)
+    out = r._sort_cards([card(9, 10), card(2, 10), card(5, 20), card(1, 20)])
+    assert ids(out) == [1, 5, 2, 9]  # 20s first (ids ascending), then the 10s
+
+
 # --- _assign_initial_buckets ------------------------------------------------
 
 def _card_map(*cards):
@@ -139,6 +162,39 @@ def test_prioritization_promotes_into_separate_trailing_tier():
     assert ids(final_priority[0]) == [1]     # search bucket untouched
     assert ids(final_priority[-1]) == [50]   # promoted card in its own tier
     assert ids(new_normal) == [200]
+
+
+def test_cutoff_drops_value_less_cards_under_reverse_sort():
+    # The +inf sentinel is not < any threshold, so testing it numerically kept value-less
+    # cards inside priority under reverse=True while dropping them under the default
+    # direction. They have no ordering data at all, so they belong on the dropped side
+    # either way — the same rule _sort_cards applies when it trails them.
+    # `good` is the value that survives the cutoff in each direction (lower is better
+    # under reverse=False, higher under reverse=True).
+    for reverse, good in ((False, 50), (True, 150)):
+        r = reorderer(priority_search_mode="sequential", priority_cutoff=100,
+                      sort_reverse=reverse)
+        st = summaries(1)
+        final_priority, normal = r._apply_refinement_rules([[card(1, good), card(3, None)]],
+                                                           [], st)
+        assert ids(final_priority[0]) == [1], f"sort_reverse={reverse}"
+        assert ids(normal) == [3], f"sort_reverse={reverse}"
+
+
+def test_prioritization_does_not_promote_value_less_cards_under_reverse_sort():
+    # The same sentinel bug on the other call site, where it was worse: `rest` IS the
+    # promoted tier, so under reverse=True every card with an empty/non-numeric sort
+    # field was promoted into the priority queue.
+    # `good` is the value that earns promotion in each direction.
+    for reverse, good in ((False, 50), (True, 150)):
+        r = reorderer(priority_search_mode="sequential", normal_prioritization=100,
+                      sort_reverse=reverse)
+        st = summaries(1)
+        normal = [card(7, good), card(12, None)]
+        final_priority, new_normal = r._apply_refinement_rules([[card(1, good)]], normal, st)
+
+        assert ids(final_priority[-1]) == [7], f"sort_reverse={reverse}"  # only the real value
+        assert ids(new_normal) == [12], f"sort_reverse={reverse}"
 
 
 def test_empty_kept_bucket_is_still_appended_for_index_alignment():
@@ -348,6 +404,72 @@ def test_apply_reordering_repositions_when_foreign_card_interleaved(monkeypatch)
     monkeypatch.setattr(rmod.mw, "col", _col(sched, [1, 99, 2, 3]), raising=False)
 
     result = reorderer()._apply_reordering([card(1, 1), card(2, 2), card(3, 3)], [])
+
+    assert sched.calls[0][0] == [1, 2, 3]
+    assert result.count == 3
+
+
+class _DueDB:
+    """Stands in for mw.col.db on the shift_existing=False path; .all() returns the
+    (id, due) rows of every new card sitting inside the placed block."""
+    def __init__(self, rows):
+        self.rows = list(rows)
+        self.queries = []
+
+    def all(self, query):
+        self.queries.append(query)
+        return list(self.rows)
+
+
+def test_no_shift_skips_when_cards_already_hold_their_positions(monkeypatch):
+    # Regression: without shift_existing, reposition moves nothing except the listed
+    # cards, so an unmanaged new card (99) parked inside the block can never be pushed
+    # aside. Comparing against the global new-card order therefore never matched and
+    # every single reorder re-dirtied the whole backlog for sync. What matters is only
+    # whether OUR cards already read due = 0,1,2.
+    import types
+    import reorderer as rmod
+
+    sched = _FakeSched()
+    db = _DueDB([(1, 0), (99, 1), (2, 1), (3, 2)])
+    monkeypatch.setattr(rmod.mw, "col", types.SimpleNamespace(sched=sched, db=db), raising=False)
+
+    r = reorderer(shift_existing=False)
+    result = r._apply_reordering([card(1, 1), card(2, 2), card(3, 3)], [])
+
+    assert sched.calls == []
+    assert result.count == 0
+    assert db.queries and "due < 3" in db.queries[0]
+
+
+def test_no_shift_still_repositions_when_a_position_is_wrong(monkeypatch):
+    import types
+    import reorderer as rmod
+
+    sched = _FakeSched()
+    db = _DueDB([(1, 0), (3, 1), (2, 2)])  # 2 and 3 swapped
+    monkeypatch.setattr(rmod.mw, "col", types.SimpleNamespace(sched=sched, db=db), raising=False)
+
+    result = reorderer(shift_existing=False)._apply_reordering(
+        [card(1, 1), card(2, 2), card(3, 3)], []
+    )
+
+    assert sched.calls[0][0] == [1, 2, 3]
+    assert result.count == 3
+
+
+def test_shift_existing_still_repositions_a_foreign_interleaved_card(monkeypatch):
+    # The other half of the same rule: WITH shift_existing, reposition does bump foreign
+    # new cards out of the block, so leaving one interleaved is a real difference and must
+    # still trigger a reorder (see test_apply_reordering_repositions_when_foreign_card_interleaved).
+    import reorderer as rmod
+
+    sched = _FakeSched()
+    monkeypatch.setattr(rmod.mw, "col", _col(sched, [1, 99, 2, 3]), raising=False)
+
+    result = reorderer(shift_existing=True)._apply_reordering(
+        [card(1, 1), card(2, 2), card(3, 3)], []
+    )
 
     assert sched.calls[0][0] == [1, 2, 3]
     assert result.count == 3
