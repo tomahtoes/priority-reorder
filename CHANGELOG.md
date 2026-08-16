@@ -1,6 +1,7 @@
 # Changelog
 
-## 2026-07-30
+## 2026-08-16
+- Release [Daily Occurrences addon](https://github.com/tomahtoes/daily-occurrences) to allow tracking daily seen words.
 - New `variant_matching` occurrence option — credits a card with the counts of dictionary entries that are another *written form* of the same word, differing in okurigana or kanji spelling. An entry counts when its reading matches the card's and the two forms' kanji nest, which keeps same-reading homophones apart; kana-only spellings never match here. Applies to `occurrences:` and `seen:` alike.
 - New `suffix_matching` occurrence option — the mirror of `prefix_matching` at the *end* of a word. A card is credited with the counts of dictionary entries that end with its expression, so a head morpheme aggregates its family: `学校` ← `小学校`/`中学校`, and head-final compound verbs/adjectives like `出す` ← `思い出す` or `強い` ← `心強い`. Restricted to real words (≥ 2 characters with a kanji); a bare single kanji matches only via reading-validated particle phrases (`母の日` credits `日`). Applies to `occurrences:` and `seen:` alike.
 - `kanji:new` now takes an optional per-kanji target: `kanji:new[3]>=1` matches words with at least one kanji that fewer than 3 of your learned words contain. A kanji counts as "new" until the target number of learned words contain it; plain `kanji:new` is unchanged (equivalent to `kanji:new[1]`).

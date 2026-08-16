@@ -205,7 +205,9 @@ Prioritize words you've encountered recently in your immersion, using *daily* oc
 - **⚡ Keep windows small**: cost grows with # of days, so **the smaller your window, the faster the reorder** — `seen:1`–`seen:3` are cheap, large windows (`seen:30`+) get noticeably slower, especially with settings like `prefix_matching` or `variant_matching` on. If you care at all about sorting speed, use the smallest window that still means "recently seen". (Reusing the *same* window across several priority searches is free within a reorder.)
 
 #### Setup for Seen Dictionaries
-Place your daily occurrence dictionaries in a reserved `_seen` folder under `user_files`, one subfolder per day named `YYYY-MM-DD`:
+I have additionally created a new [Daily Occurrences addon](https://github.com/tomahtoes/daily-occurrences) that will create seen dictionaries for you per day so long as the text is coming in through a websocket, as is often the case for VN based workflows.
+
+If you wish to develop your own method of building these, place your daily occurrence dictionaries in a reserved `_seen` folder under `user_files`, one subfolder per day named `YYYY-MM-DD`:
 ```
 user_files/
 └── _seen/
