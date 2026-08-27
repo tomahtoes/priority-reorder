@@ -15,6 +15,11 @@ try:  # inside Anki: isolated package namespace
     )
     from .dictionary_manager import expand_dict_names, occurrence_counter, _kanji_skeleton
     from .kanji_manager import get_kanji_manager
+    from .kanji_readings import (
+        reading_slots, unresolved_count,
+        UNRESOLVED_WARN_RATE, UNRESOLVED_MIN_SAMPLE,
+    )
+    from . import kanji_readings
     from . import seen_manager
 except ImportError:  # pytest / flat-import context
     from models import Card, NoteData
@@ -28,6 +33,11 @@ except ImportError:  # pytest / flat-import context
     )
     from dictionary_manager import expand_dict_names, occurrence_counter, _kanji_skeleton
     from kanji_manager import get_kanji_manager
+    from kanji_readings import (
+        reading_slots, unresolved_count,
+        UNRESOLVED_WARN_RATE, UNRESOLVED_MIN_SAMPLE,
+    )
+    import kanji_readings
     import seen_manager
 
 class SearchResult(NamedTuple):
@@ -59,10 +69,13 @@ _TERM_COST = {"length": 0, "freq": 1, "kanji": 2, "seen": 3, "occ": 4}
 
 def clear_note_cache() -> None:
     """Drop the cross-run note cache. Wired to profile_did_open — note ids from
-    one profile must never serve another — and used by tests."""
+    one profile must never serve another — and used by tests. The reading-slot
+    memo is keyed on field text rather than note id, but it is dropped here too
+    so a profile switch cannot leave one profile's working set resident."""
     global _note_data_cache_fp
     _note_data_cache.clear()
     _note_data_cache_fp = None
+    kanji_readings.clear_cache()
 
 
 def _notetypes_mod_sum() -> int:
@@ -109,6 +122,13 @@ class DataManager:
         # find_matches and load_cards top-level stages, and `kanji_scan` is the
         # rescan slice of `kanji_init`.
         self.stage_ms: Dict[str, float] = {}
+        # Reading slots resolved / left unexplained across the cards this run
+        # actually evaluated, counted once per note (on a cache miss), not once
+        # per comparison. Surfaced as the new_reading diagnostic: a misconfigured
+        # reading field wildcards everything, which turns kanji:new_reading into
+        # "matches every card" without raising anything.
+        self._nr_total = 0
+        self._nr_unresolved = 0
 
     def _add_ms(self, key: str, t0: float) -> None:
         self.stage_ms[key] = self.stage_ms.get(key, 0.0) + (time.perf_counter() - t0) * 1000
@@ -365,6 +385,10 @@ class DataManager:
             check_type, target, op, thresh = args
             comparator = parse_comparator(op)
             km = self._km()
+            if check_type == "new_reading":
+                # Before initialize(): the reading index is built during the scan,
+                # and enabling it afterwards would force a second one.
+                km.enable_readings()
             t0 = time.perf_counter()
             km.initialize()  # once per predicate build, not per evaluated card
             self._add_ms("kanji_init", t0)
@@ -373,6 +397,29 @@ class DataManager:
             if scan_ms:
                 self.stage_ms["kanji_scan"] = self.stage_ms.get("kanji_scan", 0.0) + scan_ms
             cache = self._kanji_count_cache.setdefault((check_type, target), {})
+
+            if check_type == "new_reading":
+                # Raw fields, not _note_derived: that helper's kana folding is
+                # gated on the kana_normalization flag, which belongs to the
+                # occurrence dictionaries. reading_slots folds internally and
+                # memoises per (expression, reading) anyway.
+                def kanji_pred(c: Card) -> bool:
+                    data = c.data
+                    if not data.expression or not data.reading:
+                        return False
+                    nid = c.note_id
+                    value = cache.get(nid)
+                    if value is None:
+                        slots = reading_slots(data.expression, data.reading)
+                        counts = km.known_reading_counts
+                        value = sum(1 for slot in slots if counts[slot] < target)
+                        cache[nid] = value
+                        self._nr_total += len(slots)
+                        self._nr_unresolved += unresolved_count(slots)
+                    return comparator(value, thresh)
+
+                return kanji_pred
+
             count_kanji = (
                 (lambda text: km.get_unknown_kanji_count(text, target))
                 if check_type == "new" else km.get_kanji_count
@@ -480,6 +527,37 @@ class DataManager:
             return seen_pred
 
         return lambda c: False
+
+    def reading_diagnostics(self) -> Dict[str, str]:
+        """One-line summaries of how much of the collection the reading table
+        could explain, for the reorder timings line and the summary window.
+
+        Empty unless a new_reading term actually ran. Two views: the cards this
+        run evaluated, and the learned collection behind the index — the latter
+        is the more useful of the two, being computed once over everything."""
+        out: Dict[str, str] = {}
+        rate = None
+        if self._nr_total:
+            rate = self._nr_unresolved / self._nr_total
+            out["new_reading_cards"] = "%.0f%% unresolved of %d kanji" % (
+                100.0 * rate, self._nr_total)
+        km = self._kanji_manager
+        known_rate = km.unresolved_reading_rate() if km is not None else None
+        if known_rate is not None:
+            out["new_reading_known"] = "%.0f%% unresolved" % (100.0 * known_rate)
+        # A separate key rather than a threshold the UI re-derives: the values
+        # above are formatted for people, and parsing a percentage back out of
+        # them to decide whether to alarm would be one copy of the rule too many.
+        if (rate is not None
+                and self._nr_total >= UNRESOLVED_MIN_SAMPLE
+                and rate >= UNRESOLVED_WARN_RATE):
+            out["new_reading_warning"] = (
+                "%.0f%% of the kanji checked by kanji:new_reading have a reading "
+                "the table cannot explain (usually under 25%%). Check that "
+                "search_fields.expression_reading_field names the field holding "
+                "the kana reading." % (100.0 * rate)
+            )
+        return out
 
     def _note_derived(self, card: Card) -> Tuple[str, str, Optional[str]]:
         """``(expression, reading, kanji skeleton)`` for a note, computed once per run.

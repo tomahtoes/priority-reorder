@@ -39,13 +39,21 @@ FREQ_RE = re.compile(
 LENGTH_RE = re.compile(
     r"(?<![^\s(-])length(?P<op>>=|<=|!=|=|<|>)(?P<thresh>\d+)(?=\s|\)|$)"
 )
-# `kanji:new` takes an optional bracketed target `[T]` (a kanji counts as "new"
-# until T learned words contain it); the `(?<=new)` lookbehind keeps the bracket
-# off `kanji:num`. That lookbehind relies on the type alternatives staying
-# fixed-width-distinguishable — revisit it if another check type is added.
+# `kanji:new` and `kanji:new_reading` take an optional bracketed target `[T]`:
+# a kanji (resp. a reading of a kanji) counts as "new" until T learned words
+# contain it. Two things about this pattern are load-bearing:
+#
+#   - `new_reading` must precede `new` in the alternation. Python's `|` is
+#     leftmost-first, not longest-match, so with `new` first the token would
+#     match `new`, fail on the `_`, and — the lookbehind blocking a retry inside
+#     the token — not match at all, passing silently through to Anki's backend
+#     as a no-op rather than an error.
+#   - the bracket guard is a *negative* lookbehind. It used to be `(?<=new)`,
+#     which is fixed-width and so could never admit a second, longer type name.
+#     `(?<!num)` says "allowed after anything but num" and stays fixed-width.
 KANJI_RE = re.compile(
-    r"(?<![^\s(-])kanji:(?P<type>new|num)"
-    r"(?:(?<=new)\[(?P<target>\d+)\])?"
+    r"(?<![^\s(-])kanji:(?P<type>new_reading|new|num)"
+    r"(?:(?<!num)\[(?P<target>\d+)\])?"
     r"(?P<op>>=|<=|!=|=|<|>)(?P<thresh>\d+)"
 )
 # `seen:N` is a date-windowed *presence* lookup over user_files/_seen/<date>/ (see
@@ -80,10 +88,10 @@ def _format_nid_clause(ids) -> str:
 
 def _kanji_args(m):
     """(check_type, target, op, thresh) for a KANJI_RE match. `target` is the
-    bracketed [T] on kanji:new — a kanji stays "new" until T learned words
-    contain it — defaulting to 1 (plain kanji:new). The regex forbids a bracket
-    on "num"; target is normalized to 1 there too so tuple shapes and cache
-    keys stay uniform."""
+    bracketed [T] on kanji:new / kanji:new_reading — a kanji, or a reading of
+    one, stays "new" until T learned words contain it — defaulting to 1. The
+    regex forbids a bracket on "num"; target is normalized to 1 there too so
+    tuple shapes and cache keys stay uniform."""
     t = m.group("target")
     return m.group("type"), int(t) if t is not None else 1, m.group("op"), int(m.group("thresh"))
 
@@ -505,26 +513,42 @@ def resolve_length(op, thresh, candidate_nids=None):
 
 
 def resolve_kanji(check_type, target, op, thresh, candidate_nids=None):
-    """Note ids whose expression has the requested kanji count. For "new",
-    `target` is the per-kanji bar: a kanji counts as new until `target` learned
-    words contain it (1 = plain kanji:new). Notes with an empty expression are
-    skipped (never matched), mirroring KanjiRule.matches."""
+    """Note ids whose expression has the requested kanji count. For "new" and
+    "new_reading", `target` is the per-kanji bar: a kanji — or the reading it
+    takes in this word — counts as new until `target` learned words contain it
+    (1 = the plain form). Notes with an empty expression are skipped (never
+    matched), mirroring KanjiRule.matches; "new_reading" additionally needs a
+    reading, and skips notes without one like resolve_occurrences does."""
     from .config_manager import get_config
     from .kanji_manager import get_kanji_manager
 
     def compute():
         cfg = get_config()
         expr_field = cfg.search_config.expression_field
+        read_field = cfg.search_config.expression_reading_field
         comparator = parse_comparator(op)
         km = get_kanji_manager(cfg)
+        wants_reading = check_type == "new_reading"
+        if wants_reading:
+            km.enable_readings()
         km.initialize()  # once per batch, not per evaluated note
 
+        # Only new_reading requires the reading field. _iter_candidate_notes
+        # skips note types missing any required field, so asking for it
+        # unconditionally would silently change what kanji:new/kanji:num match.
+        required = (expr_field, read_field) if wants_reading else (expr_field,)
+
         ids = []
-        for nid, values in _iter_candidate_notes((expr_field,), candidate_nids):
+        for nid, values in _iter_candidate_notes(required, candidate_nids):
             expression = values[expr_field]
             if not expression:
                 continue
-            if check_type == "new":
+            if wants_reading:
+                reading = values[read_field]
+                if not reading:
+                    continue
+                count = km.get_new_reading_count(expression, reading, target)
+            elif check_type == "new":
                 count = km.get_unknown_kanji_count(expression, target)
             else:  # "num"
                 count = km.get_kanji_count(expression)

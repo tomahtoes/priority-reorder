@@ -6,9 +6,11 @@ from typing import Dict, List, Optional, Tuple
 
 try:  # inside Anki: isolated package namespace
     from .config_manager import Config
+    from .kanji_readings import reading_slots, unresolved_count
     from .utils import KANJI_RE
 except ImportError:  # pytest / flat-import context
     from config_manager import Config
+    from kanji_readings import reading_slots, unresolved_count
     from utils import KANJI_RE
 
 _kanji_manager_instance = None
@@ -18,15 +20,20 @@ def get_kanji_manager(config: Config) -> 'KanjiManager':
     if _kanji_manager_instance is None:
         _kanji_manager_instance = KanjiManager(config)
     else:
-        prev_field = _kanji_manager_instance.config.search_config.expression_field
-        new_field = config.search_config.expression_field
+        # Both fields matter: the reading field feeds known_reading_counts, so a
+        # rename there must invalidate the cached slots exactly like an
+        # expression-field rename invalidates the kanji counts.
+        prev = _kanji_manager_instance._field_names()
         _kanji_manager_instance.config = config
-        if prev_field != new_field:
+        if prev != _kanji_manager_instance._field_names():
             _kanji_manager_instance.initialized = False
             _kanji_manager_instance.known_kanji_counts.clear()
+            _kanji_manager_instance.known_reading_counts.clear()
             _kanji_manager_instance._note_kanji.clear()
             _kanji_manager_instance._scan_sig = None
             _kanji_manager_instance._mod_seen = None
+            _kanji_manager_instance._reading_total = 0
+            _kanji_manager_instance._reading_unresolved = 0
     return _kanji_manager_instance
 
 class KanjiManager:
@@ -34,6 +41,18 @@ class KanjiManager:
     def __init__(self, config: Config) -> None:
         self.config = config
         self.known_kanji_counts: Counter = Counter()
+        # Slot key -> number of learned words using that reading of that kanji.
+        # Same shape as known_kanji_counts, which is what makes the bracketed
+        # [T] target work identically: a reading stays new until T learned words
+        # use it. Only populated once a new_reading term asks (see
+        # enable_readings) -- users of kanji:new/kanji:num pay nothing.
+        self.known_reading_counts: Counter = Counter()
+        self._reading_mode = False
+        # Running totals over the known set, for the unresolved-rate diagnostic.
+        # Maintained incrementally in _credit_note rather than recomputed, which
+        # would mean walking every learned note on each reorder.
+        self._reading_total = 0
+        self._reading_unresolved = 0
         self.initialized = False
         # Signature of the "known" card set (count, sum of card mtimes). The known
         # set is re-synced whenever this changes; see _known_signature.
@@ -42,12 +61,44 @@ class KanjiManager:
         # per collection change, not once per get_unknown_kanji_count call.
         self._mod_seen = None
         # Per-note snapshot backing the incremental sync: nid -> (notes.mod,
-        # kanji credited to the counter). Lets a changed known set be diffed
-        # instead of fully rescanned.
-        self._note_kanji: Dict[int, Tuple[int, List[str]]] = {}
+        # kanji credited to the counter, reading slots credited). Lets a changed
+        # known set be diffed instead of fully rescanned. The slot list is empty
+        # unless _reading_mode is on.
+        self._note_kanji: Dict[int, Tuple[int, List[str], Tuple[str, ...]]] = {}
         # Wall-clock ms of the last initialize() that actually rebuilt or synced;
         # None when the call was a no-op. Read by the reorder timings.
         self.last_scan_ms: Optional[float] = None
+
+    def _field_names(self) -> Tuple[str, str]:
+        sc = self.config.search_config
+        return sc.expression_field, sc.expression_reading_field
+
+    def enable_readings(self) -> None:
+        """Start tracking per-kanji reading slots.
+
+        Flipping this invalidates the snapshot on purpose: it was built without
+        slots, so the next initialize() has to rebuild rather than diff."""
+        if self._reading_mode:
+            return
+        self._reading_mode = True
+        self.initialized = False
+        self._scan_sig = None
+        self._mod_seen = None
+        self.known_reading_counts.clear()
+        self._note_kanji.clear()
+        self._reading_total = 0
+        self._reading_unresolved = 0
+
+    def unresolved_reading_rate(self) -> Optional[float]:
+        """Fraction of the learned collection's kanji whose reading the table
+        could not explain, or None when nothing has been counted.
+
+        A reading field holding the wrong data (markup, the wrong field, empty)
+        makes every word unresolved, which silently turns kanji:new_reading into
+        "matches everything" without raising. This is how that becomes visible."""
+        if not self._reading_total:
+            return None
+        return self._reading_unresolved / self._reading_total
 
     def _extract_kanji(self, text: str) -> List[str]:
         # utils.KANJI_RE, not a local pattern: this used to be a narrower
@@ -101,17 +152,25 @@ class KanjiManager:
         self._scan_sig = sig
         self.initialized = True
 
-    def _expression_field_indices(self) -> Tuple[Optional[str], Dict[int, int]]:
-        """(expression_field, {mid: field ord}) for the note types carrying the
-        configured field, or (None, {}) when unset."""
+    def _expression_field_indices(self) -> Tuple[Optional[str], Dict[int, Tuple[int, Optional[int]]]]:
+        """(expression_field, {mid: (expression ord, reading ord or None)}) for
+        the note types carrying the configured expression field, or (None, {})
+        when unset.
+
+        Membership still keys off the expression field alone: a note type
+        without the reading field is not excluded, it simply contributes no
+        reading slots. That mirrors how occurrences: treats such notes, and
+        keeps kanji:new/kanji:num matching exactly what they matched before."""
         expression_field = self.config.search_config.expression_field
         if not expression_field:
             return None, {}
+        reading_field = self.config.search_config.expression_reading_field
         idx_by_mid = {}
         for model in mw.col.models.all():
             fmap = mw.col.models.field_map(model)
             if expression_field in fmap:
-                idx_by_mid[model['id']] = fmap[expression_field][0]
+                read = fmap[reading_field][0] if reading_field in fmap else None
+                idx_by_mid[model['id']] = (fmap[expression_field][0], read)
         return expression_field, idx_by_mid
 
     def _known_signature(self):
@@ -135,21 +194,41 @@ class KanjiManager:
             traceback.print_exc()
             return None  # never matches stored sig -> force a rebuild
 
-    def _credit_note(self, nid: int, nmod: int, flds_str: str, idx: int) -> None:
-        """(Re)credit one note's kanji to the counter, replacing any previous
-        contribution recorded in the snapshot."""
+    def _credit_note(self, nid: int, nmod: int, flds_str: str,
+                     idx: Tuple[int, Optional[int]]) -> None:
+        """(Re)credit one note's kanji -- and, in reading mode, its reading slots
+        -- to the counters, replacing any previous contribution recorded in the
+        snapshot."""
+        expr_idx, read_idx = idx
         old = self._note_kanji.pop(nid, None)
         if old is not None:
             self.known_kanji_counts.subtract(old[1])
+            if old[2]:
+                self.known_reading_counts.subtract(old[2])
+                self._reading_total -= len(old[2])
+                self._reading_unresolved -= unresolved_count(old[2])
         fields = flds_str.split('\x1f')
-        kanji = self._extract_kanji(fields[idx]) if idx < len(fields) else []
+        expression = fields[expr_idx] if expr_idx < len(fields) else ""
+        kanji = self._extract_kanji(expression)
         if kanji:
             self.known_kanji_counts.update(kanji)
-        self._note_kanji[nid] = (nmod, kanji)
+        slots: Tuple[str, ...] = ()
+        # Only in reading mode, so the kanji:new path stays exactly as cheap as
+        # it was; and only when the note type actually carries the reading field.
+        if self._reading_mode and kanji and read_idx is not None and read_idx < len(fields):
+            slots = reading_slots(expression, fields[read_idx])
+            if slots:
+                self.known_reading_counts.update(slots)
+                self._reading_total += len(slots)
+                self._reading_unresolved += unresolved_count(slots)
+        self._note_kanji[nid] = (nmod, kanji, slots)
 
     def _rebuild_all(self) -> None:
         self.known_kanji_counts.clear()
+        self.known_reading_counts.clear()
         self._note_kanji.clear()
+        self._reading_total = 0
+        self._reading_unresolved = 0
         self._scan_all()
 
     def _scan_all(self) -> None:
@@ -182,7 +261,10 @@ class KanjiManager:
         if not expression_field or not idx_by_mid:
             # No note type carries the field -> the known set is empty.
             self.known_kanji_counts.clear()
+            self.known_reading_counts.clear()
             self._note_kanji.clear()
+            self._reading_total = 0
+            self._reading_unresolved = 0
             return
 
         mids_csv = ",".join(str(m) for m in idx_by_mid)
@@ -193,8 +275,12 @@ class KanjiManager:
         ))
 
         for nid in [nid for nid in self._note_kanji if nid not in current]:
-            _, kanji = self._note_kanji.pop(nid)
+            _, kanji, slots = self._note_kanji.pop(nid)
             self.known_kanji_counts.subtract(kanji)
+            if slots:
+                self.known_reading_counts.subtract(slots)
+                self._reading_total -= len(slots)
+                self._reading_unresolved -= unresolved_count(slots)
 
         stale = [
             nid for nid, nmod in current.items()
@@ -210,10 +296,12 @@ class KanjiManager:
                     continue
                 self._credit_note(nid, current[nid], flds_str, idx)
 
-        # Lookups treat 0 like a missing key, but pruning keeps the counter tidy
+        # Lookups treat 0 like a missing key, but pruning keeps the counters tidy
         # after subtractions.
         for k in [k for k, v in self.known_kanji_counts.items() if v <= 0]:
             del self.known_kanji_counts[k]
+        for k in [k for k, v in self.known_reading_counts.items() if v <= 0]:
+            del self.known_reading_counts[k]
 
     def get_unknown_kanji_count(self, text: str, target: int = 1) -> int:
         # A kanji counts as unknown ("new") until `target` learned words contain
@@ -224,6 +312,20 @@ class KanjiManager:
         if not self.initialized:
             self.initialize()
         return sum(1 for char in self._extract_kanji(text) if self.known_kanji_counts[char] < target)
+
+    def get_new_reading_count(self, expression: str, reading: str, target: int = 1) -> int:
+        """How many kanji in `expression` are used here in a reading that fewer
+        than `target` learned words have taught.
+
+        The mirror of get_unknown_kanji_count, one level finer: that one asks
+        whether the kanji has been seen at all, this one whether *this reading*
+        of it has. A kanji the table cannot explain here (jukujikun, ateji, a
+        gikun reading) counts as new by definition -- its slot carries the kana
+        span, so learning the word credits it and it stops firing."""
+        if not self.initialized:
+            self.initialize()
+        counts = self.known_reading_counts
+        return sum(1 for slot in reading_slots(expression, reading) if counts[slot] < target)
 
     def get_kanji_count(self, text: str) -> int:
         return len(self._extract_kanji(text))

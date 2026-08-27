@@ -102,9 +102,38 @@ class PriorityReorderer:
         if _DUMP_TIMINGS_LOG:
             append_timings_line(now_timestamp(), timings)
 
+        self._print_reading_diagnostics()
+
         self._write_log(summaries, final_priority_queue, final_normal_list, result, timings)
 
         return result
+
+    def _print_reading_diagnostics(self) -> None:
+        """Report how much of the collection the kanji reading table could
+        explain, when a kanji:new_reading term ran.
+
+        Console only, deliberately. kanji:new_reading is the one term that fails
+        by matching too MUCH -- a reading field holding markup or the wrong field
+        leaves every kanji unexplained, so it matches essentially every card and
+        the reorder still reports success. That needs to be *sayable*, but it is
+        troubleshooting output, not something to put in front of every user.
+        """
+        # getattr: tests inject bare data-manager fakes without the method.
+        collect = getattr(self.data_manager, "reading_diagnostics", None)
+        if collect is None:
+            return
+        try:
+            diagnostics = collect()
+        except Exception:
+            return
+        if not diagnostics:
+            return
+        warning = diagnostics.pop("new_reading_warning", None)
+        if diagnostics:
+            print("[priority-reorder] " + " ".join(
+                f"{k}={v}" for k, v in diagnostics.items()))
+        if warning:
+            print("[priority-reorder] warning: " + warning)
 
     def _parse_definitions(self) -> Tuple[List[PriorityDef], List[str]]:
         priority_defs: List[PriorityDef] = []

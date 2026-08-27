@@ -1,5 +1,8 @@
 # Changelog
 
+## 2026-08-27
+- New `kanji:new_reading` search term — prioritize words that use a Kanji in a *reading* you haven't learned, not just a new Kanji: after `食事` (しょく), `食べる` (た) still matches. Takes the same bracketed target as `kanji:new` (`kanji:new_reading[3]>=1` counts a reading as new until 3 learned words use it). Inflections share a reading (`上がる`/`上げる`) and rendaku doesn't count as new (`血`/ち covers `鼻血`/はなぢ), while jukujikun and gikun words like `火傷` (やけど) count as new for every Kanji they can't explain. Requires `search_fields.expression_reading_field`.
+
 ## 2026-08-16
 - Release [Daily Occurrences addon](https://github.com/tomahtoes/daily-occurrences) to allow tracking daily seen words.
 - New `variant_matching` occurrence option — credits a card with the counts of dictionary entries that are another *written form* of the same word, differing in okurigana or kanji spelling. An entry counts when its reading matches the card's and the two forms' kanji nest, which keeps same-reading homophones apart; kana-only spellings never match here. Applies to `occurrences:` and `seen:` alike.

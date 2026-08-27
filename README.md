@@ -104,6 +104,7 @@ The addon supports several custom filters that you can mix in with standard Anki
 - **`limit=20`**: Limit the number of results from a specific search.
 - **`kanji:num=1`**: Filter by the total number of Kanji.
 - **`kanji:new=1`**: Filter by the number of unknown Kanji (optionally `kanji:new[3]=1` to count a Kanji as new until 3 of your learned words contain it).
+- **`kanji:new_reading=1`**: Filter by the number of Kanji used here in a *reading* you haven't learned yet.
 
 ### 1. Frequency Sorting (`f`)
 You can prioritize cards based on the numeric value in their sort field. This is most useful in combination with other filters, if you want to prioritize common words in an occurrence search for example.
@@ -193,7 +194,39 @@ By default a Kanji stops counting as *new* as soon as a single learned word cont
 bracketed target to raise that bar: with `kanji:new[T]`, a Kanji counts as new until **T** of your
 learned words contain it (`kanji:new` is equivalent to `kanji:new[1]`). Useful when you want to
 keep reinforcing Kanji you've technically "met" but only know from one or two words. The target
-applies to `new` only — `kanji:num` takes no bracket.
+applies to `new` and `new_reading` — `kanji:num` takes no bracket.
+
+#### New Readings (`kanji:new_reading`)
+`kanji:new` asks whether you've met the *character*. `kanji:new_reading` asks whether you've met
+**the reading it takes in this word** — which is what the card actually tests.
+
+Once you've learned 食事 (しょく**じ**), the word 食べる (**た**べる) looks completely known to
+`kanji:new`, even though 食=た is new to you. That's the card you're about to fail.
+
+- **`kanji:new_reading>=1`**: Matches words containing at least 1 Kanji whose reading here is new.
+- **`kanji:new_reading>=1 kanji:new=0`**: The interesting bucket — words made *entirely* of Kanji
+  you know, in a reading you don't.
+- **`kanji:new_reading[3]>=1`**: A reading counts as new until 3 of your learned words use it.
+
+A reading is tracked per Kanji, so 生活 (**せい**かつ) does not help with 生きる (**い**きる).
+Inflections of one reading count as the same reading, so 上がる and 上げる are both 上=あ, while
+上る (のぼる) is different. Rendaku doesn't create a new reading either — 血 (**ち**) covers
+鼻血 (はな**ぢ**).
+
+Words whose reading doesn't attach to the individual Kanji at all — 火傷 (やけど), 今日 (きょう),
+and gikun readings — count as new for every Kanji they can't explain, which is usually what you
+want: those readings are the least predictable ones. Where only part of a word is irregular, only
+that part counts (眼鏡/めがね credits 眼=め and flags only 鏡).
+
+> **This filter needs your reading field.** Set `search_fields.expression_reading_field` to the
+> field holding the kana reading. Cards without a reading are never matched. Readings are resolved
+> against a bundled table derived from [KANJIDIC2](https://www.edrdg.org/wiki/index.php/KANJIDIC_Project).
+
+##### Example
+```
+occurrences:銀色、遥か>=5 kanji:new=0 kanji:new_reading>=1
+```
+Common in the visual novel you're reading, looks fully known, and will actually trip you up.
 
 ### 4. Recently Seen Words (`seen:`)
 > ⚠️ **Experimental** — `seen:` is a newer, experimental feature and may change or be removed in a future version.
@@ -233,6 +266,12 @@ Match multiple unrelated criteria by using a list.
   - Example: `added:3 limit=20` (Only the top 20 most frequent recent cards).
 - **`priority_limit`**: Global limit for the priority queue.
 - **`priority_cutoff`**: Send high-frequency words back to the normal queue even if they matched priority.
+
+## Credits
+Kanji reading data is derived from **KANJIDIC2**, Copyright © the
+[Electronic Dictionary Research and Development Group](https://www.edrdg.org/wiki/index.php/KANJIDIC_Project),
+used under the [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) licence. The bundled
+`kanji_readings.txt` is a modified extract (readings only, re-encoded) and is likewise CC BY-SA 4.0.
 
 ## Changelog
 See [CHANGELOG.md](CHANGELOG.md) for a dated history of major releases.

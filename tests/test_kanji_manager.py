@@ -7,6 +7,7 @@ from collections import Counter
 import pytest
 
 import kanji_manager as kmod
+import kanji_readings as kr
 from config_manager import Config, SearchConfig
 from kanji_manager import KanjiManager, get_kanji_manager
 from utils import is_kanji
@@ -228,3 +229,147 @@ def test_singleton_is_reused_and_resets_on_expression_field_change(fake_col):
     assert changed.initialized is False  # field changed -> known set invalidated
     assert changed.known_kanji_counts == Counter()
     assert changed._note_kanji == {}     # snapshot invalidated with it
+
+
+# --- reading slots (kanji:new_reading) ---------------------------------------
+
+def _reading_config():
+    return Config(search_config=SearchConfig(
+        expression_field="Expression", expression_reading_field="Reading"))
+
+
+def _reading_col(monkeypatch, notes, mod=1, sig=(1, 100)):
+    col = types.SimpleNamespace(
+        mod=mod,
+        models=_FakeModels(fields=("Expression", "Reading")),
+        db=_FakeDB(sig, notes),
+    )
+    monkeypatch.setattr(kmod.mw, "col", col, raising=False)
+    return col
+
+
+def _note(nid, expression, reading, nmod=1):
+    return (nid, nmod, expression + "\x1f" + reading)
+
+
+def test_reading_counts_are_not_built_until_asked(monkeypatch):
+    """kanji:new/kanji:num must not pay for the reading index."""
+    _reading_col(monkeypatch, [_note(1, "食事", "しょくじ")])
+    km = KanjiManager(_reading_config())
+    km.initialize()
+    assert km.known_kanji_counts == Counter({"食": 1, "事": 1})
+    assert km.known_reading_counts == Counter()
+    assert km.unresolved_reading_rate() is None
+
+
+def test_enable_readings_rebuilds_and_credits_slots(monkeypatch):
+    _reading_col(monkeypatch, [_note(1, "食事", "しょくじ")])
+    km = KanjiManager(_reading_config())
+    km.initialize()
+    km.enable_readings()
+    km.initialize()
+    assert km.known_reading_counts == Counter(kr.reading_slots("食事", "しょくじ"))
+
+
+def test_a_learned_reading_silences_only_that_reading(monkeypatch):
+    """The whole point of the term: 食事 teaches 食=しょく, which must not make
+    食べる (食=た) look known."""
+    _reading_col(monkeypatch, [_note(1, "食事", "しょくじ")])
+    km = KanjiManager(_reading_config())
+    km.enable_readings()
+    km.initialize()
+    assert km.get_new_reading_count("食事", "しょくじ") == 0
+    assert km.get_new_reading_count("食べる", "たべる") == 1
+
+
+def test_rendaku_does_not_count_as_a_new_reading(monkeypatch):
+    _reading_col(monkeypatch, [_note(1, "血", "ち")])
+    km = KanjiManager(_reading_config())
+    km.enable_readings()
+    km.initialize()
+    # 鼻 is genuinely new; 血 surfaces as ぢ but is the same reading.
+    assert km.get_new_reading_count("鼻血", "はなぢ") == 1
+
+
+def test_target_counts_words_per_reading_not_per_kanji(monkeypatch):
+    """kanji:new_reading[N] holds a reading "new" until N learned words use it,
+    exactly as kanji:new[N] does for the kanji itself."""
+    _reading_col(monkeypatch, [
+        _note(1, "可愛い", "かわいい"),
+        _note(2, "可愛らしい", "かわいらしい"),
+    ])
+    km = KanjiManager(_reading_config())
+    km.enable_readings()
+    km.initialize()
+    # Both words credit the same slot for 愛, so they accumulate toward one bar.
+    slot = kr.reading_slots("可愛い", "かわいい")[1]
+    assert km.known_reading_counts[slot] == 2
+    # At [2] the bar is met, so nothing in 可愛がる is new. At [3] neither 可 nor
+    # 愛 has reached it yet, so both count -- the term is per kanji, not per word.
+    assert km.get_new_reading_count("可愛がる", "かわいがる", 2) == 0
+    assert km.get_new_reading_count("可愛がる", "かわいがる", 3) == 2
+    # 愛=あい is a different reading and is untouched by any of them.
+    assert km.get_new_reading_count("愛情", "あいじょう", 1) == 2
+
+
+def test_unresolved_rate_tracks_the_known_set(monkeypatch):
+    _reading_col(monkeypatch, [
+        _note(1, "食事", "しょくじ"),   # both resolved
+        _note(2, "火傷", "やけど"),     # both unresolved
+    ])
+    km = KanjiManager(_reading_config())
+    km.enable_readings()
+    km.initialize()
+    assert km.unresolved_reading_rate() == pytest.approx(0.5)
+
+
+def test_unresolved_rate_is_total_when_the_reading_field_is_wrong(monkeypatch):
+    """A reading field holding something that is not the reading leaves
+    everything unresolved -- the signal the diagnostic exists to surface."""
+    _reading_col(monkeypatch, [
+        _note(1, "食事", "meal"), _note(2, "勉強", "study"),
+    ])
+    km = KanjiManager(_reading_config())
+    km.enable_readings()
+    km.initialize()
+    assert km.unresolved_reading_rate() == 1.0
+
+
+def test_notes_without_the_reading_field_contribute_no_slots(monkeypatch):
+    col = types.SimpleNamespace(
+        mod=1, models=_FakeModels(fields=("Expression",)),
+        db=_FakeDB((1, 100), [(1, 1, "食事")]))
+    monkeypatch.setattr(kmod.mw, "col", col, raising=False)
+    km = KanjiManager(_reading_config())
+    km.enable_readings()
+    km.initialize()
+    # Still a known kanji -- membership keys off the expression field alone.
+    assert km.known_kanji_counts == Counter({"食": 1, "事": 1})
+    assert km.known_reading_counts == Counter()
+
+
+def test_incremental_sync_keeps_reading_counts_correct(monkeypatch):
+    col = _reading_col(monkeypatch, [_note(1, "食事", "しょくじ")])
+    km = KanjiManager(_reading_config())
+    km.enable_readings()
+    km.initialize()
+    # A note leaves the known set; its slots must be subtracted, not stranded.
+    col.db.notes = []
+    col.db.sig = (0, 0)
+    col.mod = 2
+    km.initialize()
+    assert km.known_reading_counts == Counter()
+    assert km.unresolved_reading_rate() is None
+
+
+def test_singleton_resets_when_the_reading_field_is_renamed(monkeypatch):
+    _reading_col(monkeypatch, [_note(1, "食事", "しょくじ")])
+    km = get_kanji_manager(_reading_config())
+    km.enable_readings()
+    km.initialize()
+    assert km.known_reading_counts
+    renamed = get_kanji_manager(Config(search_config=SearchConfig(
+        expression_field="Expression", expression_reading_field="Kana")))
+    assert renamed is km
+    assert renamed.known_reading_counts == Counter()
+    assert renamed._note_kanji == {}

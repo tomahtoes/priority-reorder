@@ -1,6 +1,8 @@
 import sys
 import types
 
+import pytest
+
 import search
 
 
@@ -277,3 +279,40 @@ def test_has_custom_term():
     assert not search.has_custom_term("length:5")
     assert not search.has_custom_term("deck:JP added:3 flag:1")
     assert not search.has_custom_term("")
+
+
+# --- kanji:new_reading grammar ------------------------------------------------
+
+@pytest.mark.parametrize("query,expected", [
+    ("kanji:new_reading>=1", ("new_reading", 1, ">=", 1)),
+    ("kanji:new_reading[3]>=2", ("new_reading", 3, ">=", 2)),
+    ("kanji:new_reading<=0", ("new_reading", 1, "<=", 0)),
+])
+def test_new_reading_parses_with_and_without_a_target(query, expected):
+    assert search.parse_custom_terms(query) == [("kanji", expected, False)]
+
+
+def test_new_reading_negation_is_detected():
+    assert search.parse_custom_terms("-kanji:new_reading>=1") == [
+        ("kanji", ("new_reading", 1, ">=", 1), True)]
+
+
+@pytest.mark.parametrize("query,expected", [
+    ("kanji:new>=1", [("kanji", ("new", 1, ">=", 1), False)]),
+    ("kanji:new[3]>=1", [("kanji", ("new", 3, ">=", 1), False)]),
+    ("kanji:num>=2", [("kanji", ("num", 1, ">=", 2), False)]),
+    ("kanji:num[2]>=1", []),          # a bracket on num is still not a term
+])
+def test_existing_kanji_grammar_is_unchanged(query, expected):
+    """new_reading has to sort before new in the alternation (leftmost-first),
+    and the bracket guard had to flip from (?<=new) to (?<!num). Neither may
+    disturb what the original two types matched."""
+    assert search.parse_custom_terms(query) == expected
+
+
+def test_new_reading_is_stripped_from_the_anki_query():
+    assert "new_reading" not in search._strip_custom_terms("deck:x kanji:new_reading[2]>=1")
+
+
+def test_new_reading_counts_as_a_custom_term():
+    assert search.has_custom_term("kanji:new_reading>=1")

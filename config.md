@@ -4,7 +4,7 @@
 
 ### `priority_search` (string | list)
 - **Description**: The Anki search query used to identify cards for the Priority Queue. These cards will always be shown before the "Normal Queue". It can be a single string or a list of multiple search queries.
-- **Support**: Supports standard Anki syntax plus custom filters like `kanji:new=1`, `kanji:new[3]>=1`, `kanji:num=2`, `f<10000`, `length>=3`, or `occurrences:dict>5`.
+- **Support**: Supports standard Anki syntax plus custom filters like `kanji:new=1`, `kanji:new[3]>=1`, `kanji:new_reading>=1`, `kanji:num=2`, `f<10000`, `length>=3`, or `occurrences:dict>5`.
 - **Default**: `""`
 - **Example**: `"deck:Japanese added:3"`
 
@@ -121,6 +121,7 @@ usual (e.g. `-occurrences:Dict>5`).
 - **Length**: `length>=3` — Matches cards whose expression field is 3 or more characters long (`length=1` for single-character words). Counts Unicode characters of the raw field value (markup included; an empty field is length 0). Supports any comparison operator.
 - **Kanji i+1**: `kanji:new=1` — Matches words where exactly 1 character is unknown to you.
 - **Kanji target**: `kanji:new[3]>=1` — A Kanji counts as "new" until 3 of your learned words contain it; matches words with at least 1 such Kanji. `kanji:new` is equivalent to `kanji:new[1]`.
+- **New Reading**: `kanji:new_reading>=1` — Matches words where at least 1 Kanji is used in a *reading* no learned word has taught you. Once you know 食事 (しょくじ), 食べる (たべる) still matches, because 食=た is new. Takes the same bracket as `kanji:new`: `kanji:new_reading[3]>=1`. Requires `search_fields.expression_reading_field`.
 - **Kanji Count**: `kanji:num=2` — Matches words containing exactly 2 Kanji.
 
 - **Occurrences**: `occurrences:銀色、遥か>5` — Matches words appearing more than 5 times in the specified dictionary.
@@ -143,6 +144,7 @@ To use occurrences queries, you must configure which fields the addon should loo
 ### `search_fields.expression_reading_field` (string)
 - **Description**: The field name containing the reading/furigana (e.g.  `"ExpressionReading"`,`"Reading"`).
 - **Default**: `"ExpressionReading"`
+- **Note**: Required by `occurrences:`, `seen:` and `kanji:new_reading`. If `kanji:new_reading` matches nearly every card, this is almost always the cause — the addon prints a warning to the console when it can't make sense of the readings it finds.
 
 ---
 

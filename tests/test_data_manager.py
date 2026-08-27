@@ -643,3 +643,110 @@ def test_seen_levels_share_one_reference_date(fake_col, monkeypatch):
     assert len(fake.todays) == 3          # every configured level resolved together
     assert len(set(fake.todays)) == 1     # against one shared reference date
     assert fake.todays[0] is not None
+
+
+# --- kanji:new_reading --------------------------------------------------------
+
+class _ReadingKM:
+    """Enough KanjiManager for the predicate: a slot counter plus the
+    enable_readings handshake the predicate is required to perform."""
+
+    def __init__(self, known=()):
+        from collections import Counter
+        self.known_reading_counts = Counter(known)
+        self.readings_enabled = False
+        self.init_calls = 0
+
+    def enable_readings(self):
+        self.readings_enabled = True
+
+    def initialize(self):
+        self.init_calls += 1
+
+    def unresolved_reading_rate(self):
+        return None
+
+
+def test_new_reading_enables_the_reading_index_before_scanning(fake_col, monkeypatch):
+    """enable_readings must happen before initialize(), or the scan runs once
+    without slots and has to be redone."""
+    fake_col(find_results={"(deck:X) is:new": [1]},
+             rows=[_row(1, 10, "食事", "しょくじ", "100")])
+    km = _ReadingKM()
+    order = []
+    monkeypatch.setattr(dmod, "get_kanji_manager", lambda cfg: km)
+    km.enable_readings = lambda: order.append("enable")
+    km.initialize = lambda: order.append("init")
+    dm = DataManager(Config())
+    dm.get_cards_from_search("deck:X kanji:new_reading>=1")
+    assert order[:2] == ["enable", "init"]
+
+
+def test_new_reading_matches_only_unlearned_readings(fake_col, monkeypatch):
+    import kanji_readings as kr
+    # 食事 is fully learned; 食べる uses a different reading of 食.
+    fake_col(
+        find_results={"(deck:X) is:new": [1, 2]},
+        rows=[_row(1, 10, "食事", "しょくじ", "100"),
+              _row(2, 20, "食べる", "たべる", "100")],
+    )
+    known = dict.fromkeys(kr.reading_slots("食事", "しょくじ"), 1)
+    monkeypatch.setattr(dmod, "get_kanji_manager", lambda cfg: _ReadingKM(known))
+    dm = DataManager(Config())
+    result = dm.get_cards_from_search("deck:X kanji:new_reading>=1")
+    assert [c.card_id for c in result.cards] == [2]
+
+
+def test_new_reading_skips_cards_without_a_reading(fake_col, monkeypatch):
+    fake_col(find_results={"(deck:X) is:new": [1, 2]},
+             rows=[_row(1, 10, "食事", "", "100"),
+                   _row(2, 20, "食べる", "たべる", "100")])
+    monkeypatch.setattr(dmod, "get_kanji_manager", lambda cfg: _ReadingKM())
+    dm = DataManager(Config())
+    result = dm.get_cards_from_search("deck:X kanji:new_reading>=1")
+    assert [c.card_id for c in result.cards] == [2]
+
+
+def test_new_reading_gets_its_own_count_cache_bucket(fake_col, monkeypatch):
+    """kanji:new and kanji:new_reading count different things; sharing a cache
+    bucket would let one serve the other's answers."""
+    fake_col(find_results={"(deck:X) is:new": [1]},
+             rows=[_row(1, 10, "食べる", "たべる", "100")])
+    km = _ReadingKM()
+    km.get_unknown_kanji_count = lambda text, target=1: 0
+    monkeypatch.setattr(dmod, "get_kanji_manager", lambda cfg: km)
+    dm = DataManager(Config())
+    dm.get_cards_from_search("deck:X kanji:new>=1")
+    dm.get_cards_from_search("deck:X kanji:new_reading>=1")
+    assert ("new", 1) in dm._kanji_count_cache
+    assert ("new_reading", 1) in dm._kanji_count_cache
+
+
+def test_unresolved_counters_are_per_note_not_per_comparison(fake_col, monkeypatch):
+    """The diagnostic counts each note once, on the cache miss -- two searches
+    over the same card must not double it."""
+    fake_col(find_results={"(deck:X) is:new": [1], "(deck:Y) is:new": [1]},
+             rows=[_row(1, 10, "火傷", "やけど", "100")])
+    monkeypatch.setattr(dmod, "get_kanji_manager", lambda cfg: _ReadingKM())
+    dm = DataManager(Config())
+    dm.get_cards_from_search("deck:X kanji:new_reading>=1")
+    dm.get_cards_from_search("deck:Y kanji:new_reading>=1")
+    assert dm._nr_total == 2          # 火 and 傷, counted once
+    assert dm._nr_unresolved == 2     # jukujikun: neither is explainable
+
+
+def test_reading_diagnostics_report_the_unresolved_rate(fake_col, monkeypatch):
+    fake_col(find_results={"(deck:X) is:new": [1, 2]},
+             rows=[_row(1, 10, "食事", "しょくじ", "100"),
+                   _row(2, 20, "火傷", "やけど", "100")])
+    monkeypatch.setattr(dmod, "get_kanji_manager", lambda cfg: _ReadingKM())
+    dm = DataManager(Config())
+    dm.get_cards_from_search("deck:X kanji:new_reading>=0")
+    assert "50% unresolved" in dm.reading_diagnostics()["new_reading_cards"]
+
+
+def test_reading_diagnostics_are_empty_when_the_term_never_ran(fake_col):
+    fake_col(find_results={"(deck:X) is:new": []}, rows=[])
+    dm = DataManager(Config())
+    dm.get_cards_from_search("deck:X")
+    assert dm.reading_diagnostics() == {}
