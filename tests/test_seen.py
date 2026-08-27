@@ -211,6 +211,22 @@ def test_seen_window_suffix_phrase():
     assert not window.contains("日", "", suffix_matching=True)       # nothing to validate
 
 
+def test_seen_window_suru():
+    # head suru carve-out (boolean mirror of single_kanji_suru_total): 屯する/たむろする marks
+    # 屯/たむろ as seen, reading-gated so 屯/とん is not; 察する/さっする reaches 察/さつ through
+    # the sokuon allowance; 重んじる is 重 + んじる and marks nothing.
+    window = _build_window([[
+        ["屯する", "freq", {"reading": "たむろする", "frequency": {"value": 6}}],
+        ["察する", "freq", {"reading": "さっする", "frequency": {"value": 4}}],
+        ["重んじる", "freq", {"reading": "おもんじる", "frequency": {"value": 3}}],
+    ]])
+    assert window.contains("屯", "たむろ", prefix_matching=True)
+    assert not window.contains("屯", "とん", prefix_matching=True)   # reading gate
+    assert not window.contains("屯", "たむろ")                        # off without the flag
+    assert window.contains("察", "さつ", prefix_matching=True)        # sokuon allowance
+    assert not window.contains("重", "おも", prefix_matching=True)
+
+
 def test_seen_window_variant_matching():
     # Boolean mirror of variant_total: a 煌く entry marks the 煌めく card as seen (same reading,
     # nesting kanji) but not 燦めく (no shared kanji), and the query-time flag is required.
@@ -271,6 +287,8 @@ def test_seen_contains_matches_counting_presence_incl_homograph():
             ["俗に", "freq", {"reading": "ぞくに", "frequency": {"value": 5}}],
             ["中学校", "freq", {"reading": "ちゅうがっこう", "frequency": {"value": 9}}],
             ["母の日", "freq", {"reading": "ははのひ", "frequency": {"value": 6}}],
+            ["屯する", "freq", {"reading": "たむろする", "frequency": {"value": 6}}],
+            ["察する", "freq", {"reading": "さっする", "frequency": {"value": 4}}],
             # variant rule: an okurigana variant, a prefix-overlapping variant (気持ち/気持ち
             # is also a strict prefix match for a 気持 card — the dedup guard), and a
             # same-reading homophone that merely shares a kanji with 科学
@@ -300,6 +318,8 @@ def test_seen_contains_matches_counting_presence_incl_homograph():
              # (俗に), reading-gated, and the okurigana truncation edge (積/つ validates 積もる)
              ("手", "て"), ("手", "しゅ"), ("思", "おも"), ("最", "もっと"),
              ("俗", "ぞく"), ("積", "つ"), ("積", "せき"),
+             # single-kanji suru carve-out: positive, reading-gated, and the sokuon branch
+             ("屯", "たむろ"), ("屯", "とん"), ("察", "さつ"),
              # variant rule: credited (煌めく←煌く), not credited (燦めく — no shared kanji),
              # kana-only card, the prefix-overlap dedup case, and the homophone guard
              ("煌めく", "きらめく"), ("燦めく", "きらめく"), ("きらめく", "きらめく"),

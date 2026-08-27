@@ -288,6 +288,80 @@ def test_phrase_total_credits_bare_particle_form():
     assert idx.get_total("特", "しょく", prefix_matching=True) == 0
 
 
+# --- single-kanji suru verbs ------------------------------------------------
+
+def test_suru_total_credits_single_kanji_verb():
+    idx = OccurrenceIndex()
+    idx.add("屯", "たむろ", 5)
+    idx.add("屯する", "たむろする", 50)
+    idx.add("感じる", "かんじる", 20)
+    idx.add("信ずる", "しんずる", 10)
+    assert idx.get_total("屯", "たむろ") == 5
+    assert idx.get_total("屯", "たむろ", prefix_matching=True) == 55
+    assert idx.get_total("感", "かん", prefix_matching=True) == 20
+    assert idx.get_total("信", "しん", prefix_matching=True) == 10
+    # the single-char gate keeps the bare prefix path out of it -> no double counting
+    assert idx.prefix_total("屯") == 0
+
+
+def test_suru_total_reading_validation_excludes_mismatches():
+    idx = OccurrenceIndex()
+    idx.add("屯する", "たむろする", 50)   # the noun 屯 also reads とん; that card is a different word
+    idx.add("訳する", "やくする", 7)      # vs a 訳/わけ card ("reason") — different word
+    idx.add("課する", "かする", 4)
+    assert idx.get_total("屯", "とん", prefix_matching=True) == 0
+    assert idx.get_total("訳", "わけ", prefix_matching=True) == 0
+    assert idx.get_total("屯", "たむろ", prefix_matching=True) == 50
+    # known imprecision: a matching reading is not proof of a matching sense
+    assert idx.get_total("課", "か", prefix_matching=True) == 4
+
+
+def test_suru_total_sokuon_allowance():
+    idx = OccurrenceIndex()
+    idx.add("察する", "さっする", 30)
+    idx.add("達する", "たっする", 12)
+    idx.add("津する", "っする", 3)        # degenerate: a bare つ card must not reach it
+    assert idx.get_total("察", "さつ", prefix_matching=True) == 30
+    assert idx.get_total("達", "たつ", prefix_matching=True) == 12
+    # the allowance is つ -> っ only; an unrelated reading still gets nothing
+    assert idx.get_total("察", "さち", prefix_matching=True) == 0
+    # ...and a bare つ reading must not degenerate into a bare っする
+    assert idx.get_total("津", "つ", prefix_matching=True) == 0
+
+
+def test_suru_total_requires_exact_single_kanji_stem():
+    idx = OccurrenceIndex()
+    idx.add("重んじる", "おもんじる", 5)   # 重 + んじる, not 重 + じる
+    idx.add("勉強する", "べんきょうする", 100)
+    idx.add("恥じる", "はじる", 8)         # 恥/はじ + る — じる is not a suffix here
+    idx.add("屯する", None, 9)             # no reading -> nothing to validate against
+    assert idx.get_total("重", "おも", prefix_matching=True) == 0
+    assert idx.get_total("恥", "はじ", prefix_matching=True) == 0
+    assert idx.get_total("屯", "たむろ", prefix_matching=True) == 0
+    assert idx.get_total("勉", "べん", prefix_matching=True) == 0
+    # a multi-char card still arrives via prefix_total, exactly once
+    assert idx.get_total("勉強", "べんきょう", prefix_matching=True) == 100
+    assert idx.get_total("勉強", "べんきょう") == 0
+
+
+def test_suru_total_off_without_prefix_matching():
+    idx = OccurrenceIndex()
+    idx.add("屯する", "たむろする", 50)
+    assert idx.get_total("屯", "たむろ") == 0
+    assert idx.get_total("屯", "たむろ", suffix_matching=True, variant_matching=True,
+                         honorific_folding=True, combine_word_forms=True) == 0
+
+
+def test_suru_total_no_double_count_with_kana_rekeyed_entry():
+    """A ㋕-marked 屯する is re-keyed under たむろする, where prefix_total(reading) already
+    credits it under combine_word_forms. The rule's kanji-head requirement is what keeps it
+    from being counted a second time."""
+    idx = OccurrenceIndex()
+    idx.add("たむろする", "たむろする", 50)   # what _build_index_from_raw stores for a ㋕ entry
+    assert idx.get_total("屯", "たむろ", prefix_matching=True) == 0
+    assert idx.get_total("屯", "たむろ", prefix_matching=True, combine_word_forms=True) == 50
+
+
 def test_phrase_total_requires_kanji_head_and_reading():
     idx = OccurrenceIndex()
     idx.add("手を貸す", "てをかす", 10)
@@ -804,6 +878,7 @@ def test_combined_index_memo_resets_when_query_flags_change(monkeypatch):
 #                                           rebuilt from the merged vocabulary
 #   煌く / 煌めく / 煌燦めく split         -> variant grouping by identical reading
 #   手を貸す / 母の日                     -> the single-kanji head/tail phrase carve-outs
+#   屯する / 察する                       -> the single-kanji suru carve-out (plain + sokuon)
 #   ㋕-marked entry                       -> re-keyed under its reading (combine_word_forms)
 _EQUIV_DICTS = {
     "A": [
@@ -829,6 +904,8 @@ _EQUIV_DICTS = {
         ["茶碗", "freq", {"reading": "ちゃわん", "value": 21}],    # prefix candidate for 茶
         ["煌めく", "freq", {"reading": "きらめく", "value": 5}],
         ["母の日", "freq", {"reading": "ははのひ", "value": 9}],
+        ["屯する", "freq", {"reading": "たむろする", "value": 17}],
+        ["察する", "freq", {"reading": "さっする", "value": 23}],   # sokuon branch
         ["学校", "freq", {"reading": "がっこう", "value": 6}],
     ],
     "C": [
@@ -836,6 +913,7 @@ _EQUIV_DICTS = {
         ["お金", "freq", {"reading": "おかね", "value": 15}],     # kanji strip, no bare 金 here
         ["茶", "freq", {"reading": "ちゃ", "value": 4}],          # expr+reading also present in A
         ["日", "freq", {"reading": "ひ", "value": 2}],
+        ["屯", "freq", {"reading": "たむろ", "value": 6}],        # bare head, other dict than 屯する
     ],
     "D": [
         ["茶", "freq", {"value": 33}],                           # no reading at all
@@ -849,6 +927,7 @@ _EQUIV_PROBES = [
     ("お茶", "おちゃ"), ("金", "かね"), ("茶碗", "ちゃわん"),
     ("煌めく", "きらめく"), ("煌く", "きらめく"), ("煌燦めく", "きらめく"),
     ("手", "て"), ("日", "ひ"), ("学校", "がっこう"), ("中学校", "ちゅうがっこう"),
+    ("屯", "たむろ"), ("屯", "とん"), ("察", "さつ"),      # suru carve-out: hit, reading miss, sokuon
     ("ぎりぎり", "ぎりぎり"), ("ギリギリ", "ギリギリ"),
     ("かず", "かず"), ("おかず", "おかず"),                # cross-dict honorific fold gate
     ("存在しない", "そんざいしない"), ("", ""),            # absent everywhere, empty

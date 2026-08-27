@@ -13,6 +13,7 @@ _MIN_PREFIX_LENGTH = 2
 _MIN_SUFFIX_LENGTH = 2
 _HONORIFIC_PREFIXES = ("お", "ご", "御")
 _PHRASE_PARTICLES = frozenset("をがのにではもへと")
+_SURU_SUFFIXES = ("する", "じる", "ずる")
 
 def _is_phrase_entry(expression: str, reading: Optional[str]) -> bool:
     """Structural test for the single-kanji phrase rule: kanji head, whitelisted
@@ -37,6 +38,51 @@ def _is_suffix_phrase_entry(expression: str, reading: Optional[str]) -> bool:
         and len(expression) >= 3
         and expression[-2] in _PHRASE_PARTICLES
         and is_kanji(expression[-1])
+    )
+
+def _is_suru_entry(expression: str, reading: Optional[str]) -> bool:
+    """Structural test for the single-kanji suru-verb rule: a reading to validate against and
+    a written form that is exactly one kanji plus する/じる/ずる (屯する, 愛する, 感じる, 信ずる).
+
+    The single-KANJI head is load-bearing, not decorative. A '㋕'-marked entry is re-keyed
+    under its reading by _build_index_from_raw, so expr_to_count can hold 'たむろする'; under
+    combine_word_forms, get_total calls prefix_total(reading), and a kana reading is long
+    enough to clear _MIN_PREFIX_LENGTH, so that path already credits the entry. Requiring a
+    kanji head is exactly what keeps this rule from crediting it a second time.
+
+    Deliberately no tail and no infix: 重んじる is 重 + んじる, not 重 + じる, and never matches.
+    Shared with seen_manager.build_seen_day so the counting and boolean sides can't drift."""
+    return (
+        bool(reading)
+        and len(expression) == 3
+        and expression.endswith(_SURU_SUFFIXES)
+        and is_kanji(expression[0])
+    )
+
+def _suru_reading_matches(card_reading: str, entry_reading: str, suffix: str) -> bool:
+    """Reading validation for the suru rule: the entry must read as the card's reading plus the
+    suffix, so a 屯/たむろ card takes 屯する/たむろする while a 屯/とん card does not (different
+    reading, and with it a meaning that no longer tracks the card).
+
+    The one tolerance is the regular sokuon change before する: 察/さつ -> 察する/さっする. That is
+    the same reading undergoing a predictable euphony, not a different one, and it carries an
+    eighth of the rule (発/接/決/達/脱/失/滅/罰/律/徹/喫/屈/欲 all take it). Gated to する because
+    っじる/っずる do not occur, and to readings of 2+ morae so a bare つ cannot degenerate into
+    a bare っする.
+
+    Known imprecision, accepted as the price of the recall: a matching reading is not proof of
+    a matching sense, so 課/か <- 課する, 辞/じ <- 辞する, 目/もく <- 目する and 上/うわ <- 上ずる
+    all get credit. And じる is not always a suffix — 恥じる is 恥/はじ + る, so the natural
+    恥/はじ card is missed while a 恥/は card would be credited (same for 閉じる, 混じる, 交じる).
+
+    Shared with seen_manager._suru_present so the counting and boolean sides can't drift."""
+    if entry_reading == card_reading + suffix:
+        return True
+    return (
+        suffix == "する"
+        and len(card_reading) >= 2
+        and card_reading.endswith("つ")
+        and entry_reading == card_reading[:-1] + "っする"
     )
 
 def _kanji_skeleton(expression: str) -> str:
@@ -87,7 +133,8 @@ def _suffix_eligible(expression: str) -> bool:
     whose reading/meaning does not carry) and pure kana (する/こと/しい, katakana loanwords)
     that would match far too broadly. This is the tail mirror of _MIN_PREFIX_LENGTH; single
     kanji return only via the reading-validated tail phrase carve-out
-    (single_kanji_suffix_phrase_total). Shared with the honorific-fold subsumption in
+    (single_kanji_suffix_phrase_total; the head-side length gate has two such carve-outs,
+    single_kanji_phrase_total and single_kanji_suru_total). Shared with the honorific-fold subsumption in
     get_total and the seen boolean twin so the sides can't drift."""
     return len(expression) >= _MIN_SUFFIX_LENGTH and any(is_kanji(ch) for ch in expression)
 _COMBINED_MEMO_CAP = 50_000
@@ -116,6 +163,8 @@ class OccurrenceIndex:
         self._phrase_index: Optional[Dict[str, List[Tuple[str, str, int]]]] = None
         # Built lazily on first single-kanji suffix phrase query (see _ensure_suffix_phrase_index).
         self._suffix_phrase_index: Optional[Dict[str, List[Tuple[str, str, int]]]] = None
+        # Built lazily on first single-kanji suru query (see _ensure_suru_index).
+        self._suru_index: Optional[Dict[str, List[Tuple[str, str, int]]]] = None
         # Built lazily on first variant query (see _ensure_variant_index): reading -> the
         # kanji-bearing forms carrying it, as (expression, count). No skeleton is cached.
         self._variant_index: Optional[Dict[str, List[Tuple[str, int]]]] = None
@@ -209,8 +258,9 @@ class OccurrenceIndex:
         """Phrase credit for a single-kanji card: sums entries 'X<particle>' with an
         optional tail, whose reading starts with the card's reading + the particle,
         validating that X is read in-context as the card reads it (手を貸す/てをかす and
-        俗に/ぞくに credit 手/て and 俗/ぞく, but 手/しゅ gets nothing). Complements
-        prefix_total, which gates out single-character expressions entirely."""
+        俗に/ぞくに credit 手/て and 俗/ぞく, but 手/しゅ gets nothing). One of the two
+        carve-outs complementing prefix_total, which gates out single-character expressions
+        entirely; the other is single_kanji_suru_total."""
         if len(expression) != 1 or not reading or not is_kanji(expression):
             return 0
         self._ensure_phrase_index()
@@ -243,6 +293,36 @@ class OccurrenceIndex:
         total = 0
         for particle, entry_reading, count in self._suffix_phrase_index.get(expression, ()):
             if entry_reading.endswith(particle + reading):
+                total += count
+        return total
+
+    def _ensure_suru_index(self) -> None:
+        if self._suru_index is not None:
+            return
+        index: Dict[str, List[Tuple[str, str, int]]] = {}
+        for (expr, reading), count in self.expr_reading_to_count.items():
+            if not _is_suru_entry(expr, reading):
+                continue
+            index.setdefault(expr[0], []).append((expr[1:], reading, count))  # bucket by head kanji
+        self._suru_index = index
+
+    def single_kanji_suru_total(self, expression: str, reading: str) -> int:
+        """Suru-verb credit for a single-kanji card: sums entries 'X<する|じる|ずる>' whose reading
+        is the card's reading plus that suffix (屯/たむろ takes 屯する/たむろする, 感/かん takes
+        感じる/かんじる, but 屯/とん takes nothing). The verb's meaning tracks the bare form's
+        closely enough that a card for X is worth prioritizing off the verb's occurrences.
+
+        The third complement to prefix_total, which gates out single-character expressions
+        entirely — す/じ/ず are not phrase particles, so single_kanji_phrase_total could never
+        reach these. Nothing else double-counts them either: the entry ends in る (not in X) so
+        the suffix rules miss it, and its reading is strictly longer than the card's, so
+        variant_total — which buckets on an IDENTICAL reading — cannot see it."""
+        if len(expression) != 1 or not reading or not is_kanji(expression):
+            return 0
+        self._ensure_suru_index()
+        total = 0
+        for suffix, entry_reading, count in self._suru_index.get(expression, ()):
+            if _suru_reading_matches(reading, entry_reading, suffix):
                 total += count
         return total
 
@@ -344,6 +424,7 @@ class OccurrenceIndex:
             if combine_word_forms and reading_is_distinct:
                 total += self.prefix_total(reading)
             total += self.single_kanji_phrase_total(expression, reading)
+            total += self.single_kanji_suru_total(expression, reading)
         if suffix_matching:
             # No reading-side term (unlike prefix): a kana reading is never suffix-eligible
             # (contains no kanji), so suffix_total(reading) is a definitional no-op.

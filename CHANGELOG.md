@@ -2,6 +2,7 @@
 
 ## 2026-08-27
 - New `kanji:new_reading` search term — prioritize words that use a Kanji in a *reading* you haven't learned, not just a new Kanji: after `食事` (しょく), `食べる` (た) still matches. Takes the same bracketed target as `kanji:new` (`kanji:new_reading[3]>=1` counts a reading as new until 3 learned words use it). Inflections share a reading (`上がる`/`上げる`) and rendaku doesn't count as new (`血`/ち covers `鼻血`/はなぢ), while jukujikun and gikun words like `火傷` (やけど) count as new for every Kanji they can't explain. Requires `search_fields.expression_reading_field`.
+- `prefix_matching` now also credits single-kanji cards from their `する`/`じる`/`ずる` verb forms: `屯`/たむろ gains `屯する`, `感`/かん gains `感じる`. Reading-validated, so `屯`/とん (a different word) gains nothing, while the regular sound change before `する` still counts (`察`/さつ ← `察する`/さっする). Applies to `occurrences:` and `seen:` alike.
 
 ## 2026-08-16
 - Release [Daily Occurrences addon](https://github.com/tomahtoes/daily-occurrences) to allow tracking daily seen words.
