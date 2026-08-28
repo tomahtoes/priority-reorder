@@ -48,7 +48,7 @@ class SearchResult(NamedTuple):
 
 # Ids are inlined via ids2str, so SQLite's bound-parameter limit never applies;
 # the only real bound is statement length (1 MB default), and 5000 ids x ~14
-# bytes is ~70 KB — a 100k-card backlog is 20 round-trips instead of 112.
+# bytes is ~70 KB, so a 100k-card backlog is 20 round-trips instead of 112.
 _BULK_CHUNK_SIZE = 5000
 
 # Cross-run cache of parsed note data, nid -> (notes.mod, NoteData). Note fields
@@ -68,10 +68,10 @@ _TERM_COST = {"length": 0, "freq": 1, "kanji": 2, "seen": 3, "occ": 4}
 
 
 def clear_note_cache() -> None:
-    """Drop the cross-run note cache. Wired to profile_did_open — note ids from
-    one profile must never serve another — and used by tests. The reading-slot
-    memo is keyed on field text rather than note id, but it is dropped here too
-    so a profile switch cannot leave one profile's working set resident."""
+    """Drop the cross-run note cache. Wired to profile_did_open, since note ids from one
+    profile must never serve another, and used by tests. The reading-slot memo is keyed on
+    field text rather than note id, but it is dropped here too so a profile switch cannot
+    leave one profile's working set resident."""
     global _note_data_cache_fp
     _note_data_cache.clear()
     _note_data_cache_fp = None
@@ -113,7 +113,7 @@ class DataManager:
         self._note_derived_cache: Dict[int, Tuple[str, str, Optional[str]]] = {}
         self._kanji_manager = None  # lazy
         # Distinct `seen:N` levels across the whole config, and their windows resolved together
-        # against one reference date — see _seen_windows.
+        # against one reference date. See _seen_windows.
         self._seen_levels: Optional[List[int]] = None
         self._seen_window_map: Optional[Dict[int, "seen_manager.SeenWindow"]] = None
         self._note_fp_checked = False  # cross-run cache validated once per run
@@ -177,7 +177,7 @@ class DataManager:
     def _bulk_load(self, card_ids: List[int]) -> None:
         """Load every not-yet-cached card in bulk SQL passes instead of one
         backend round-trip per card. Two phases: (1) card->note linkage plus each
-        note's mod stamp — no field text; (2) field text for only the notes the
+        note's mod stamp, no field text. (2) field text for only the notes the
         cross-run cache doesn't already hold at that mod. On warm runs phase 2
         shrinks to just the notes edited since the previous reorder."""
         missing = [cid for cid in card_ids if cid not in self._card_cache]
@@ -262,7 +262,7 @@ class DataManager:
         # Fast path: a conjunctive query carrying custom occurrences:/f/kanji: terms.
         # Resolve the standard part ONCE per distinct query (shared across the many
         # priority searches that reuse the same deck/filter) and apply the custom
-        # predicates in Python over the already-loaded note data — no per-search
+        # predicates in Python over the already-loaded note data, so there is no per-search
         # full collection scan and no per-search re-run of the standard query.
         if raw and has_custom_term(raw):
             stripped = " ".join(_strip_custom_terms(raw).split())
@@ -277,16 +277,14 @@ class DataManager:
         return SearchResult(cards, len(cards))
 
     def _cards_for_search(self, final_search: str) -> List[Card]:
-        """find_cards(final_search) -> loaded Cards, memoized by query string for the
-        duration of the run (the collection is read-only until repositioning).
+        """find_cards(final_search) -> loaded Cards, memoized by query string for the run.
+        The collection is read-only until repositioning.
 
-        The finished Card list is what's memoized, not the id list: a config with several
-        priority searches over the same deck hits this repeatedly, and re-resolving ids to
-        Cards each time cost two more passes over the whole backlog per hit.
+        The finished Card list is memoized, not the id list. A config with several priority
+        searches over the same deck hits this repeatedly, and re-resolving ids to Cards cost
+        two more passes over the whole backlog per hit.
 
-        Returns the SHARED list — callers must treat it as read-only. Both do: _find_matches
-        only reads card ids out of it, and _get_cards_filtered rebinds its local to a new
-        filtered list rather than mutating in place."""
+        Returns the SHARED list, which callers must treat as read-only."""
         cards = self._search_cache.get(final_search)
         if cards is not None:
             return cards
@@ -313,7 +311,7 @@ class DataManager:
         raw_count = len(cards)
 
         # The terms are a pure conjunction of independent predicates, so any evaluation
-        # order yields the same set in the same order — but parse_custom_terms emits by
+        # order yields the same set in the same order, but parse_custom_terms emits by
         # kind, which happens to be close to most-expensive-first. Cheapest first shrinks
         # the list before the dictionary and seen lookups run over it (measured ~150x
         # between an `f` comparison and an all-flags `occurrences:` lookup), and it can
@@ -350,8 +348,8 @@ class DataManager:
             comparator = parse_comparator(op)
             dict_names = expand_dict_names(dict_str)
             cfg = self.config
-            # Index resolution and flag dispatch happen once here rather than per card —
-            # they used to be ~79% of the warm multi-dict lookup. `prefolded` because
+            # Index resolution and flag dispatch happen once here rather than per card,
+            # where they were ~79% of the warm multi-dict lookup. `prefolded` because
             # _note_derived already kana-folded both strings for the whole run.
             count_occurrences = occurrence_counter(
                 dict_names,
@@ -374,7 +372,7 @@ class DataManager:
                 nid = c.note_id
                 value = cache.get(nid)
                 if value is None:
-                    # derived(c) is (folded expression, folded reading, kanji skeleton) —
+                    # derived(c) is (folded expression, folded reading, kanji skeleton),
                     # exactly the counter's signature.
                     value = count_occurrences(*derived(c))
                     cache[nid] = value
@@ -460,11 +458,10 @@ class DataManager:
             self._add_ms("seen_win", t0)
             levels = self._seen_levels
             top = levels[-1]
-            # Memoized per level, then per note id — the flags are fixed for the run, so
-            # they stay out of the key (mirrors _occ_count_cache). If today's
-            # seen file is rewritten mid-run, a later predicate build can see a
-            # newer window while the memo keeps the earlier answers — accepted,
-            # like every other per-run cache here.
+            # Memoized per level, then per note id. The flags are fixed for the run, so they
+            # stay out of the key (mirrors _occ_count_cache). If today's seen file is rewritten
+            # mid-run, a later predicate build can see a newer window while the memo keeps the
+            # earlier answers, which is accepted like every other per-run cache here.
             by_level = {
                 level: self._seen_contains_cache.setdefault(level, {}) for level in levels
             }
@@ -492,13 +489,12 @@ class DataManager:
                 expression, reading, card_kanji = derived(c)
 
                 # Evaluate the LARGEST level first. The windows nest (seen:1 ⊆ seen:7 ⊆
-                # seen:30 — window_dates(today, n) is the last n days from one shared
+                # seen:30, because window_dates(today, n) is the last n days from one shared
                 # reference date) and every branch of contains() is a membership test over
-                # union sets, so it is monotone: a miss at the top is a miss at every level
-                # and settles them all in one probe. A hit says nothing about the smaller
-                # windows, so those are still evaluated — but in a new-card backlog misses
-                # are the overwhelming majority, which is where the three-windows-for-the-
-                # price-of-one saving comes from.
+                # union sets, so it is monotone. A miss at the top is a miss at every level and
+                # settles them all in one probe. A hit says nothing about the smaller windows,
+                # so those are still evaluated, but in a new-card backlog misses are the
+                # overwhelming majority, which is where the saving comes from.
                 top_seen = top_cache.get(nid)
                 if top_seen is None:
                     top_seen = windows[top].contains(
@@ -536,9 +532,9 @@ class DataManager:
         """One-line summaries of how much of the collection the reading table
         could explain, for the reorder timings line and the summary window.
 
-        Empty unless a new_reading term actually ran. Two views: the cards this
-        run evaluated, and the learned collection behind the index — the latter
-        is the more useful of the two, being computed once over everything."""
+        Empty unless a new_reading term actually ran. Two views: the cards this run
+        evaluated, and the learned collection behind the index. The latter is the more useful,
+        being computed once over everything."""
         out: Dict[str, str] = {}
         rate = None
         if self._nr_total:
@@ -558,7 +554,7 @@ class DataManager:
             out["new_reading_warning"] = (
                 "%.0f%% of the kanji checked by kanji:new_reading have a reading "
                 "the table cannot explain (usually under 25%%). Check that "
-                "search_fields.expression_reading_field names the field holding "
+                "word_fields.expression_reading_field names the field holding "
                 "the kana reading." % (100.0 * rate)
             )
         return out
@@ -570,7 +566,7 @@ class DataManager:
         yet both the occurrence path and every seen window used to redo them per card. The
         skeleton is derived from the FOLDED expression, which is what both consumers expect
         (``to_hiragana`` leaves CJK ideographs untouched, so the two agree either way), and is
-        left None when variant matching is off — nothing reads it then."""
+        left None when variant matching is off, since nothing reads it then."""
         nid = card.note_id
         value = self._note_derived_cache.get(nid)
         if value is None:
@@ -588,7 +584,7 @@ class DataManager:
         """Every distinct positive ``seen:N`` in the configured searches, ascending.
 
         Scanned from the config rather than accumulated as predicates are built, because the
-        short-circuit needs the largest level up front — the first search to carry a `seen:`
+        short-circuit needs the largest level up front. The first search to carry a `seen:`
         term must already know whether a bigger window exists elsewhere in the config."""
         if self._seen_levels is None:
             queries: List[str] = []

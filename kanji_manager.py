@@ -45,7 +45,7 @@ class KanjiManager:
         # Same shape as known_kanji_counts, which is what makes the bracketed
         # [T] target work identically: a reading stays new until T learned words
         # use it. Only populated once a new_reading term asks (see
-        # enable_readings) -- users of kanji:new/kanji:num pay nothing.
+        # enable_readings), so users of kanji:new/kanji:num pay nothing.
         self.known_reading_counts: Counter = Counter()
         self._reading_mode = False
         # Running totals over the known set, for the unresolved-rate diagnostic.
@@ -101,10 +101,7 @@ class KanjiManager:
         return self._reading_unresolved / self._reading_total
 
     def _extract_kanji(self, text: str) -> List[str]:
-        # utils.KANJI_RE, not a local pattern: this used to be a narrower
-        # `[一-龯]`, so kanji:num/kanji:new silently ignored Ext A, the
-        # compatibility ideographs (﨑/塚) and all of Ext B — characters utils.is_kanji,
-        # and therefore variant matching, counts.
+        # Must stay utils.KANJI_RE, never a local pattern. See utils._KANJI_RANGES.
         return KANJI_RE.findall(text)
 
     def initialize(self) -> None:
@@ -135,7 +132,7 @@ class KanjiManager:
             else:
                 self._rebuild_all()
         except Exception as e:
-            # A failed rebuild leaves a partial counter. Don't stamp it as current —
+            # A failed rebuild leaves a partial counter. Don't stamp it as current.
             # clearing both gates makes the next call retry instead of serving half the
             # known set for the rest of the session. `initialized` is still set, because
             # get_unknown_kanji_count's safety net would otherwise re-enter this per card.
@@ -196,8 +193,8 @@ class KanjiManager:
 
     def _credit_note(self, nid: int, nmod: int, flds_str: str,
                      idx: Tuple[int, Optional[int]]) -> None:
-        """(Re)credit one note's kanji -- and, in reading mode, its reading slots
-        -- to the counters, replacing any previous contribution recorded in the
+        """(Re)credit one note's kanji, and in reading mode its reading slots,
+        to the counters, replacing any previous contribution recorded in the
         snapshot."""
         expr_idx, read_idx = idx
         old = self._note_kanji.pop(nid, None)
@@ -320,7 +317,7 @@ class KanjiManager:
         The mirror of get_unknown_kanji_count, one level finer: that one asks
         whether the kanji has been seen at all, this one whether *this reading*
         of it has. A kanji the table cannot explain here (jukujikun, ateji, a
-        gikun reading) counts as new by definition -- its slot carries the kana
+        gikun reading) counts as new by definition, since its slot carries the kana
         span, so learning the word credits it and it stops firing."""
         if not self.initialized:
             self.initialize()

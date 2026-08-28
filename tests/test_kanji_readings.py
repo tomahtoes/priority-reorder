@@ -16,7 +16,7 @@ def slots(expression, reading):
     return [kr.describe_slot(s) for s in kr.reading_slots(expression, reading)]
 
 
-# --- regular readings -----------------------------------------------------
+# regular readings
 
 @pytest.mark.parametrize("expression,reading,expected", [
     ("見物", "けんぶつ", ["見=けん", "物=ぶつ"]),          # both on
@@ -39,7 +39,7 @@ def test_same_kanji_twice_with_different_readings():
     assert slots("日曜日", "にちようび") == ["日=にち", "曜=よう", "日=ひ"]
 
 
-# --- okurigana disambiguation ---------------------------------------------
+# okurigana disambiguation
 
 def test_okurigana_length_disambiguates_stems():
     # 明 has both あ and あか; only the reading's own length can separate them.
@@ -54,7 +54,7 @@ def test_inflections_of_one_stem_share_a_slot():
     assert kr.reading_slots("上る", "のぼる") != kr.reading_slots("上がる", "あがる")
 
 
-# --- rendaku --------------------------------------------------------------
+# rendaku
 
 @pytest.mark.parametrize("expression,reading,expected", [
     ("花火", "はなび", ["花=はな", "火=ひ"]),
@@ -80,7 +80,7 @@ def test_rendaku_is_suppressed_word_initially():
     assert slots("花火", "はなび")[0] == "花=はな"
 
 
-# --- gemination and 促音添加 ----------------------------------------------
+# gemination and 促音添加
 
 @pytest.mark.parametrize("expression,reading,expected", [
     ("学校", "がっこう", ["学=がく", "校=こう"]),
@@ -93,7 +93,7 @@ def test_sound_changes(expression, reading, expected):
     assert slots(expression, reading) == expected
 
 
-# --- conjugated and compound verbs ----------------------------------------
+# conjugated and compound verbs
 
 @pytest.mark.parametrize("expression,reading,expected", [
     ("引き取る", "ひきとる", ["引=ひ", "取=と"]),   # 連用形 changes the okurigana
@@ -106,7 +106,7 @@ def test_conjugated_and_compound_verbs_resolve(expression, reading, expected):
     assert slots(expression, reading) == expected
 
 
-# --- jukujikun / ateji ----------------------------------------------------
+# jukujikun / ateji
 
 @pytest.mark.parametrize("expression,reading", [
     ("火傷", "やけど"), ("今日", "きょう"), ("田舎", "いなか"), ("大人", "おとな"),
@@ -134,14 +134,14 @@ def test_same_spelling_different_reading_gets_different_slots():
 
 def test_unresolved_slots_are_stable_across_encounters():
     """An unresolved slot carries its span, so learning 火傷 credits it and the
-    card stops firing -- while a different ateji word using 火 still fires. A
+    card stops firing, while a different ateji word using 火 still fires. A
     slot meaning only "unexplained" would fire forever."""
     yakedo = kr.reading_slots("火傷", "やけど")
     assert kr.reading_slots("火傷", "やけど") == yakedo
     assert not set(yakedo) & set(kr.reading_slots("火事", "かじ"))
 
 
-# --- counters and iteration marks -----------------------------------------
+# counters and iteration marks
 
 @pytest.mark.parametrize("expression,reading,expected", [
     ("一人", "ひとり", ["一=ひと", "人=り"]),
@@ -156,7 +156,7 @@ def test_katakana_in_expression_folds():
     assert slots("缶ビール", "かんビール") == ["缶=かん"]
 
 
-# --- field sanitisation ---------------------------------------------------
+# field sanitisation
 
 @pytest.mark.parametrize("reading", [
     "やけど", "<b>やけど</b>", "やけど&nbsp;", "  やけど  ", "火[や]傷[けど]",
@@ -171,7 +171,7 @@ def test_anki_furigana_is_usable_not_merely_tolerated():
     assert slots("食べる", "食[た]べる") == ["食=た"]
 
 
-# --- degenerate input -----------------------------------------------------
+# degenerate input
 
 @pytest.mark.parametrize("expression,reading", [
     ("ひらがな", "ひらがな"),   # no kanji at all
@@ -202,7 +202,7 @@ def test_reading_that_contradicts_the_expression_still_reports_every_kanji():
     assert len(got) == 1 and kr.unresolved_count(got) == 1
 
 
-# --- encoding invariants --------------------------------------------------
+# encoding invariants
 
 def test_kana_codec_round_trips():
     text = "".join(kr._KANA)
@@ -221,7 +221,7 @@ def test_kanji_pass_through_the_codec_untouched():
     assert kr.encode_kana("食べる")[0] == "食"
 
 
-# --- caching --------------------------------------------------------------
+# caching
 
 def test_memo_is_clearable():
     kr.clear_cache()
@@ -232,7 +232,7 @@ def test_memo_is_clearable():
     assert kr._MEMO == {}
 
 
-# --- laziness and cost ----------------------------------------------------
+# laziness and cost
 
 def test_table_is_not_loaded_at_import():
     """A collection that never runs a new_reading term must not pay to read or

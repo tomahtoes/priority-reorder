@@ -32,12 +32,12 @@ except ImportError:  # pytest / flat-import context
         set_last_report,
     )
 
-# (anki_query, limit) — custom occurrences:/f/kanji: terms stay inside the query
+# (anki_query, limit). Custom occurrences:/f/kanji: terms stay inside the query
 # and are resolved by the patched Collection.find_cards (see search.py).
 PriorityDef = Tuple[str, Optional[int]]
 
 # Dev switch: flip to True to also append every reorder's timings line to
-# user_files/_timings.log (last 200 runs kept) — useful when Anki runs without
+# user_files/_timings.log (last 200 runs kept), useful when Anki runs without
 # a console. Off by default; normal users never see a file appear.
 _DUMP_TIMINGS_LOG = False
 
@@ -113,7 +113,7 @@ class PriorityReorderer:
         explain, when a kanji:new_reading term ran.
 
         Console only, deliberately. kanji:new_reading is the one term that fails
-        by matching too MUCH -- a reading field holding markup or the wrong field
+        by matching too MUCH. A reading field holding markup or the wrong field
         leaves every kanji unexplained, so it matches essentially every card and
         the reorder still reports success. That needs to be *sayable*, but it is
         troubleshooting output, not something to put in front of every user.
@@ -219,16 +219,13 @@ class PriorityReorderer:
         reverse = self.config.sort_reverse
 
         def split_by_threshold(cards: List[Card], threshold: Optional[int]) -> Tuple[List[Card], List[Card]]:
-            """Partition into (over, rest) by the sort value exceeding `threshold`
-            in the configured direction; a None threshold puts everything in rest.
+            """Partition into (over, rest) by the sort value exceeding `threshold` in the
+            configured direction. A None threshold puts everything in rest.
 
-            `over` is the "worse" side at both call sites — cutoff drops it out of
-            priority, prioritization leaves it in normal. A card with no usable sort
-            value therefore always belongs there, matching _sort_cards ("always trail,
-            in either sort direction"). Testing the raw +inf sentinel instead got that
-            right only under reverse=False; under reverse=True `inf < threshold` is
-            False, so value-less cards survived the cutoff AND were promoted into the
-            priority queue."""
+            `over` is the "worse" side at both call sites, so a card with no usable sort value
+            always belongs there, matching _sort_cards. Testing the raw +inf sentinel instead
+            got that right only under reverse=False: under reverse=True `inf < threshold` is
+            False, so value-less cards survived the cutoff AND were promoted into priority."""
             if threshold is None:
                 return [], list(cards)
             over: List[Card] = []
@@ -289,7 +286,6 @@ class PriorityReorderer:
             seen: Set[int] = set()
             all_priority_cards = {c.card_id: c for b in buckets for c in b}
 
-            # Track per-bucket kept ids before global-limit clipping
             bucket_kept_cards: Dict[int, List[Card]] = {i: [] for i in range(len(buckets))}
 
             for i, bucket in enumerate(buckets):
@@ -313,13 +309,12 @@ class PriorityReorderer:
                         seen.add(card.card_id)
                         bucket_kept_cards[i].append(card)
 
-            # Cards that matched priority but didn't make it into any bucket
-            # (sequential dedup — already counted in earlier bucket; ignored here)
+            # Matched priority but landed in no bucket: sequential dedup already counted
+            # them in an earlier bucket.
             for cid, card in all_priority_cards.items():
                 if cid not in seen:
                     overflow.append(card)
 
-        # Apply global priority limit
         global_limit = self.config.priority_limit
         global_overflow: List[Card] = []
         if global_limit is not None and len(queue) > global_limit:
@@ -327,7 +322,6 @@ class PriorityReorderer:
             queue = queue[:global_limit]
             overflow.extend(global_overflow)
 
-        # Record final kept/global-discarded note ids per bucket (sequential mode)
         if not is_mix:
             kept_set = {c.card_id for c in queue}
             for i in range(len(buckets)):
@@ -400,15 +394,12 @@ class PriorityReorderer:
     def _needs_reorder(self, new_ids: List[int]) -> bool:
         """Whether repositioning would actually change the new-card order.
 
-        Anki's reposition rewrites every new card it touches — and with
-        shift_existing it bumps every new card's position by a fixed offset —
-        unconditionally, even when the resulting order is identical. That marks
-        the cards for sync, so a no-op reorder leaves the sync button stuck on
-        "changes pending". Skipping the reposition when the order is already
-        correct is the only way to avoid that churn.
+        Anki's reposition rewrites every new card it touches, and under shift_existing bumps
+        every position by a fixed offset unconditionally, even when the resulting order is
+        identical. That marks the cards for sync, leaving the sync button stuck on "changes
+        pending". Skipping the reposition is the only way to avoid that churn.
 
-        The two shift_existing modes need different tests, because they write
-        different things — see the branches below.
+        The two shift_existing modes need different tests, because they write different things.
         """
         if not new_ids:
             return False
@@ -418,7 +409,7 @@ class PriorityReorderer:
             # cards and moves nothing else. So "already applied" is a per-card test,
             # and it MUST be: comparing against the global new-card order churns
             # forever on a new card outside every configured search whose due happens
-            # to land inside 0..N-1 — nothing can move it, so the order never matches
+            # to land inside 0..N-1. Nothing can move it, so the order never matches
             # and every reorder re-dirties the whole backlog for sync.
             #
             # Bounded by `due < N` rather than inlining the ids: a 100k-card backlog
@@ -442,7 +433,8 @@ class PriorityReorderer:
                 f"select id from cards where type = 0 order by due, id limit {len(new_ids)}"
             )
         except Exception:
-            # Even though we can't know for sure, default to reordering to match historical behavior
+            # The comparison is what decides whether a reorder can be skipped, so a failed
+            # query must fall back to reordering rather than to skipping.
             return True
 
         if len(current_ids) < len(new_ids):
@@ -461,7 +453,7 @@ class PriorityReorderer:
 
         # Equal sort values (and the whole `missing` group) used to keep their input
         # order, which traces back to iterating sets of card ids in
-        # _assign_initial_buckets — an order that shifts when the card set changes.
+        # _assign_initial_buckets, an order that shifts when the card set changes.
         # A handful of cards graduating could then permute a tie group, which is
         # exactly what makes _needs_reorder see a different order and reposition the
         # whole backlog for nothing. Breaking ties on card id makes the produced order

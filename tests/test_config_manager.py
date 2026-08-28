@@ -75,8 +75,8 @@ def test_search_fields_nested_config():
     assert c.search_config.expression_reading_field == "Kana"
 
 
-# --- back-compat: pre-section flat configs -----------------------------------
-# The tests above all pass flat dicts and must keep passing untouched — that is the
+# back-compat: pre-section flat configs
+# The tests above all pass flat dicts and must keep passing untouched. That is the
 # back-compat guarantee stated as a test.
 
 
@@ -124,7 +124,7 @@ def test_flat_key_wins_over_the_section_beside_it():
     # This is the shape getConfig actually hands us for an unmigrated user: Anki
     # shallow-merges config.json, so the default sections sit alongside the user's
     # real flat values. A flat key present at all means the config predates the
-    # sections (migration always removes them), so it must win — otherwise every
+    # sections (migration always removes them), so it must win. Otherwise every
     # upgrading user silently gets reset to defaults.
     migrated, _ = migrate_config({"prefix_matching": True,
                                   "matching": {"prefix_matching": False,
@@ -200,7 +200,7 @@ def test_migration_does_not_mutate_input():
     assert original == {"prefix_matching": True, "matching": {"stem_matching": True}}
 
 
-# --- back-compat: sections renamed after the first sectioned release ----------
+# back-compat: sections renamed after the first sectioned release
 
 
 def test_retired_section_names_migrate_with_values_intact():
@@ -239,7 +239,7 @@ def test_retired_section_wins_over_the_current_one_beside_it():
 
 
 def test_flat_config_migrates_straight_to_current_names():
-    # Two schema hops in one pass — no intermediate queue_rules/automation state.
+    # Two schema hops in one pass, with no intermediate queue_rules/automation state.
     migrated, _ = migrate_config({"prefix_matching": True, "priority_limit": 200,
                                   "reorder_before_sync": False})
     assert migrated["matching"]["prefix_matching"] is True
@@ -266,7 +266,7 @@ def test_shipped_defaults_contain_no_legacy_names():
     assert not set(defaults) & set(_LEGACY_SECTIONS)
 
 
-# --- data preservation -------------------------------------------------------
+# data preservation
 
 
 def test_unknown_keys_inside_a_section_survive():
@@ -310,10 +310,10 @@ def test_migration_never_drops_a_user_value():
     assert not missing, f"migration dropped: {missing}"
 
 
-# --- an out-of-date installed config.json ------------------------------------
+# an out-of-date installed config.json
 # Anki merges config.json's defaults into every read, so a half-updated install
 # (new .py files, old config.json) reintroduces legacy keys. Those must not be
-# mistaken for user intent -- the failure is silent: settings simply read as off.
+# mistaken for user intent. The failure is silent: settings simply read as off.
 
 import copy
 

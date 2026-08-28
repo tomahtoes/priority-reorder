@@ -13,7 +13,7 @@ from dictionary_manager import (
 )
 
 
-# --- expand_dict_names ------------------------------------------------------
+# expand_dict_names
 
 def test_expand_single_name():
     assert expand_dict_names("Foo") == ["Foo"]
@@ -33,7 +33,7 @@ def test_expand_all_inside_list_merges_and_dedups(monkeypatch):
     assert expand_dict_names("[D1,all]") == ["D1", "D2"]
 
 
-# --- OccurrenceIndex.get_total flags ---------------------------------------
+# OccurrenceIndex.get_total flags
 
 def _index():
     idx = OccurrenceIndex()
@@ -61,7 +61,7 @@ def test_get_total_combine_word_forms():
     assert idx.get_total("南京", "なんきん", combine_word_forms=True) == 10
 
 
-# --- occurrence_count routing ----------------------------------------------
+# occurrence_count routing
 
 def test_occurrence_count_single_dict(monkeypatch):
     captured = {}
@@ -108,7 +108,7 @@ def test_occurrence_count_normalize_kana(monkeypatch):
     assert count == 8
 
 
-# --- _build_index_from_raw: meta shapes & filtering -------------------------
+# _build_index_from_raw: meta shapes & filtering
 
 def test_build_meta_as_int():
     idx = _build_index_from_raw([["猫", "freq", 7]])
@@ -149,7 +149,7 @@ def test_build_accumulates_counts_for_same_expression():
     assert idx.get("茶", "x") == 8
 
 
-# --- kana-only (㋕) attribution --------------------------------------------
+# kana-only (㋕) attribution
 
 def test_build_kana_only_indicator_attributes_count_to_reading():
     # Regression (b9d6b7c / 23d3b9b): a ㋕-flagged entry is keyed under the reading,
@@ -179,7 +179,7 @@ def test_build_normalize_kana_folds_katakana_keys():
     assert idx.get("ぎりぎり", "ぎりぎり") == 8
 
 
-# --- honorific folding ------------------------------------------------------
+# honorific folding
 
 def test_build_honorific_folding_credits_stripped_base():
     # Regression (5ae53de): お/ご/御-prefixed terms credit their stripped base.
@@ -194,7 +194,7 @@ def test_build_honorific_folding_credits_stripped_base():
 
 def test_build_honorific_folding_credits_kanji_base_absent_from_dict():
     # A kanji-bearing stripped form folds even when the dict never contains the
-    # bare form itself — お茶の間-only media must still credit a 茶の間 card.
+    # bare form itself. お茶の間-only media must still credit a 茶の間 card.
     idx = _build_index_from_raw([["お茶の間", "freq", 9]], honorific_folding=True)
     assert idx.honorific_to_count.get("茶の間") == 9
     assert idx.get_total("茶の間", "ちゃのま", honorific_folding=True) == 9
@@ -207,7 +207,7 @@ def test_build_honorific_folding_credits_single_kanji_base():
 
 
 def test_build_honorific_folding_skips_kana_base_absent_from_dict():
-    # Kana-only strips stay gated on dict membership — おかず is not お+かず, and
+    # Kana-only strips stay gated on dict membership. おかず is not お+かず, and
     # blind stripping would hand かず (a plausible real card) a phantom count.
     idx = _build_index_from_raw(
         [["おかず", "freq", 12], ["おはよう", "freq", 50]],
@@ -225,7 +225,7 @@ def test_build_honorific_folding_kana_base_present_in_dict_still_folds():
     assert idx.honorific_to_count.get("しゃれ") == 20
 
 
-# --- prefix_total edges -----------------------------------------------------
+# prefix_total edges
 
 def test_prefix_total_below_min_length_is_zero():
     idx = OccurrenceIndex()
@@ -251,7 +251,7 @@ def test_prefix_total_includes_supplementary_plane_successors():
     assert idx.prefix_total("漢字") == 70
 
 
-# --- single-kanji phrase matching -------------------------------------------
+# single-kanji phrase matching
 
 def test_phrase_total_credits_particle_phrase():
     idx = OccurrenceIndex()
@@ -279,7 +279,7 @@ def test_phrase_total_reading_validation_excludes_mismatches():
 def test_phrase_total_credits_bare_particle_form():
     idx = OccurrenceIndex()
     idx.add("俗", "ぞく", 3)
-    idx.add("俗に", "ぞくに", 120)        # bare 'X<particle>' — the tail is optional
+    idx.add("俗に", "ぞくに", 120)        # bare 'X<particle>', tail optional
     idx.add("俗に言う", "ぞくにいう", 40)  # ...and a tailed phrase still counts alongside it
     idx.add("特に", "とくに", 100)
     assert idx.get_total("俗", "ぞく") == 3
@@ -289,7 +289,7 @@ def test_phrase_total_credits_bare_particle_form():
     assert idx.get_total("特", "しょく", prefix_matching=True) == 0
 
 
-# --- single-kanji suru verbs ------------------------------------------------
+# single-kanji suru verbs
 
 def test_suru_total_credits_single_kanji_verb():
     idx = OccurrenceIndex()
@@ -308,7 +308,7 @@ def test_suru_total_credits_single_kanji_verb():
 def test_suru_total_reading_validation_excludes_mismatches():
     idx = OccurrenceIndex()
     idx.add("屯する", "たむろする", 50)   # the noun 屯 also reads とん; that card is a different word
-    idx.add("訳する", "やくする", 7)      # vs a 訳/わけ card ("reason") — different word
+    idx.add("訳する", "やくする", 7)      # vs a 訳/わけ card ("reason"), a different word
     idx.add("課する", "かする", 4)
     assert idx.get_total("屯", "とん", prefix_matching=True) == 0
     assert idx.get_total("訳", "わけ", prefix_matching=True) == 0
@@ -334,7 +334,7 @@ def test_suru_total_requires_exact_single_kanji_stem():
     idx = OccurrenceIndex()
     idx.add("重んじる", "おもんじる", 5)   # 重 + んじる, not 重 + じる
     idx.add("勉強する", "べんきょうする", 100)
-    idx.add("恥じる", "はじる", 8)         # 恥/はじ + る — じる is not a suffix here
+    idx.add("恥じる", "はじる", 8)         # 恥/はじ + る, so じる is not a suffix here
     idx.add("屯する", None, 9)             # no reading -> nothing to validate against
     assert idx.get_total("重", "おも", prefix_matching=True) == 0
     assert idx.get_total("恥", "はじ", prefix_matching=True) == 0
@@ -416,7 +416,7 @@ def test_phrase_total_stacks_with_honorific_folding():
     assert idx.get_total("手", "て", prefix_matching=True, honorific_folding=True) == 35
 
 
-# --- suffix_total / suffix_matching -----------------------------------------
+# suffix_total / suffix_matching
 
 def test_suffix_total_excludes_exact_match():
     idx = OccurrenceIndex()
@@ -438,7 +438,7 @@ def test_suffix_total_head_final_noun_compounds():
 
 def test_suffix_total_length_gate_excludes_single_kanji():
     # A single kanji is excluded from the BARE suffix path (length >= 2 gate): it would
-    # otherwise absorb its whole compound family (語 -> 日本語/英語/…) — the volume/wrongness
+    # otherwise absorb its whole compound family (語 -> 日本語/英語/…), where the volume/wrongness
     # the gate exists to prevent. Single kanji return only via the tail phrase carve-out.
     idx = OccurrenceIndex()
     idx.add("語", "ご", 5)
@@ -461,7 +461,7 @@ def test_suffix_total_compound_verb_head_kana_tail_but_kanji_anchored():
 
 def test_suffix_total_requires_kanji_in_expression():
     # Table G: a pure-kana card (a bare grammatical string) would match far too broadly,
-    # so the gate excludes it — no suffix credit for する / こと / katakana loanwords.
+    # so the gate excludes it. No suffix credit for する / こと / katakana loanwords.
     idx = OccurrenceIndex()
     idx.add("する", "する", 5)
     idx.add("勉強する", "べんきょうする", 100)
@@ -500,7 +500,7 @@ def test_suffix_honorific_no_double_count():
 
 def test_suffix_single_kanji_no_collision_with_honorific():
     # A single-kanji card (茶) is not suffix-eligible now, so the bare suffix path contributes
-    # nothing and there is no collision to guard — the honorific fold applies once.
+    # nothing and there is no collision to guard, so the honorific fold applies once.
     idx = _build_index_from_raw(
         [["茶", "freq", 10], ["お茶", "freq", 50]],
         honorific_folding=True,
@@ -511,7 +511,7 @@ def test_suffix_single_kanji_no_collision_with_honorific():
 
 def test_suffix_honorific_kana_fold_not_subsumed():
     # A kana-only stripped fold (しゃれ←おしゃれ) is NOT suffix-eligible (no kanji), so the
-    # honorific credit must survive when both flags are on — the skip only fires when the
+    # honorific credit must survive when both flags are on. The skip only fires when the
     # suffix path actually subsumes the fold.
     idx = _build_index_from_raw(
         [["しゃれ", "freq", 3], ["おしゃれ", "freq", 20]],
@@ -533,7 +533,7 @@ def test_prefix_and_suffix_both_on_additive_disjoint():
 
 def test_prefix_and_suffix_both_on_reduplicative_double_credits():
     # A term that both starts and ends with the card is credited by BOTH paths when both
-    # flags are on — accepted, and pinned here so the behavior can't silently change.
+    # flags are on. Accepted, and pinned here so the behavior can't silently change.
     idx = OccurrenceIndex()
     idx.add("一歩", "いっぽ", 5)
     idx.add("一歩一歩", "いっぽいっぽ", 40)
@@ -556,7 +556,7 @@ def test_suffix_normalize_kana_end_to_end(monkeypatch):
     assert count == 105
 
 
-# --- single-kanji suffix phrase carve-out (mirror of the prefix phrase tests) ----
+# single-kanji suffix phrase carve-out (mirror of the prefix phrase tests)
 
 def test_suffix_phrase_credits_particle_phrase():
     idx = OccurrenceIndex()
@@ -572,7 +572,7 @@ def test_suffix_phrase_credits_particle_phrase():
 
 def test_suffix_phrase_reading_validation():
     # Rejects a reading mismatch (日/にち not credited by 母の日/ははのひ); credits the matching
-    # homograph but not the mismatched one (敵/かたき ← 目の敵/めのかたき, 敵/てき not) — the tail
+    # homograph but not the mismatched one (敵/かたき ← 目の敵/めのかたき, 敵/てき not). The tail
     # mirror of test_phrase_total_homograph_readings.
     idx = OccurrenceIndex()
     idx.add("母の日", "ははのひ", 12)
@@ -614,7 +614,7 @@ def test_suffix_phrase_normalize_kana_end_to_end(monkeypatch):
     assert count == 12
 
 
-# --- variant_total / variant_matching ---------------------------------------
+# variant_total / variant_matching
 
 def _kirameku():
     """The motivating index: three written forms of きらめく plus the kana spelling."""
@@ -644,7 +644,7 @@ def test_variant_alternate_kanji_spelling_not_credited():
 
 def test_variant_superset_spelling_credits_every_component_form():
     # Hypothetical 煌燦めく: its kanji {煌,燦} is a superset of both cards' skeletons, so it
-    # credits BOTH 煌めく and 燦めく — one shared kanji is enough to connect the forms.
+    # credits BOTH 煌めく and 燦めく. One shared kanji is enough to connect the forms.
     idx = OccurrenceIndex()
     idx.add("煌燦めく", "きらめく", 15)
     assert idx.get_total("煌めく", "きらめく", variant_matching=True) == 15
@@ -654,7 +654,7 @@ def test_variant_superset_spelling_credits_every_component_form():
 
 
 def test_variant_never_credits_kana_only_spelling():
-    # The measured part: a kana entry has an empty kanji skeleton, so it never participates —
+    # The measured part: a kana entry has an empty kanji skeleton, so it never participates,
     # that credit remains combine_word_forms' job.
     idx = OccurrenceIndex()
     idx.add("きらめく", "きらめく", 60)
@@ -696,7 +696,7 @@ def test_variant_okurigana_and_iteration_mark_families():
 
 def test_variant_requires_identical_reading():
     # 煌々/こうこう nests with 煌めく ({煌} <= {煌}) but reads differently, so it is not a
-    # variant — the reading is what identifies the word.
+    # variant. The reading is what identifies the word.
     idx = OccurrenceIndex()
     idx.add("煌々", "こうこう", 90)
     assert idx.get_total("煌めく", "きらめく", variant_matching=True) == 0
@@ -719,7 +719,7 @@ def test_variant_total_ignores_kana_only_card_expression():
 
 def test_variant_prefix_no_double_count():
     # 気持ち is BOTH a strict written prefix of nothing and a variant of 気持
-    # (same reading, {気,持} == {気,持}) — and 気持 IS a strict prefix of 気持ち, so
+    # (same reading, {気,持} == {気,持}), and 気持 IS a strict prefix of 気持ち, so
     # prefix_total already credits it. With both flags on it must count once, not twice.
     idx = OccurrenceIndex()
     idx.add("気持", "きもち", 5)
@@ -788,7 +788,7 @@ def test_variant_kana_only_marker_entry_never_participates():
 
 def test_variant_katakana_expression_never_credits_kanji_card():
     # A katakana-written entry folds to hiragana under kana_normalization but still has no kanji,
-    # so it stays out of the variant index — only combine_word_forms bridges kana to a kanji card.
+    # so it stays out of the variant index. Only combine_word_forms bridges kana to a kanji card.
     idx = _build_index_from_raw(
         [["キラメク", "freq", {"reading": "キラメク", "value": 25}]],
         normalize_kana=True,
@@ -827,7 +827,7 @@ def test_variant_multi_dict_with_kana_normalization(monkeypatch):
     assert count == 40  # 20 credited from each of the two dicts
 
 
-# --- stem matching (連用形 / さ・み・げ) --------------------------------------
+# stem matching (連用形 / さ・み・げ)
 
 def _stem_index(entries):
     ix = OccurrenceIndex()
@@ -866,7 +866,7 @@ def test_stem_sums_every_adjective_nominalizer_present():
 
 def test_stem_lets_the_reading_arbitrate_the_conjugation_class():
     # A る-final card yields BOTH the ichidan (drop る) and godan (る->り) candidates; the index
-    # decides. 起きる is ichidan so only 起き exists, 走る is godan so only 走り does — and the
+    # decides. 起きる is ichidan so only 起き exists, 走る is godan so only 走り does, and the
     # wrong-class candidate contributes nothing rather than needing a dictionary to rule it out.
     ix = _stem_index([("起き", "おき", 9), ("走り", "はしり", 4)])
     assert ix.get_total("起きる", "おきる", stem_matching=True) == 9
@@ -882,7 +882,7 @@ def test_stem_requires_the_reading_to_match_the_written_stem():
 
 def test_stem_is_forward_only_and_never_credits_the_dictionary_form():
     # Deliberate: crediting a 連用形 card from its (far commoner) dictionary form inverts the
-    # priority ordering — 無げ would inherit 無い's count. prefix_matching still covers that
+    # priority ordering, since 無げ would inherit 無い's count. prefix_matching still covers that
     # direction for anyone who wants it.
     ix = _stem_index([("戒める", "いましめる", 40)])
     assert ix.get_total("戒め", "いましめ", stem_matching=True) == 0
@@ -900,7 +900,7 @@ def test_stem_rejects_kana_only_cards_where_the_reading_validates_nothing():
 
 
 def test_stem_requires_the_okurigana_invariant():
-    # The edit is only valid when expression and reading end in the SAME kana — that is what
+    # The edit is only valid when expression and reading end in the SAME kana, which is what
     # makes the tail okurigana. A kanji-final card can never qualify.
     ix = _stem_index([("学", "がく", 5)])
     assert ix.get_total("学校", "がっこう", stem_matching=True) == 0
@@ -936,7 +936,7 @@ def test_stem_credits_kana_stem_through_combine_word_forms():
 
 def test_stem_does_not_double_count_with_prefix_suffix_or_variant():
     # Every candidate either shortens the card or replaces its last character, so no other rule
-    # can reach it — this is the one rule in the file that needs no dedup guard. Pinning it here
+    # can reach it, so this is the one rule in the file that needs no dedup guard. Pinning it here
     # means a future widening that breaks the property fails loudly.
     ix = _stem_index([
         ("戒め", "いましめ", 4),          # the stem itself
@@ -961,7 +961,7 @@ def test_stem_total_builds_no_lazy_view():
     assert ix._variant_index is None
 
 
-# --- CombinedOccurrenceIndex memo eviction ----------------------------------
+# CombinedOccurrenceIndex memo eviction
 
 def test_combined_index_evicts_oldest_when_cap_reached(monkeypatch):
     monkeypatch.setattr(dm, "_COMBINED_MEMO_CAP", 2)
@@ -985,7 +985,7 @@ def test_combined_index_evicts_oldest_when_cap_reached(monkeypatch):
 
 def test_combined_index_memo_resets_when_query_flags_change(monkeypatch):
     # The merged index is now shared across query-flag combinations (they are no longer in
-    # the lru_cache key), so the per-card memo — whose values DO depend on them — must not
+    # the lru_cache key), so the per-card memo, whose values DO depend on them, must not
     # serve one combination's totals to another.
     index = OccurrenceIndex()
     index.add("学校", "がっこう", 3)
@@ -998,11 +998,11 @@ def test_combined_index_memo_resets_when_query_flags_change(monkeypatch):
     assert ci.total("学校", "がっこう") == 3                          # and back again
 
 
-# --- merged-index equivalence (drift guard) ---------------------------------
+# merged-index equivalence (drift guard)
 #
 # CombinedOccurrenceIndex folds N dictionaries into ONE index instead of summing N per-dict
 # get_total calls. That is a pure optimization: the merged answer must equal the per-dict sum
-# EXACTLY, for every flag combination. These tests make that a guarantee rather than a hope —
+# EXACTLY, for every flag combination. These tests make that a guarantee rather than a hope.
 # the rest of the suite exercises the base OccurrenceIndex and would not notice a bad fold.
 
 # Four overlapping dictionaries, each carrying an entry shape that stresses part of the fold:
@@ -1091,8 +1091,8 @@ def _all_flag_combos():
 
 
 def _split_flags(flags):
-    """(build-time kwargs, query-time kwargs). honorific_folding is a BUILD flag —
-    honorific_to_count only exists when the per-dict indexes were built with it — while the
+    """(build-time kwargs, query-time kwargs). honorific_folding is a BUILD flag, since
+    honorific_to_count only exists when the per-dict indexes were built with it, while the
     other five are passed per lookup so one merged index serves every combination."""
     return (
         {"honorific_folding": flags["honorific_folding"]},
@@ -1140,7 +1140,7 @@ def test_merged_index_equals_per_dict_sum(equiv_dicts, normalize_kana):
 
 
 def test_merged_index_equals_per_dict_sum_for_every_subset(equiv_dicts):
-    """Pairs and triples too — a fold bug can hide behind one particular dict combination."""
+    """Pairs and triples too, since a fold bug can hide behind one particular dict combination."""
     names = sorted(equiv_dicts)
     for size in (2, 3):
         for subset in itertools.combinations(names, size):

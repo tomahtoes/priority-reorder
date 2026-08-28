@@ -5,7 +5,7 @@ import pytest
 from utils import KANJI_RE, is_kanji, parse_sort_value, to_hiragana, parse_comparator
 
 
-# --- parse_sort_value -------------------------------------------------------
+# parse_sort_value
 
 def test_parse_sort_value_valid_positive():
     assert parse_sort_value("123") == (123.0, True)
@@ -29,7 +29,7 @@ def test_parse_sort_value_zero_and_negative_are_missing():
         assert has is False and math.isinf(val)
 
 
-# --- to_hiragana ------------------------------------------------------------
+# to_hiragana
 
 def test_to_hiragana_folds_katakana():
     assert to_hiragana("ギリギリ") == "ぎりぎり"
@@ -66,7 +66,7 @@ def test_to_hiragana_range_boundaries():
     assert to_hiragana("ー") == "ー"           # U+30FC length mark: unchanged
 
 
-# --- is_kanji ----------------------------------------------------------------
+# is_kanji
 
 def test_is_kanji_true_for_ideographs():
     assert is_kanji("手")
@@ -79,7 +79,7 @@ def test_is_kanji_false_for_kana_ascii_symbols():
         assert not is_kanji(ch), ch
 
 
-# --- KANJI_RE ---------------------------------------------------------------
+# KANJI_RE
 
 def test_kanji_re_agrees_with_is_kanji():
     # The two must stay interchangeable: kanji_manager scans whole strings with the regex
@@ -101,7 +101,7 @@ def test_kanji_re_finds_supplementary_and_compatibility_ideographs():
     assert KANJI_RE.findall("ひらがなカナ") == []
 
 
-# --- parse_comparator -------------------------------------------------------
+# parse_comparator
 
 @pytest.mark.parametrize("op,a,b,expected", [
     ("=", 3, 3, True), ("=", 3, 4, False),

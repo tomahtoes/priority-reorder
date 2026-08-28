@@ -5,7 +5,7 @@ Group (EDRDG) and is used under the Creative Commons Attribution-ShareAlike 4.0
 licence: https://www.edrdg.org/wiki/index.php/KANJIDIC_Project
 
 EDRDG's licence requires "a procedure for regular updating of the data from the
-most recent versions available" -- that is this script, and re-running it is a
+most recent versions available". That is this script, and re-running it is a
 release step (see AGENTS.md). A one-time import would put the addon out of
 compliance the moment KANJIDIC changes.
 
@@ -35,7 +35,7 @@ KANJIDIC_URL = "http://www.edrdg.org/kanjidic/kanjidic2.xml.gz"
 DEFAULT_OUT = os.path.join(ROOT, "kanji_readings.txt")
 
 HEADER = [
-    "# kanji_readings.txt -- per-kanji readings derived from KANJIDIC2.",
+    "# kanji_readings.txt: per-kanji readings derived from KANJIDIC2.",
     "#",
     "# Source: KANJIDIC2, Copyright (C) Electronic Dictionary Research and",
     "# Development Group (EDRDG). Used under CC BY-SA 4.0.",
@@ -75,7 +75,7 @@ def split_reading(reading):
     Applied to on'yomi and kun'yomi alike:
 
     - katakana folds to hiragana. On'yomi are written in katakana, and a
-      handful of kun readings are too -- the unit kanji, 吋/インチ, 瓩/キログラム.
+      handful of kun readings are too: the unit kanji, 吋/インチ, 瓩/キログラム.
       The matcher folds the card's reading the same way, so both sides meet.
     - the -prefix/-suffix markers ('-り', 'お-') are stripped: they record where
       the reading attaches, which the matcher works out positionally anyway.
@@ -130,7 +130,7 @@ def render(table):
 
     Okurigana is deliberately dropped. It was only ever used to require that the
     expression continue with it, and the matcher's reading alignment already
-    disambiguates 明るい (明=あか) from 明ける (明=あ) without it -- while the
+    disambiguates 明るい (明=あか) from 明ける (明=あ) without it, while the
     check wrongly rejected 連用形 compounds (引き取る, 見送る) whose conjugation
     changes the okurigana."""
     lines = []

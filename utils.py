@@ -25,10 +25,11 @@ _KATA_TO_HIRA = {cp: cp - 0x60 for cp in range(0x30A1, 0x30F7)}
 def to_hiragana(text: str) -> str:
     return text.translate(_KATA_TO_HIRA)
 
-# The CJK ideograph ranges, defined once and consumed two ways below. kanji_manager used to
-# carry its own narrower `[一-龯]`, which left `kanji:num`/`kanji:new` blind to
-# Ext A, the compatibility block (﨑 / 塚) and all of Ext B (𠮟) while
-# variant matching counted them; keeping both forms here is what stops that recurring.
+# The CJK ideograph ranges, defined once and consumed two ways below. Do not narrow them, and
+# do not let a caller substitute its own pattern. A narrower `[一-龯]` leaves `kanji:num` and
+# `kanji:new` blind to Ext A, the compatibility block (﨑 / 塚) and all of Ext B (𠮟), while
+# variant matching still counts them. Defining both forms here is what stops the two
+# drifting apart again.
 _KANJI_RANGES = (
     (0x4E00, 0x9FFF),    # CJK Unified
     (0x3400, 0x4DBF),    # Ext A
@@ -57,7 +58,7 @@ KANJI_RE = re.compile(
 
 # Plain dict of C-level operators rather than a chain of lambdas: faster on the per-card
 # predicate paths, and free of the `match` statement, which is a SyntaxError before Python
-# 3.10 (the rest of the addon is 3.9-compatible — see models.NoteData).
+# 3.10 (the rest of the addon is 3.9-compatible; see models.NoteData).
 _COMPARATORS = {
     "=": operator.eq,
     "!=": operator.ne,

@@ -135,7 +135,7 @@ class SummaryCell(QWidget):
         if accent:
             val.setStyleSheet(f"color: {accent};")
         elif dim:
-            # Zero counts: muted so meaningful numbers stand out.
+            # Zero counts are muted so meaningful numbers stand out.
             val.setStyleSheet(f"color: {_muted_color()};")
         layout.addWidget(val)
 
@@ -161,7 +161,7 @@ class SearchCard(QFrame):
 
         # No layout margins: the card's inset lives in the header's own margins
         # and the body's margins, so the whole header band (full width, up to the
-        # card edge) is part of the clickable header — not dead margin space.
+        # card edge) is part of the clickable header, not dead margin space.
         self._outer = QVBoxLayout(self)
         self._outer.setContentsMargins(0, 0, 0, 0)
         self._outer.setSpacing(0)
@@ -202,7 +202,7 @@ class SearchCard(QFrame):
         self._outer.addWidget(self._header)
 
         # Body. Add it to the card's layout (reparenting it) BEFORE making it
-        # visible: a parentless widget that is shown — even briefly — appears as
+        # visible. A parentless widget that is shown, even briefly, appears as
         # its own top-level window, i.e. a flashing popup. Its side/bottom margins
         # replace the old layout margins; the gap above it comes from the header's
         # bottom padding.
@@ -274,7 +274,7 @@ class SearchCard(QFrame):
         query_html = self._query_html_muted if compact else self._query_html
         text = f"{self._prefix_html}{query_html}"
         if compact:
-            # Mute the whole line — [index] included, arrow via arrow_color —
+            # Mute the whole line, [index] included and arrow via arrow_color,
             # so an empty row reads as inactive at a glance; the query's
             # blended term colors (inner spans) still show through.
             text = f'<span style="color:{_muted_color()}">{text}</span>'
@@ -326,7 +326,6 @@ class SearchCard(QFrame):
             if entry.final_start_index is not None:
                 add_cell("starts at", str(entry.final_start_index))
 
-        # Stats on the left; browser buttons anchored to the right of the same line.
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(0)
@@ -359,7 +358,7 @@ class SearchCard(QFrame):
         body_layout.addLayout(row)
 
         if is_mix:
-            note = QLabel("(mix mode — kept/discarded combined in totals)")
+            note = QLabel("(mix mode: kept/discarded combined in totals)")
             f = note.font()
             f.setItalic(True)
             if stats_pt > 0:
@@ -455,7 +454,6 @@ class SummaryDialog(QDialog):
         self._root.addLayout(close_row)
 
     def _build_report(self, report: ReorderReport) -> None:
-        # Header row: timestamp + edit config + run reorder
         header_row = QHBoxLayout()
         header_row.setSpacing(10)
 
@@ -483,7 +481,6 @@ class SummaryDialog(QDialog):
         header_row.addStretch(1)
         self._root.addLayout(header_row)
 
-        # At-a-glance overview of the whole report.
         if report.entries:
             n = len(report.entries)
             n_matched = sum(1 for e in report.entries if e.refined_match_count > 0)
@@ -496,7 +493,6 @@ class SummaryDialog(QDialog):
             overview.setStyleSheet(f"color: {_muted_color()};")
             self._root.addWidget(overview)
 
-        # Expand/collapse all controls
         ctrl_row = QHBoxLayout()
         expand_btn = QPushButton("Expand all")
         collapse_btn = QPushButton("Collapse all")
@@ -512,7 +508,6 @@ class SummaryDialog(QDialog):
         ctrl_row.addWidget(collapse_btn)
         self._root.addLayout(ctrl_row)
 
-        # Scrollable list of search cards
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -545,7 +540,6 @@ class SummaryDialog(QDialog):
         self._scroll_inner = inner
         self._root.addWidget(scroll, 1)
 
-        # Footer totals + close
         footer = QHBoxLayout()
         totals = QLabel(
             f"Totals:  priority {report.total_priority_kept}    "
@@ -571,7 +565,7 @@ class SummaryDialog(QDialog):
 
         pkg = __name__.split(".")[0]
         try:
-            # Normally a no-op — the config was migrated at addon load. It matters
+            # Normally a no-op, since the config was migrated at addon load. It matters
             # only if that write failed (read-only meta.json), where reads still
             # work but the editor would otherwise show the pre-section layout.
             conf = migrate_config_in_place(pkg)

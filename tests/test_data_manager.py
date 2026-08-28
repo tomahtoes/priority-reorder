@@ -102,7 +102,7 @@ def fake_col(monkeypatch):
     return build
 
 
-# --- query building (is:new scoping) -----------------------------------------
+# query building (is:new scoping)
 
 def test_or_query_is_wrapped_so_is_new_scopes_whole_query(fake_col):
     # Regression: Anki binds AND tighter than OR, so the unwrapped form
@@ -124,7 +124,7 @@ def test_custom_term_fast_path_wraps_stripped_standard_part(fake_col):
     assert col.queries == ["(deck:X) is:new"]
 
 
-# --- search memoization -------------------------------------------------------
+# search memoization
 
 def test_search_results_are_memoized_per_query(fake_col):
     col = fake_col(
@@ -138,7 +138,7 @@ def test_search_results_are_memoized_per_query(fake_col):
     assert [c.card_id for c in r1.cards] == [1] == [c.card_id for c in r2.cards]
 
 
-# --- custom-term post-filtering ------------------------------------------------
+# custom-term post-filtering
 
 def test_custom_freq_term_filters_and_reports_raw_count(fake_col):
     col = fake_col(
@@ -236,7 +236,7 @@ def test_plain_query_raw_count_equals_match_count(fake_col):
     assert res.raw_count == len(res.cards) == 1
 
 
-# --- get_cards / bulk load batching ----------------------------------------------
+# get_cards / bulk load batching
 
 def test_get_cards_bulk_loads_in_one_query(fake_col):
     # The reorderer hands every candidate id to get_cards in one call; the load
@@ -266,7 +266,7 @@ def test_bulk_load_chunks_large_id_lists(fake_col):
     assert col.db.flds_calls == expected  # cold cache: every note fetched
 
 
-# --- bulk load field handling ---------------------------------------------------
+# bulk load field handling
 
 def test_bulk_load_resolves_fields_and_sort_value(fake_col):
     fake_col(find_results={"is:new": [1]}, rows=[_row(1, 10, "彫刻", "ちょうこく", "123")])
@@ -288,7 +288,7 @@ def test_bulk_load_note_type_missing_fields_yields_no_sort_value(fake_col):
     assert data.has_sort_value is False
 
 
-# --- per-run caches ---------------------------------------------------------------
+# per-run caches
 
 def test_occ_count_cached_per_note_for_the_run(fake_col, monkeypatch):
     fake_col(
@@ -313,7 +313,7 @@ def test_occ_count_cached_per_note_for_the_run(fake_col, monkeypatch):
 
 
 def test_occ_predicate_forwards_all_matching_flags(fake_col, monkeypatch):
-    # Every config matching flag must reach occurrence_counter — a flag that stops being
+    # Every config matching flag must reach occurrence_counter. A flag that stops being
     # forwarded silently degrades to the exact-match behavior. The flags are bound when the
     # counter is BUILT (once per predicate), not per card.
     fake_col(
@@ -350,7 +350,7 @@ def test_occ_predicate_forwards_all_matching_flags(fake_col, monkeypatch):
 
 def test_kanji_count_cache_is_keyed_by_target(fake_col, monkeypatch):
     # Regression guard: two kanji:new searches with different [T] targets in the
-    # same run must not share cached counts — the cache key includes the target.
+    # same run must not share cached counts, so the cache key includes the target.
     fake_col(
         find_results={"(deck:X) is:new": [1, 2]},
         rows=[_row(1, 10, "語", "ご", "100"), _row(2, 20, "彙", "い", "100")],
@@ -388,7 +388,7 @@ def test_occ_predicate_never_matches_without_expression_or_reading(fake_col, mon
     assert [c.card_id for c in res.cards] == [2]  # card 1 has no reading
 
 
-# --- seen: on the fast path -------------------------------------------------------
+# seen: on the fast path
 
 class _FakeWindow:
     def __init__(self, present):
@@ -403,7 +403,7 @@ class _FakeWindow:
 def test_custom_seen_term_fast_path_filters_via_window(fake_col, monkeypatch):
     # `deck:X seen:3` must ride the conjunctive fast path (no paren-wrapped
     # find_cards fallback): window resolved once, per-card membership in Python,
-    # empty-expression cards never match — mirroring resolve_seen.
+    # empty-expression cards never match, mirroring resolve_seen.
     fake_col(
         find_results={"(deck:X) is:new": [1, 2, 3]},
         rows=[_row(1, 10, "下駄", "げた", "50"), _row(2, 20, "茶", "ちゃ", "60"),
@@ -443,7 +443,7 @@ def test_custom_seen_zero_fast_path_matches_nothing(fake_col, monkeypatch):
 
 def test_seen_contains_memoized_per_note(fake_col, monkeypatch):
     # Cards 1 and 2 share note 10, and the same seen:3 term runs in two
-    # searches — contains must be called exactly once per distinct note.
+    # searches, so contains must be called exactly once per distinct note.
     fake_col(
         find_results={"(deck:X) is:new": [1, 2]},
         rows=[_row(1, 10, "下駄", "げた", "50"), _row(2, 10, "下駄", "げた", "50")],
@@ -474,7 +474,7 @@ def test_seen_memo_keyed_by_n(fake_col, monkeypatch):
     assert len(window.calls) == 2  # different n -> no cross-n bleed
 
 
-# --- cross-run note cache ---------------------------------------------------------
+# cross-run note cache
 
 def test_warm_run_skips_field_fetch_for_unchanged_notes(fake_col):
     rows = [_row(1, 10, "語", "ご", "100"), _row(2, 20, "彙", "い", "200")]
@@ -522,7 +522,7 @@ def test_clear_note_cache_empties_the_cache(fake_col):
     assert not dmod._note_data_cache
 
 
-# --- sub-stage timing accumulators --------------------------------------------------
+# sub-stage timing accumulators
 
 def test_stage_ms_accumulates_substage_keys(fake_col):
     fake_col(
@@ -536,7 +536,7 @@ def test_stage_ms_accumulates_substage_keys(fake_col):
         assert dm.stage_ms[key] >= 0.0
 
 
-# --- nested seen windows ----------------------------------------------------
+# nested seen windows
 #
 # seen:1 ⊆ seen:7 ⊆ seen:30, and SeenWindow.contains is monotone in the underlying union
 # sets, so the largest window decides every miss in one probe. These pin both halves: that
@@ -564,7 +564,7 @@ def _nested(monkeypatch, by_level):
 
 
 def test_seen_miss_at_largest_window_settles_every_smaller_level(fake_col, monkeypatch):
-    # 茶 is in no window. The seen:30 probe alone must decide it — seen:1 is never consulted.
+    # 茶 is in no window. The seen:30 probe alone must decide it, and seen:1 is never consulted.
     fake_col(
         find_results={"(deck:X) is:new": [1]},
         rows=[_row(1, 10, "茶", "ちゃ", "50")],
@@ -612,7 +612,7 @@ def test_seen_miss_at_middle_window_settles_smaller_levels(fake_col, monkeypatch
     assert fake.probes(30) == 1
     assert fake.probes(7) == 1
     # The seen:1 window is deliberately stocked with 茶 so that consulting it would give the
-    # WRONG answer — nesting says a seen:7 miss is a seen:1 miss.
+    # WRONG answer, because nesting says a seen:7 miss is a seen:1 miss.
     assert fake.probes(1) == 0, "a miss at seen:7 must settle every smaller level"
 
 
@@ -650,7 +650,7 @@ def test_seen_levels_share_one_reference_date(fake_col, monkeypatch):
     assert fake.todays[0] is not None
 
 
-# --- kanji:new_reading --------------------------------------------------------
+# kanji:new_reading
 
 class _ReadingKM:
     """Enough KanjiManager for the predicate: a slot counter plus the
@@ -728,7 +728,7 @@ def test_new_reading_gets_its_own_count_cache_bucket(fake_col, monkeypatch):
 
 
 def test_unresolved_counters_are_per_note_not_per_comparison(fake_col, monkeypatch):
-    """The diagnostic counts each note once, on the cache miss -- two searches
+    """The diagnostic counts each note once, on the cache miss. Two searches
     over the same card must not double it."""
     fake_col(find_results={"(deck:X) is:new": [1], "(deck:Y) is:new": [1]},
              rows=[_row(1, 10, "火傷", "やけど", "100")])

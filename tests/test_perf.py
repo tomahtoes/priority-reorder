@@ -27,7 +27,7 @@ import search
 from dictionary_manager import OccurrenceIndex
 
 
-# --- fake collection harness ------------------------------------------------
+# fake collection harness
 
 class _FakeModels:
     """Single note type (mid=1) whose fields are Expression(0)/Reading(1)/Freq(2)."""
@@ -102,7 +102,7 @@ def fake_anki(monkeypatch):
     return build
 
 
-# --- _iter_candidate_notes: the O(M) vs O(N) guard --------------------------
+# _iter_candidate_notes: the O(M) vs O(N) guard
 
 def test_iter_candidate_notes_full_scan_visits_everything(fake_anki):
     notes = [(i, 1, _flds(f"e{i}", f"r{i}")) for i in range(100)]
@@ -132,7 +132,7 @@ def test_iter_candidate_notes_empty_candidate_set_does_nothing(fake_anki):
     assert col.db.executed == []  # no query at all
 
 
-# --- rewrite_query: candidate-set threading + safety fallback ---------------
+# rewrite_query: candidate-set threading + safety fallback
 
 def _record_occ(record, ids=(901, 902)):
     def fake(dict_str, op, thresh, candidate_nids=None):
@@ -195,7 +195,6 @@ def test_rewrite_grouped_conjunctive_query_still_restricts(fake_anki, monkeypatc
     assert col.find_notes_queries == ["(deck:A or deck:B)"]
 
 
-# --- pure helpers -----------------------------------------------------------
 
 def test_strip_custom_terms_leaves_standard_part():
     assert search._strip_custom_terms("deck:X occurrences:D>5 f<2000 kanji:new=1 seen:2 length>=3").split() == ["deck:X"]
@@ -230,7 +229,7 @@ def test_candidate_restriction_allowed(query, stripped, allowed):
     assert search._candidate_restriction_allowed(query, stripped) is allowed
 
 
-# --- parse_custom_terms (reorder post-filter parser) ------------------------
+# parse_custom_terms (reorder post-filter parser)
 
 def test_parse_custom_terms_extracts_each_kind():
     terms = search.parse_custom_terms("deck:X occurrences:MyDict>=5 f<2000 kanji:new=1 kanji:new[3]>=1 seen:2 length>=3")
@@ -252,7 +251,7 @@ def test_parse_custom_terms_none_when_plain():
     assert search.parse_custom_terms("deck:X added:3") == []
 
 
-# --- micro-benchmark: demonstrates and guards O(M) vs O(N) ------------------
+# micro-benchmark: demonstrates and guards O(M) vs O(N)
 
 def _bench_index(k_terms):
     idx = OccurrenceIndex()
@@ -309,7 +308,7 @@ def _suffix_bench_index(k_terms):
 
 def test_suffix_total_is_logarithmic_not_linear(capsys):
     """suffix_total is O(log n) (two bisects + one cumsum subtraction) even when the matched
-    suffix range is the entire index — asserted by matching a naive endswith scan and showing
+    suffix range is the entire index. Asserted by matching a naive endswith scan and showing
     the speedup. The tail is a multi-char (≥2, kanji) string so it passes the eligibility gate;
     a bare single kanji is gated out and early-returns 0 (pinned below). Suffix mirror of the
     prefix_matching lookup benchmark."""
@@ -347,7 +346,7 @@ def test_suffix_total_is_logarithmic_not_linear(capsys):
 
 def _variant_bench_index(k_terms, forms_per_reading=4):
     """k_terms entries spread over k/forms_per_reading distinct readings, so each reading holds a
-    small bucket of written forms — the shape variant_total's cost actually depends on."""
+    small bucket of written forms, the shape variant_total's cost actually depends on."""
     idx = OccurrenceIndex()
     kanji = "日本語学校子供気持煌燦落葉引越"
     for i in range(k_terms):
@@ -358,8 +357,8 @@ def _variant_bench_index(k_terms, forms_per_reading=4):
 
 
 def test_variant_total_scales_with_reading_bucket_not_index_size(capsys):
-    """variant_total is O(forms sharing the card's reading) — a dict lookup plus a few set
-    comparisons — NOT O(index). Asserted by holding the bucket size fixed while growing the index
+    """variant_total is O(forms sharing the card's reading), a dict lookup plus a few set
+    comparisons, NOT O(index). Asserted by holding the bucket size fixed while growing the index
     10x and showing the per-query time stays flat, plus a naive same-reading scan for contrast."""
     SMALL, LARGE = 2_000, 20_000
     small = _variant_bench_index(SMALL)
@@ -388,7 +387,7 @@ def test_variant_total_scales_with_reading_bucket_not_index_size(capsys):
     naive_ms = (time.perf_counter() - t0) * 1000
 
     assert large.variant_total("日00001", "よみ00001") == naive_total
-    # The index stores (expression, count) only — no cached kanji skeleton. Skeletonizing every
+    # The index stores (expression, count) only, with no cached kanji skeleton. Skeletonizing every
     # entry up front cost 28% of the build and 35% of the retained memory for buckets that average
     # under two forms, so it is derived per candidate instead.
     assert all(len(entry) == 2 for bucket in large._variant_index.values() for entry in bucket)
@@ -409,7 +408,7 @@ def test_skeleton_work_does_not_scale_with_dict_count(monkeypatch):
     """No kanji-skeleton work may scale with the number of dictionaries.
 
     CombinedOccurrenceIndex folds every dict into ONE index, so a lookup derives the card's
-    skeleton once and each merged candidate's skeleton once — both independent of N. The old
+    skeleton once and each merged candidate's skeleton once, both independent of N. The old
     per-dict loop derived the card skeleton once (hoisted) but every candidate N times, once
     per dict; that N factor is what the merge removes.
     """
@@ -446,7 +445,7 @@ def test_skeleton_work_does_not_scale_with_dict_count(monkeypatch):
 
 def test_variant_index_not_built_when_flag_off(capsys):
     """The variant index is lazy, so an occurrence lookup with variant_matching off pays nothing
-    — the flag is free until used. (The seen side instead gates collection at build time; see
+    so the flag is free until used. (The seen side instead gates collection at build time; see
     seen_manager.build_seen_day.)"""
     idx = _variant_bench_index(20_000)
     for _ in range(1000):

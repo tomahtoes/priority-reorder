@@ -73,7 +73,6 @@ def _reset_singleton():
     kmod._kanji_manager_instance = None
 
 
-# --- counting ----------------------------------------------------------------
 
 def test_get_kanji_count_counts_cjk_chars_only():
     km = KanjiManager(Config())
@@ -110,7 +109,7 @@ def test_get_unknown_kanji_count_with_target():
     assert km.get_unknown_kanji_count("彫刻", 0) == 0    # degenerate: count < 0 never true
 
 
-# --- initialize() gating -------------------------------------------------------
+# initialize() gating
 
 def test_initialize_builds_known_counts_from_graduated_notes(fake_col):
     fake_col(notes=[(1, 1, "彫刻\x1fちょうこく"), (2, 1, "刻\x1fこく")])
@@ -202,7 +201,7 @@ def test_last_scan_ms_set_on_rebuild_and_none_on_noop(fake_col):
 
 def test_unknown_count_does_not_recheck_mod_once_initialized(fake_col):
     # Perf guard: get_unknown_kanji_count must not re-run the signature gate per
-    # call — callers initialize once per batch.
+    # call, since callers initialize once per batch.
     col = fake_col(notes=[(1, 1, "語\x1f")])
     km = KanjiManager(Config())
     km.initialize()
@@ -212,7 +211,7 @@ def test_unknown_count_does_not_recheck_mod_once_initialized(fake_col):
     assert col.db.first_calls == first_calls
 
 
-# --- singleton ------------------------------------------------------------------
+# singleton
 
 def test_singleton_is_reused_and_resets_on_expression_field_change(fake_col):
     fake_col(notes=[(1, 1, "語\x1f")])
@@ -231,7 +230,7 @@ def test_singleton_is_reused_and_resets_on_expression_field_change(fake_col):
     assert changed._note_kanji == {}     # snapshot invalidated with it
 
 
-# --- reading slots (kanji:new_reading) ---------------------------------------
+# reading slots (kanji:new_reading)
 
 def _reading_config():
     return Config(search_config=SearchConfig(
@@ -305,7 +304,7 @@ def test_target_counts_words_per_reading_not_per_kanji(monkeypatch):
     slot = kr.reading_slots("可愛い", "かわいい")[1]
     assert km.known_reading_counts[slot] == 2
     # At [2] the bar is met, so nothing in 可愛がる is new. At [3] neither 可 nor
-    # 愛 has reached it yet, so both count -- the term is per kanji, not per word.
+    # 愛 has reached it yet, so both count. The term is per kanji, not per word.
     assert km.get_new_reading_count("可愛がる", "かわいがる", 2) == 0
     assert km.get_new_reading_count("可愛がる", "かわいがる", 3) == 2
     # 愛=あい is a different reading and is untouched by any of them.
@@ -325,7 +324,7 @@ def test_unresolved_rate_tracks_the_known_set(monkeypatch):
 
 def test_unresolved_rate_is_total_when_the_reading_field_is_wrong(monkeypatch):
     """A reading field holding something that is not the reading leaves
-    everything unresolved -- the signal the diagnostic exists to surface."""
+    everything unresolved, the signal the diagnostic exists to surface."""
     _reading_col(monkeypatch, [
         _note(1, "食事", "meal"), _note(2, "勉強", "study"),
     ])
@@ -343,7 +342,7 @@ def test_notes_without_the_reading_field_contribute_no_slots(monkeypatch):
     km = KanjiManager(_reading_config())
     km.enable_readings()
     km.initialize()
-    # Still a known kanji -- membership keys off the expression field alone.
+    # Still a known kanji. Membership keys off the expression field alone.
     assert km.known_kanji_counts == Counter({"食": 1, "事": 1})
     assert km.known_reading_counts == Counter()
 

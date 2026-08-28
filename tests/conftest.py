@@ -1,9 +1,9 @@
 """Test bootstrap.
 
 Puts the addon dir on sys.path so modules import flat (no Anki package), and
-installs lightweight stub `aqt` / `anki` modules so the core files — which do
+installs lightweight stub `aqt` / `anki` modules so the core files, which do
 `from aqt import mw`, `from anki.collection import OpChangesWithCount`,
-`from anki.utils import ids2str` at import time — can be imported headless.
+`from anki.utils import ids2str` at import time, can be imported headless.
 
 These are baseline stubs installed at collection time. Tests that need a live
 fake collection (see test_perf.py) override `sys.modules`/`mw.col` via monkeypatch

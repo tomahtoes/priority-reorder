@@ -32,7 +32,7 @@ else:
     # instead (see handle_sync_did_finish / run_reorder_on_close).
     _is_closing = False
 
-    # Prevents infinite sync loop
+    # Guards against an infinite sync loop.
     _auto_syncing = False
 
     def trigger_second_sync() -> None:
@@ -61,7 +61,7 @@ else:
         before Anki unloads the collection. Running here (rather than scheduling
         a background CollectionOp) completes before col.close(), so the reorder
         is applied and persisted without racing teardown. Errors are only logged
-        — never shown as a dialog as the app is exiting."""
+        and never shown as a dialog while the app is exiting."""
         if mw.col is None:
             return
         try:
@@ -118,10 +118,9 @@ else:
                     timer.cancel()
                     mw.taskman.run_on_main(lambda: show_updater_results(results))
 
-                    # Chain the reorder process on sync completion if not manual.
-                    # Pass manual=False so the reorder triggers a follow-up sync to
-                    # push the new positions (run_on_main would otherwise call
-                    # run_in_background with no args, defaulting manual to True).
+                    # manual=False so the reorder triggers a follow-up sync to push the new
+                    # positions. run_on_main would otherwise call run_in_background with no
+                    # args, defaulting manual to True.
                     if reorder_after:
                         mw.taskman.run_on_main(lambda: run_in_background(manual=False))
                 except Exception as e:
@@ -198,7 +197,7 @@ else:
         reorder_action = QAction("Reorder Cards", mw)
         reorder_action.setShortcut(QKeySequence("Ctrl+Alt+`"))
         # Wrap in a lambda so Qt's triggered(checked) bool isn't passed as the
-        # `manual` arg — a menu/shortcut reorder must stay manual (no auto sync).
+        # `manual` arg. A menu or shortcut reorder must stay manual (no auto sync).
         qconnect(reorder_action.triggered, lambda: run_in_background())
         menu.addAction(reorder_action)
 
@@ -216,7 +215,7 @@ else:
         """Bring an older flat config onto the current sectioned layout, in place.
 
         Addon config lives in the global meta.json rather than per-profile, so import
-        time is early enough — no collection required. Registering the updated-action
+        time is early enough, since no collection is required. Registering the updated-action
         too means a config the user pastes or restores by hand in Anki's editor is
         normalized on save instead of at the next restart. Reading tolerates either
         layout regardless (see config_manager.migrate_config), so a failure here only
@@ -226,7 +225,6 @@ else:
         migrate_config_in_place(pkg)
         mw.addonManager.setConfigUpdatedAction(pkg, lambda _conf: migrate_config_in_place(pkg))
 
-    # Initialize the addon
     setup_config_migration()
     setup_sync_hook()
     setup_search_terms()

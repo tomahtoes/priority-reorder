@@ -16,7 +16,7 @@ _VALID_SEARCH_MODES = ("sequential", "mix")
 # The names are chosen for how Anki's config editor renders them: it pretty-prints
 # with sort_keys=True, so the only way to keep a section below the searches you tune
 # day to day is a name that sorts after `sort_reverse`. `matching` is the deliberate
-# exception — it leads the file because it's the section worth seeing first.
+# exception, leading the file because it's the section worth seeing first.
 _GROUPS = {
     "matching": {
         "kana_normalization": False,
@@ -112,26 +112,22 @@ def _coerce_optional_int(data: dict, key: str) -> Optional[int]:
     return None
 
 def migrate_config(data: dict) -> tuple:
-    """Normalize a stored config onto the current sectioned layout.
+    """Normalize a stored config onto the current sectioned layout, returning
+    `(migrated, changed)`.
 
-    Returns `(migrated, changed)`. Pure — no Anki imports — so it runs on every
-    parse in `from_dict` as well as on the write-back path. That is deliberate:
-    reading an older config must work identically whether or not the stored file
-    was ever rewritten, so the write is only ever a convenience.
+    Pure, with no Anki imports, so it runs on every parse in `from_dict` as well as on the
+    write-back path. Reading an older config must work identically whether or not the stored
+    file was ever rewritten, which makes the write only a convenience.
 
-    Three passes: sections saved under a retired name are folded into the current
-    one, values living under a pre-section flat key are hoisted into their section,
-    and any section key still missing is backfilled with its default so Anki's JSON
-    editor always shows the complete current schema. The backfill matters because
-    `getConfig` shallow-merges config.json over the user's dict: a section the user
-    has saved replaces the shipped default wholesale, so options added in later
-    versions would otherwise never reach an existing user's editor. Keys we don't
-    own are left untouched.
+    Three passes: fold retired section names into the current one, hoist pre-section flat keys
+    into their section, and backfill missing section keys with defaults. The backfill matters
+    because `getConfig` shallow-merges config.json over the user's dict, so a section the user
+    has saved replaces the shipped default wholesale and later-added options would never reach
+    their editor. Keys we don't own are left untouched.
 
-    Legacy names win over current ones wherever both appear. That is sound because
-    the shipped config.json contains no legacy name (enforced by a test), so a
-    legacy name in the input can only have come from the user's own saved config,
-    while the current-named section beside it may be nothing but merged-in defaults.
+    Legacy names win wherever both appear. The shipped config.json contains no legacy name (a
+    test enforces this), so one in the input can only be the user's own saved value, while the
+    current-named section beside it may be nothing but merged-in defaults.
     """
     migrated = dict(data)
     changed = False
@@ -278,21 +274,19 @@ def _stored_config(pkg: str) -> dict:
     """
     try:
         return mw.addonManager.addonMeta(pkg).get("config") or {}
-    except Exception:  # older or changed Anki API — merged is better than nothing
+    except Exception:  # older or changed Anki API; merged beats nothing
         return mw.addonManager.getConfig(pkg) or {}
 
 def warn_if_defaults_stale(pkg: str) -> bool:
     """Warn when the installed config.json predates the current section layout.
 
-    Anki merges those defaults into every read, so a stale file reintroduces legacy
-    names that migration then treats as user intent — quietly turning real settings
-    back off for the session. It only happens with a half-copied install, which is
-    exactly the case that is otherwise invisible.
+    Anki merges those defaults into every read, so a stale file reintroduces legacy names that
+    migration treats as user intent, quietly turning real settings back off for the session.
+    Only happens with a half-copied install, which is otherwise invisible.
 
-    Records the offending keys in `_stale_default_keys` so reads can ignore them
-    (see `get_config`). Only keys the user has *not* saved themselves are recorded:
-    those can only have come from the stale defaults, whereas one the user really
-    did save is their own value and must still win.
+    Records the offending keys in `_stale_default_keys` so reads can ignore them. Only keys the
+    user has *not* saved are recorded, since those can only have come from the stale defaults,
+    whereas one the user really did save must still win.
     """
     global _stale_default_keys
     try:
@@ -315,7 +309,7 @@ def migrate_config_in_place(pkg: str) -> dict:
 
     Idempotent, and only writes when something actually moved. Returns the config as
     Anki would then serve it, so callers that also display it (the summary window's
-    config button) don't have to re-read. Reading never depends on this having run —
+    config button) don't have to re-read. Reading never depends on this having run.
     it exists so users' own config files quietly catch up instead of staying on a
     layout the docs no longer describe.
     """
@@ -337,7 +331,7 @@ def migrate_config_in_place(pkg: str) -> dict:
         return mw.addonManager.getConfig(pkg) or migrated
     except Exception as e:
         # A config we can't rewrite still reads fine; never block addon load. Fall
-        # back to the stored dict rather than {} — a caller may hand this to the
+        # back to the stored dict rather than {}, since a caller may hand this to the
         # config editor, where an empty dict could be saved over a real config.
         print(f"[priority-reorder] config: could not migrate stored config ({e})")
         try:

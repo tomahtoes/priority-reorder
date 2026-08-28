@@ -23,7 +23,7 @@ def occ_recorder(calls, ids=None):
     return resolve
 
 
-# --- seen: token rewriting --------------------------------------------------
+# seen: token rewriting
 
 def test_seen_basic_resolves():
     calls = []
@@ -34,7 +34,7 @@ def test_seen_basic_resolves():
 
 def test_seen_threshold_removed():
     # The count-threshold syntax is gone: `seen:7` resolves and a trailing `>=10` is left as a
-    # normal token (clean removal — not silently absorbed).
+    # normal token (a clean removal, not silently absorbed).
     calls = []
     out = search.rewrite_query("seen:7>=10", seen_resolver=seen_recorder(calls))
     assert out == "(nid:7,8)>=10"
@@ -90,7 +90,7 @@ def test_has_custom_term_includes_seen():
     assert not search.has_custom_term("unseen:2")
 
 
-# --- strip helper ------------------------------------------------------------
+# strip helper
 
 def test_strip_custom_terms_removes_seen_too():
     # seen: strips like every custom token: the candidate-set base handed to the
@@ -99,7 +99,7 @@ def test_strip_custom_terms_removes_seen_too():
     assert search._strip_custom_terms("deck:JP occurrences:X>5 seen:2").split() == ["deck:JP"]
 
 
-# --- date / window helpers --------------------------------------------------
+# date / window helpers
 
 def test_window_dates():
     today = date(2026, 6, 12)
@@ -122,7 +122,7 @@ def test_today_date_after_rollover_is_same_day():
     assert seen_manager.today_date(now=datetime(2026, 6, 12, 10, 0), rollover=4) == date(2026, 6, 12)
 
 
-# --- SeenWindow.contains: presence + parity with counting -------------------
+# SeenWindow.contains: presence + parity with counting
 
 def _build_window(day_raws, normalize_kana=False, honorific_folding=False, variant_matching=False,
                   stem_matching=False):
@@ -295,7 +295,7 @@ def _ref_seen(day_indices, e, r, **flags):
 
 def test_seen_contains_matches_counting_presence_incl_homograph():
     # SeenWindow.contains must equal the counting index's `get_total(...) >= 1` for EVERY
-    # card/flag combo — the boolean model is a faithful drop-in for bare `seen:N`. Reuses the
+    # card/flag combo, so the boolean model is a faithful drop-in for bare `seen:N`. Reuses the
     # homograph dataset (角 read かど vs つの) whose per-day reading-mismatch fallback a full
     # count merge would drop, to prove presence is unaffected by it.
     raws = [
@@ -313,7 +313,7 @@ def test_seen_contains_matches_counting_presence_incl_homograph():
             ["屯する", "freq", {"reading": "たむろする", "frequency": {"value": 6}}],
             ["察する", "freq", {"reading": "さっする", "frequency": {"value": 4}}],
             # variant rule: an okurigana variant, a prefix-overlapping variant (気持ち/気持ち
-            # is also a strict prefix match for a 気持 card — the dedup guard), and a
+            # is also a strict prefix match for a 気持 card, the dedup guard), and a
             # same-reading homophone that merely shares a kanji with 科学
             ["煌く", "freq", {"reading": "きらめく", "frequency": {"value": 11}}],
             ["気持ち", "freq", {"reading": "きもち", "frequency": {"value": 12}}],
@@ -357,7 +357,7 @@ def test_seen_contains_matches_counting_presence_incl_homograph():
              ("俗", "ぞく"), ("積", "つ"), ("積", "せき"),
              # single-kanji suru carve-out: positive, reading-gated, and the sokuon branch
              ("屯", "たむろ"), ("屯", "とん"), ("察", "さつ"),
-             # variant rule: credited (煌めく←煌く), not credited (燦めく — no shared kanji),
+             # variant rule: credited (煌めく←煌く), not credited (燦めく, no shared kanji),
              # kana-only card, the prefix-overlap dedup case, and the homophone guard
              ("煌めく", "きらめく"), ("燦めく", "きらめく"), ("きらめく", "きらめく"),
              ("気持", "きもち"), ("科学", "かがく"),
@@ -403,7 +403,7 @@ def test_seen_contains_matches_counting_presence_incl_homograph():
             assert window.contains(e, r, **fs) == _ref_seen(day_indices, e, r, **fs), (e, r, fs)
 
 
-# --- reservation: `seen` is never a normal occurrence dict ------------------
+# reservation: `seen` is never a normal occurrence dict
 
 def test_get_all_dict_names_excludes_seen(monkeypatch):
     monkeypatch.setattr(dm.os, "listdir", lambda p: ["A", "_seen", "B", ".tmp", "all"])
@@ -432,10 +432,10 @@ def test_updater_dict_dirs_excludes_seen(monkeypatch):
     assert sorted(u._dict_dirs()) == ["A", "B"]
 
 
-# --- resolve_seen performance regression guards -----------------------------
+# resolve_seen performance regression guards
 #
 # The window (and the filesystem stat that checks for current-day rewrites) must be
-# resolved ONCE per search, not once per note per day — the bug that made `seen:`
+# resolved ONCE per search, not once per note per day. That was the bug that made `seen:`
 # searches and reorders pathologically slow. And repeated full scans in one reorder
 # must be served from the memo.
 
@@ -532,7 +532,7 @@ def test_resolve_seen_memo_replaces_a_level_when_the_day_is_rewritten(monkeypatc
     assert len(search._seen_cache) == 1
 
 
-# --- merged-window cache growth ---------------------------------------------
+# merged-window cache growth
 #
 # Today's seen dict is rewritten continuously while immersing, and every rewrite yields a new
 # window signature. The cache must REPLACE the window for a given day set, not accumulate one
@@ -555,7 +555,7 @@ def test_window_cache_replaces_rather_than_accumulates_on_rewrite(monkeypatch):
     assert len(seen_manager._window_cache) == 1, "each rewrite must replace the stale window"
     assert windows[-1] is seen_manager._window_cache[next(iter(seen_manager._window_cache))]
     # Distinct objects per rewrite, i.e. the cache really did rebuild rather than hand back a
-    # stale window — the growth fix must not turn into a correctness bug.
+    # stale window. The growth fix must not turn into a correctness bug.
     assert windows[0] is not windows[-1]
 
 

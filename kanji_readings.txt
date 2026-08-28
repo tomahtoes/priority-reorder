@@ -1,4 +1,4 @@
-# kanji_readings.txt -- per-kanji readings derived from KANJIDIC2.
+# kanji_readings.txt: per-kanji readings derived from KANJIDIC2.
 #
 # Source: KANJIDIC2, Copyright (C) Electronic Dictionary Research and
 # Development Group (EDRDG). Used under CC BY-SA 4.0.

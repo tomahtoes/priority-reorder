@@ -1,13 +1,12 @@
-"""Custom search terms (`occurrences:`, `f`, `kanji:`) as real Anki searches.
+"""Custom search terms (`occurrences:`, `f`, `kanji:`, `seen:`, `length`) as real Anki searches.
 
-Anki's (Rust) search backend can't accept custom terms, so we rewrite each custom
-token into a concrete `nid:` clause before the query reaches the backend, at two
-idempotent chokepoints (the browser hook and the Collection methods). This makes
-the same terms the reorderer understands work in the Browse bar and via the
-collection API / AnkiConnect.
+Anki's Rust search backend cannot accept custom terms, so each custom token is rewritten into a
+concrete `nid:` clause before the query reaches the backend, at two idempotent chokepoints: the
+browser hook and the Collection methods. That makes the terms the reorderer understands work in
+the Browse bar and through the collection API and AnkiConnect.
 
-Top-level imports stay light (no `aqt`) so this module loads under pytest; anything
-touching the collection is imported lazily inside the resolvers / install().
+Top-level imports stay free of `aqt` so this module loads under pytest. Anything touching the
+collection is imported lazily inside the resolvers and install().
 """
 
 import logging
@@ -27,9 +26,8 @@ logger = logging.getLogger("priority_reorder.search")
 OCC_RE = re.compile(
     r"(?<![^\s(-])occurrences:(?P<dict>[^=<>!\s]+)(?P<op>>=|<=|!=|=|<|>)(?P<thresh>\d+)"
 )
-# The mandatory operator right after `f` keeps this from firing inside `flag:` /
-# `front:` etc.; the trailing boundary keeps the threshold from running into the
-# next token.
+# The mandatory operator right after `f` keeps this from firing inside `flag:` or `front:`,
+# and the trailing boundary keeps the threshold from running into the next token.
 FREQ_RE = re.compile(
     r"(?<![^\s(-])f(?P<op>>=|<=|!=|=|<|>)(?P<thresh>\d+)(?=\s|\)|$)"
 )
@@ -43,24 +41,22 @@ LENGTH_RE = re.compile(
 # a kanji (resp. a reading of a kanji) counts as "new" until T learned words
 # contain it. Two things about this pattern are load-bearing:
 #
-#   - `new_reading` must precede `new` in the alternation. Python's `|` is
-#     leftmost-first, not longest-match, so with `new` first the token would
-#     match `new`, fail on the `_`, and — the lookbehind blocking a retry inside
-#     the token — not match at all, passing silently through to Anki's backend
-#     as a no-op rather than an error.
-#   - the bracket guard is a *negative* lookbehind. It used to be `(?<=new)`,
-#     which is fixed-width and so could never admit a second, longer type name.
-#     `(?<!num)` says "allowed after anything but num" and stays fixed-width.
+#   - `new_reading` must precede `new` in the alternation. Python's `|` is leftmost-first,
+#     not longest-match, so with `new` first the token matches `new`, fails on the `_`, and
+#     (the lookbehind blocking a retry inside the token) does not match at all, passing
+#     silently through to Anki's backend as a no-op rather than an error.
+#   - the bracket guard must stay a *negative* lookbehind. A positive `(?<=new)` is
+#     fixed-width and so could never admit a second, longer type name. `(?<!num)` means
+#     "allowed after anything but num" and stays fixed-width.
 KANJI_RE = re.compile(
     r"(?<![^\s(-])kanji:(?P<type>new_reading|new|num)"
     r"(?:(?<!num)\[(?P<target>\d+)\])?"
     r"(?P<op>>=|<=|!=|=|<|>)(?P<thresh>\d+)"
 )
-# `seen:N` is a date-windowed *presence* lookup over user_files/_seen/<date>/ (see
-# seen_manager): N is the number of trailing daily dicts, and a word matches if it appears in
-# ANY of them. It is boolean — there is no count test (a bare `seen:N` only asks "seen at
-# all"). N<=0 matches nothing. The spec is a number, not a name, so it never composes with
-# occurrences: — there is no `occurrences:seen` path to the seen data.
+# `seen:N` is a date-windowed *presence* lookup over user_files/_seen/<date>/ (see seen_manager).
+# N is the number of trailing daily dicts, and a word matches if it appears in ANY of them. It is
+# boolean, with no count test. N<=0 matches nothing. The spec is a number rather than a name, so
+# it never composes with occurrences: there is no `occurrences:seen` path to the seen data.
 SEEN_RE = re.compile(
     r"(?<![^\s(-])seen:(?P<n>\d+)"
 )
@@ -87,18 +83,17 @@ def _format_nid_clause(ids) -> str:
 
 
 def _kanji_args(m):
-    """(check_type, target, op, thresh) for a KANJI_RE match. `target` is the
-    bracketed [T] on kanji:new / kanji:new_reading — a kanji, or a reading of
-    one, stays "new" until T learned words contain it — defaulting to 1. The
-    regex forbids a bracket on "num"; target is normalized to 1 there too so
-    tuple shapes and cache keys stay uniform."""
+    """(check_type, target, op, thresh) for a KANJI_RE match. `target` is the bracketed [T] on
+    kanji:new and kanji:new_reading, defaulting to 1: a kanji, or a reading of one, stays "new"
+    until T learned words contain it. The regex forbids a bracket on "num", where target is
+    normalized to 1 as well so tuple shapes and cache keys stay uniform."""
     t = m.group("target")
     return m.group("type"), int(t) if t is not None else 1, m.group("op"), int(m.group("thresh"))
 
 
 def parse_custom_terms(query):
     """Pull the custom tokens out of `query` for the reorder post-filter fast path
-    (see DataManager.get_cards_from_search). Returns a list of (kind, args, negated):
+    (see DataManager.get_cards_from_search), as a list of (kind, args, negated):
 
         ("occ",    (dict_str, op, thresh), negated)
         ("kanji",  (check_type, target, op, thresh), negated)
@@ -106,9 +101,9 @@ def parse_custom_terms(query):
         ("seen",   (n,), negated)
         ("length", (op, thresh), negated)
 
-    `negated` is True when the token was immediately preceded by '-' (Anki's
-    conjunctive NOT — the regexes leave that '-' unconsumed). Order doesn't matter
-    for the pure conjunctions this path handles."""
+    `negated` is True when the token was immediately preceded by '-', Anki's conjunctive NOT.
+    The regexes leave that '-' unconsumed. Order does not matter for the pure conjunctions this
+    path handles."""
     terms = []
 
     def negated(m):
@@ -145,26 +140,22 @@ _OR_TOKEN_RE = re.compile(r"(?i)(?<![^\s()])or(?![^\s()])")
 
 
 def _candidate_restriction_allowed(query: str, stripped: str) -> bool:
-    """True when resolving the custom terms over only the notes matched by the
-    standard part of the query is guaranteed to give the same result as a full
-    scan. That holds when the query is a TOP-LEVEL conjunction
+    """True when resolving the custom terms over only the notes the standard part of the query
+    matches is guaranteed to equal a full scan. That holds for a TOP-LEVEL conjunction
 
         S1 ∧ ... ∧ Sk ∧ (¬)custom ...
 
-    where the Si may internally contain parens/ORs: the candidate set
-    C = matches(S1 ∧ ... ∧ Sk) is a superset of the full query's matches, and a
-    note outside C fails the standard conjuncts of the rewritten query no matter
-    how its custom term resolves — so restricted resolution ≡ full scan (negated
-    terms included: -nid:S only differs on notes in S\\C, all of which the
-    standard part excludes either way). Concretely, allow iff:
+    where each Si may internally contain parens or ORs. C = matches(S1 ∧ ... ∧ Sk) is a superset
+    of the full query's matches, and a note outside C fails the standard conjuncts however its
+    custom term resolves. Negated terms included: -nid:S only differs on notes in S\\C, which the
+    standard part excludes either way. Allow iff:
 
       - the stripped standard part is non-empty (else nothing to restrict on);
       - every custom token sits at paren depth 0, outside double quotes;
-      - no OR operator at depth 0 outside quotes (deeper ORs live inside a
-        single standard conjunct and are fine);
-      - parens balance and quotes terminate — any anomaly bails.
+      - no OR operator at depth 0 outside quotes (deeper ORs sit inside one conjunct);
+      - parens balance and quotes terminate; any anomaly bails.
 
-    Bailing only costs speed (full scan), never correctness."""
+    Bailing costs speed, never correctness."""
     if not stripped.replace("-", "").strip():
         return False
 
@@ -244,7 +235,7 @@ def rewrite_query(query, *, occ_resolver=None, freq_resolver=None, kanji_resolve
     # selects, so e.g. `deck:X occurrences:D>5` evaluates the occurrence predicate
     # over deck X only instead of the whole collection. Skipped when resolvers are
     # injected (tests pass no collection) or when restriction would be unsafe
-    # (see _candidate_restriction_allowed) — those fall back to the full scan.
+    # (see _candidate_restriction_allowed). Those fall back to the full scan.
     candidate_nids = None
     if not injected:
         fn = find_notes if find_notes is not None else _default_find_notes()
@@ -302,22 +293,16 @@ def _safe_rewrite(query: str) -> str:
         return query
 
 
-# ---------------------------------------------------------------------------
-# resolution
-# ---------------------------------------------------------------------------
-
-# Cache of resolved nid lists, keyed by (token_string, collection signature). A
-# single reorder run issues many find_cards calls and repeated browser searches
-# re-resolve the same tokens; this avoids re-scanning the collection each time.
-# Correctness-first: any collection change (mw.col.mod) OR any addon config change
-# (which doesn't touch the collection) invalidates the whole memo.
+# Cache of resolved nid lists, keyed by (token_string, collection signature). A single reorder
+# run issues many find_cards calls, and repeated browser searches re-resolve the same tokens.
+# Correctness first: any collection change (mw.col.mod) OR any addon config change, which does
+# not touch the collection, invalidates the whole memo.
 _resolution_cache = {}
 _resolution_sig = None
 
-# Separate memo for `seen:` full scans. It can't share _resolution_cache because a
-# seen result also depends on today's date and the seen files' mtimes — neither of
-# which _resolution_sig captures. Keyed by (n, op, thresh) under a signature that adds
-# both (see resolve_seen).
+# Separate memo for `seen:` full scans. It cannot share _resolution_cache because a seen result
+# also depends on today's date and the seen files' mtimes, neither of which _resolution_sig
+# captures. Keyed by (n, op, thresh) under a signature that adds both (see resolve_seen).
 _seen_cache = {}
 _seen_sig = None
 
@@ -326,8 +311,8 @@ def clear_resolution_caches() -> None:
     """Drop every memoized resolution result.
 
     Needed because both memos are invalidated by *collection* and *config* changes only
-    (see the signatures below), and a dictionary update changes neither — it rewrites files
-    on disk. Without this, a Browse-bar `occurrences:` search keeps serving pre-update note
+    (see the signatures below), and a dictionary update changes neither, since it rewrites
+    files on disk. Without this, a Browse-bar `occurrences:` search keeps serving pre-update note
     ids until something happens to touch the collection. Called by the updater alongside the
     dictionary index caches."""
     global _resolution_sig, _seen_sig
@@ -369,8 +354,8 @@ def _resolve(key, compute, candidate_nids):
     Full-scan results (candidate_nids is None) are candidate-independent, so they
     are memoized (and the whole memo is dropped whenever the collection or the
     addon config changes). Restricted results depend on the candidate set, are
-    already cheap, and must never be served to a different query — so they are
-    computed fresh, unmemoized."""
+    already cheap, and must never be served to a different query, so they are computed
+    fresh and unmemoized."""
     if candidate_nids is not None:
         return compute()
 
@@ -491,7 +476,7 @@ def resolve_frequency(op, thresh, candidate_nids=None):
 
 def resolve_length(op, thresh, candidate_nids=None):
     """Note ids whose expression-field length (Unicode code points of the raw
-    value — no HTML stripping or normalization, like every other consumer of the
+    value, with no HTML stripping or normalization, like every other consumer of the
     field) satisfies the threshold. Unlike resolve_kanji there is deliberately no
     empty-expression skip: an empty field counts as length 0, so `length=0` finds
     it and `length<3` includes it."""
@@ -516,8 +501,8 @@ def resolve_length(op, thresh, candidate_nids=None):
 
 def resolve_kanji(check_type, target, op, thresh, candidate_nids=None):
     """Note ids whose expression has the requested kanji count. For "new" and
-    "new_reading", `target` is the per-kanji bar: a kanji — or the reading it
-    takes in this word — counts as new until `target` learned words contain it
+    "new_reading", `target` is the per-kanji bar. A kanji, or the reading it takes in this
+    word, counts as new until `target` learned words contain it
     (1 = the plain form). Notes with an empty expression are skipped (never
     matched), mirroring KanjiRule.matches; "new_reading" additionally needs a
     reading, and skips notes without one like resolve_occurrences does."""
@@ -563,17 +548,15 @@ def resolve_kanji(check_type, target, op, thresh, candidate_nids=None):
 
 def resolve_seen(n, candidate_nids=None):
     """Note ids whose word appears in any of the last `n` daily seen dicts
-    (user_files/_seen/<date>/). Presence goes through seen_manager's window, which reuses the
-    occurrence parsing, so the global flags (prefix/kana/combine/honorific) apply just like
-    `occurrences:`. It is boolean — bare `seen:N` only asks "seen at all".
+    (user_files/_seen/<date>/), via seen_manager's window, so the global matching flags apply
+    just as they do to `occurrences:`.
 
-    Notes with an empty expression are skipped; the reading is optional (an empty
-    reading falls back to expression-only), matching daily-occurrence-search.
+    Notes with an empty expression are skipped. The reading is optional, falling back to
+    expression-only, matching daily-occurrence-search.
 
-    The window is resolved once per call (not per note), and full scans are memoized in
-    `_seen_cache`. That memo can't be `_resolve`/`_resolution_sig`: a `seen` result also
-    depends on today's date and the seen files' mtimes, so the signature below adds both
-    (they change without bumping mw.col.mod)."""
+    The window is resolved once per call, not per note. Full scans are memoized in
+    `_seen_cache` rather than through `_resolve`, because a seen result also depends on today's
+    date and the seen files' mtimes, which change without bumping mw.col.mod."""
     try:  # inside Anki: isolated package namespace
         from .config_manager import get_config
         from . import seen_manager
@@ -592,7 +575,7 @@ def resolve_seen(n, candidate_nids=None):
     def compute():
         # Resolve the window ONCE (one filesystem stat per day), then the note loop is pure
         # in-memory membership lookups. Resolving per note would re-stat the seen folder once
-        # per note per day — pathologically slow.
+        # per note per day, which is pathologically slow.
         window = seen_manager.get_seen_window(
             n, cfg.kana_normalization, cfg.honorific_folding, cfg.variant_matching,
             cfg.stem_matching, today=today,
@@ -617,10 +600,10 @@ def resolve_seen(n, candidate_nids=None):
                 ids.append(nid)
         return ids
 
-    # Restricted resolution depends on the candidate set and is already cheap — compute
-    # fresh (mirrors _resolve). Full scans recur across the many find_cards calls of a
-    # single reorder (each priority search wraps the query in parens, which defeats the
-    # candidate restriction), so memoize them — keyed so that date rollover and seen-file
+    # Restricted resolution depends on the candidate set and is already cheap, so it is
+    # computed fresh (mirrors _resolve). Full scans recur across the many find_cards calls of
+    # a single reorder, because each priority search wraps the query in parens and defeats the
+    # candidate restriction, so they are memoized. The key makes date rollover and seen-file
     # rewrites, which don't bump mw.col.mod, still invalidate the result.
     if candidate_nids is not None:
         return compute()
@@ -648,10 +631,6 @@ def resolve_seen(n, candidate_nids=None):
     return _seen_cache[key]
 
 
-# ---------------------------------------------------------------------------
-# integration
-# ---------------------------------------------------------------------------
-
 _installed = False
 _original_find_cards = None
 _original_find_notes = None
@@ -662,9 +641,9 @@ def _default_find_notes():
     used to compute the candidate set for restricted resolution. Returns ``None``
     when no collection is available (headless pytest, or before a profile opens).
 
-    The stripped query passed to it never contains custom tokens, so going through
-    the still-patched ``mw.col.find_notes`` (pre-install) would not recurse — but we
-    prefer the saved original once it exists to avoid the rewrite hop entirely."""
+    The stripped query passed to it never contains custom tokens, so going through the
+    still-patched ``mw.col.find_notes`` would not recurse. The saved original is preferred
+    once it exists, to avoid the rewrite hop entirely."""
     try:
         from aqt import mw
     except Exception:

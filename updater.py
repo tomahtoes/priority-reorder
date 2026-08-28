@@ -156,7 +156,6 @@ class JitenUpdater:
                     remote_index = json.load(f)
 
                 if not manual and remote_index.get("revision") == local_revision:
-                    # Already current: just stamp deckId + check time.
                     index_data["last_update_time"] = current_time
                     index_data["deckId"] = target_deck_id
                     self._write_index_json(dict_path, index_data)
@@ -164,7 +163,6 @@ class JitenUpdater:
 
                 self._replace_dict_contents(dict_path, z)
 
-            # Stamp deckId and last_update_time into the freshly extracted index.json
             new_index_path = os.path.join(dict_path, "index.json")
             try:
                 with open(new_index_path, "r", encoding="utf-8") as f:
@@ -212,7 +210,7 @@ class JitenUpdater:
 
         # Only when something actually changed. Every sync runs this check when
         # auto_update_dicts is on, and rebuilding a dictionary index costs on the order of
-        # a second each — paying that on every sync to re-derive byte-identical indexes was
+        # a second each, so paying that on every sync to re-derive byte-identical indexes was
         # pure waste.
         if updated_count:
             self.clear_caches()

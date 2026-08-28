@@ -67,7 +67,7 @@ def _dict_dir(tmp_path, name="MyDict", index=None):
     return d
 
 
-# --- discovery ----------------------------------------------------------------
+# discovery
 
 def test_dict_dirs_ignore_all_and_dot_dirs(updater, tmp_path):
     (tmp_path / "A").mkdir()
@@ -77,7 +77,7 @@ def test_dict_dirs_ignore_all_and_dot_dirs(updater, tmp_path):
     assert updater.get_dictionary_count() == 1
 
 
-# --- skip gates -----------------------------------------------------------------
+# skip gates
 
 def test_non_jiten_dict_is_skipped_without_network(updater, tmp_path):
     _dict_dir(tmp_path, index={"title": "T", "author": "Someone", "url": "x", "revision": "r1"})
@@ -99,7 +99,7 @@ def test_daily_cutoff_gate_skips_recently_checked(updater, tmp_path):
     assert updater.session.post_urls == []
 
 
-# --- same revision: stamp metadata only -------------------------------------------
+# same revision: stamp metadata only
 
 def test_same_revision_stamps_metadata_without_replacing(updater, tmp_path):
     d = _dict_dir(tmp_path, index=dict(JITEN_INDEX, deckId=7))
@@ -114,7 +114,7 @@ def test_same_revision_stamps_metadata_without_replacing(updater, tmp_path):
     assert (d / "term_meta_bank_1.json").read_text(encoding="utf-8") == "[]"  # untouched
 
 
-# --- successful update ---------------------------------------------------------------
+# successful update
 
 def test_successful_update_replaces_contents_and_stamps_index(updater, tmp_path):
     d = _dict_dir(tmp_path, index=dict(JITEN_INDEX, deckId=7))
@@ -136,7 +136,7 @@ def test_successful_update_replaces_contents_and_stamps_index(updater, tmp_path)
     assert sorted(p.name for p in tmp_path.iterdir()) == ["MyDict"]
 
 
-# --- cache invalidation --------------------------------------------------------------
+# cache invalidation
 
 def _count_cache_clears(monkeypatch):
     """Record every cache drop JitenUpdater.clear_caches performs."""
@@ -158,7 +158,7 @@ def _count_cache_clears(monkeypatch):
 def test_caches_are_not_cleared_when_nothing_was_updated(updater, tmp_path, monkeypatch):
     # Every sync runs the updater when auto_update_dicts is on. Dropping the parsed indexes
     # each time made the reorder that follows re-read and re-build every dictionary from
-    # JSON — on the order of a second each — to produce byte-identical results.
+    # JSON, on the order of a second each, to produce byte-identical results.
     cleared = _count_cache_clears(monkeypatch)
     d = _dict_dir(tmp_path, index=dict(JITEN_INDEX, deckId=7))
     (d / "term_meta_bank_1.json").write_text("[]", encoding="utf-8")
@@ -170,7 +170,7 @@ def test_caches_are_not_cleared_when_nothing_was_updated(updater, tmp_path, monk
 
 def test_successful_update_clears_resolved_nid_memos_too(updater, tmp_path, monkeypatch):
     # search._resolution_cache keys on (collection mod, addon config), neither of which moves
-    # when dictionary files change on disk — so without this a Browse-bar `occurrences:`
+    # when dictionary files change on disk, so without this a Browse-bar `occurrences:`
     # search keeps serving pre-update note ids.
     cleared = _count_cache_clears(monkeypatch)
     _dict_dir(tmp_path, index=dict(JITEN_INDEX, deckId=7))
@@ -183,7 +183,7 @@ def test_successful_update_clears_resolved_nid_memos_too(updater, tmp_path, monk
     assert set(cleared) == {"occ", "combined", "resolution"}
 
 
-# --- B1 regression: failure must not destroy the dictionary --------------------------
+# B1 regression: failure must not destroy the dictionary
 
 def test_failed_extract_preserves_existing_contents(updater, tmp_path, monkeypatch):
     d = _dict_dir(tmp_path, index=dict(JITEN_INDEX, deckId=7))
@@ -206,7 +206,7 @@ def test_failed_extract_preserves_existing_contents(updater, tmp_path, monkeypat
     assert sorted(p.name for p in tmp_path.iterdir()) == ["MyDict"]
 
 
-# --- deck id resolution -----------------------------------------------------------
+# deck id resolution
 
 def test_resolve_deck_id_prefers_exact_title_match(updater):
     updater.session = _FakeSession(search_json={"suggestions": [

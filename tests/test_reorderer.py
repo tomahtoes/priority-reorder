@@ -1,7 +1,7 @@
 """Unit tests for the core reordering pipeline (reorderer.PriorityReorderer).
 
 These drive the *pure* bucket/sort/limit methods directly with hand-built Card
-objects — no live collection needed — and pin the behavior of the bugs this
+objects, with no live collection needed, and pin the behavior of the bugs this
 project has already hit once:
 
   * 19f8f16  limit= must fall through to *later* sequential buckets; empty kept
@@ -18,7 +18,6 @@ from reorder_log import PrioritySearchSummary
 from reorderer import PriorityReorderer
 
 
-# --- builders ---------------------------------------------------------------
 
 def card(cid, sort=None, nid=None):
     """A Card with card_id=cid (note_id defaults to cid). `sort=None` means the
@@ -47,7 +46,7 @@ def ids(cards):
     return [c.card_id for c in cards]
 
 
-# --- _sort_cards ------------------------------------------------------------
+# _sort_cards
 
 def test_sort_ascending_missing_values_trail():
     r = reorderer(sort_reverse=False)
@@ -86,7 +85,7 @@ def test_sort_tie_break_stays_ascending_under_reverse():
     assert ids(out) == [1, 5, 2, 9]  # 20s first (ids ascending), then the 10s
 
 
-# --- _assign_initial_buckets ------------------------------------------------
+# _assign_initial_buckets
 
 def _card_map(*cards):
     return {c.card_id: c for c in cards}
@@ -121,7 +120,7 @@ def test_assign_buckets_mix_unions_into_single_bucket():
     assert {c.card_id for c in normal} == {4, 5}
 
 
-# --- _apply_refinement_rules ------------------------------------------------
+# _apply_refinement_rules
 
 def test_cutoff_moves_over_threshold_cards_to_normal_with_summaries():
     r = reorderer(priority_search_mode="sequential", priority_cutoff=10)
@@ -168,7 +167,7 @@ def test_cutoff_drops_value_less_cards_under_reverse_sort():
     # The +inf sentinel is not < any threshold, so testing it numerically kept value-less
     # cards inside priority under reverse=True while dropping them under the default
     # direction. They have no ordering data at all, so they belong on the dropped side
-    # either way — the same rule _sort_cards applies when it trails them.
+    # either way, the same rule _sort_cards applies when it trails them.
     # `good` is the value that survives the cutoff in each direction (lower is better
     # under reverse=False, higher under reverse=True).
     for reverse, good in ((False, 50), (True, 150)):
@@ -210,7 +209,7 @@ def test_empty_kept_bucket_is_still_appended_for_index_alignment():
     assert ids(final_priority[1]) == [2]
 
 
-# --- _finalize_priority_queue -----------------------------------------------
+# _finalize_priority_queue
 
 def test_limit_overflow_falls_through_to_later_bucket():
     # Regression (19f8f16): a card over bucket 0's limit must still be placed if a
@@ -294,7 +293,7 @@ def test_mix_mode_flattens_and_sorts_all_buckets_together():
     assert overflow == []
 
 
-# --- _apply_reordering (thin integration over a fake scheduler) -------------
+# _apply_reordering (thin integration over a fake scheduler)
 
 class _FakeSched:
     def __init__(self):
@@ -337,7 +336,7 @@ def test_apply_reordering_no_cards_does_not_call_scheduler(monkeypatch):
     assert result.count == 0
 
 
-# --- _needs_reorder / skip-when-unchanged ----------------------------------
+# _needs_reorder / skip-when-unchanged
 
 class _FakeDB:
     """Stands in for mw.col.db; .list() returns a scripted new-card order
@@ -499,7 +498,7 @@ def test_needs_reorder_scan_is_limited_to_placed_count(monkeypatch):
     assert db.queries and db.queries[0].endswith("limit 3")
 
 
-# --- stage timings ----------------------------------------------------------
+# stage timings
 
 def test_reorder_records_stage_timings(monkeypatch):
     import reorderer as rmod

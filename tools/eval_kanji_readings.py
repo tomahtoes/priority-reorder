@@ -2,7 +2,7 @@
 
 JmdictFurigana (https://github.com/Doublevil/JmdictFurigana, CC BY-SA 4.0) hand-
 curates which kana belong to which kanji for ~178k JMdict entries. It is not
-shipped with the addon -- it is far too big, and it only covers dictionary words
+shipped with the addon. It is far too big, and it only covers dictionary words
 -- but it is the right oracle for asking how often our per-kanji matcher agrees
 with a human-checked answer.
 

@@ -50,7 +50,7 @@ def set_last_report(report: ReorderReport) -> None:
 
 
 def clear_last_report() -> None:
-    """Drop the stored report (used on profile switch — note ids from one profile
+    """Drop the stored report (used on profile switch, since note ids from one profile
     must not be shown or opened in another)."""
     global _last_report
     _last_report = None
@@ -72,7 +72,7 @@ def _timings_log_path() -> str:
 def append_timings_line(timestamp: str, timings_ms: Dict[str, float]) -> None:
     """Append one 'ts  k=vms ...' line to the timings log, trimming it to the
     last _TIMINGS_LOG_MAX_LINES. Opt-in via reorderer._DUMP_TIMINGS_LOG; must
-    never raise — timings logging can never break a reorder."""
+    never raise, because timings logging can never break a reorder."""
     try:
         line = timestamp + "  " + " ".join(f"{k}={v}ms" for k, v in timings_ms.items())
         path = _timings_log_path()

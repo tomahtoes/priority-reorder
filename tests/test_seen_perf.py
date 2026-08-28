@@ -4,11 +4,11 @@
 (`seen_manager.build_seen_day`), unions the window (`_merge_seen_days` -> `SeenWindow`), and
 tests each note with `SeenWindow.contains`. This module:
 
-  1. **Parity** — asserts the production boolean equals the counting baseline
+  1. **Parity**: asserts the production boolean equals the counting baseline
      `sum(OccurrenceIndex.get_total(...)) >= 1` for every note under every flag combo. The
      counting `OccurrenceIndex` still backs `occurrences:`, so it is a live cross-check that the
      boolean parser hasn't drifted from the count semantics.
-  2. **Speed** — times the seen pipeline in stages and contrasts the boolean model with the
+  2. **Speed**: times the seen pipeline in stages and contrasts the boolean model with the
      counting baseline:
 
         parse | build (x days) | merge/prep | per-note scan | total ex-parse
@@ -16,7 +16,7 @@ tests each note with `SeenWindow.contains`. This module:
      `parse` (`json.load` of a day's term_meta_bank) is the unavoidable floor neither model can
      beat. `total ex-parse` is the honest "what counting cost".
 
-Run with timings visible (system Python — the repo .venv lacks pytest):
+Run with timings visible (system Python, since the repo .venv lacks pytest):
 
     C:/Python313/python.exe -m pytest tests/test_seen_perf.py -s
 
@@ -44,9 +44,7 @@ except ImportError:  # pragma: no cover
     from ..utils import to_hiragana
 
 
-# ---------------------------------------------------------------------------
-# synthetic data generator (deterministic — seeded)
-# ---------------------------------------------------------------------------
+# synthetic data generator (deterministic, seeded)
 
 _KANJI = [chr(c) for c in range(0x4E00, 0x4E00 + 3000)]
 _HIRAGANA = [chr(c) for c in range(0x3041, 0x3097)]
@@ -71,7 +69,7 @@ def _entry(expression, reading, count, is_kana=False):
 def _build_dataset(cfg, rng):
     """Return ``(days_raw, notes)``. ``days_raw`` is ``DAYS`` overlapping samples of a master
     vocabulary (so the window union is realistic); ``notes`` is a ``(expr, reading)`` mix that
-    exercises every lookup path — exact / prefix / combine / honorific / miss."""
+    exercises every lookup path: exact / prefix / combine / honorific / miss."""
     n_entries, days, n_notes = cfg["entries"], cfg["days"], cfg["notes"]
 
     bases = []
@@ -159,9 +157,6 @@ def _notes_from_days(days_raw, n_notes, rng):
     return notes[:n_notes]
 
 
-# ---------------------------------------------------------------------------
-# timing helpers
-# ---------------------------------------------------------------------------
 
 def _best_of(n, fn):
     """Run ``fn`` ``n`` times, returning ``(last_result, min_ms)``. Only used for side-effect-free
@@ -190,9 +185,6 @@ def _config():
     }
 
 
-# ---------------------------------------------------------------------------
-# the benchmark
-# ---------------------------------------------------------------------------
 
 _FLAG_COMBOS = [
     ("none", dict(normalize_kana=False, combine_word_forms=False, prefix_matching=False, suffix_matching=False, variant_matching=False, stem_matching=False, honorific_folding=False)),
@@ -255,7 +247,7 @@ def test_seen_count_vs_boolean_benchmark(capsys, tmp_path):
                 honorific_folding=flags["honorific_folding"],
             )
 
-            # ---- counting baseline: build x days -> per-day get_total summation >= 1 ----
+            # counting baseline: build x days -> per-day get_total summation >= 1
             day_indices, c_build = _timed(lambda: [
                 dm._build_index_from_raw(
                     d, normalize_kana=flags["normalize_kana"],
@@ -272,7 +264,7 @@ def test_seen_count_vs_boolean_benchmark(capsys, tmp_path):
 
             count_results, c_scan = _timed(_count_scan)
 
-            # ---- boolean (production): build x days -> union(+sort) -> contains ----
+            # boolean (production): build x days -> union(+sort) -> contains
             bdays, b_build = _timed(lambda: [
                 seen_manager.build_seen_day(d, flags["normalize_kana"], flags["honorific_folding"],
                                            flags["variant_matching"], flags["stem_matching"])
@@ -302,7 +294,7 @@ def test_seen_count_vs_boolean_benchmark(capsys, tmp_path):
 
             bool_results, b_scan = _timed(_bool_scan)
 
-            # ---- parity: boolean MUST equal the counting baseline (>= 1) ----
+            # parity: boolean MUST equal the counting baseline (>= 1)
             mismatches = [i for i in range(len(notes)) if count_results[i] != bool_results[i]]
             assert not mismatches, (
                 f"parity broken for flags={name}: {len(mismatches)} mismatches, "

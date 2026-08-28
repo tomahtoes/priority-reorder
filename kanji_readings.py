@@ -22,7 +22,7 @@ except ImportError:  # pytest / flat-import context
     from utils import is_kanji, to_hiragana
 
 
-# --- kana <-> ASCII codec -------------------------------------------------
+# kana <-> ASCII codec
 #
 # Readings are stored one ASCII byte per kana rather than three UTF-8 bytes.
 # That is the single biggest lever on the shipped table (~450 KB -> ~200 KB),
@@ -63,12 +63,12 @@ def encode_kana(text: str) -> str:
 
 
 def decode_kana(text: str) -> str:
-    """Inverse of encode_kana. Only needed for display and for the dev tools —
+    """Inverse of encode_kana. Only needed for display and for the dev tools,
     the matcher and the slot keys stay in the ASCII domain end to end."""
     return text.translate(_DECODE_MAP)
 
 
-# --- surface variants -----------------------------------------------------
+# surface variants
 #
 # A listed reading shows up in a real word in several shapes. Rather than
 # predicting which shape a compound *should* take, we generate the shapes a
@@ -121,7 +121,7 @@ def _surface_variants(stem):
             if len(base) > 2:
                 out.append((base[:-2] + _SOKUON, flags | _F_SOKUON))
         # 促音添加: a trailing っ can be added outright, which is what 三日
-        # みっか (三=み + っ + 日=か) and 真っ赤 まっか need -- neither stem ends
+        # みっか (三=み + っ + 日=か) and 真っ赤 まっか need, since neither stem ends
         # in a clippable mora, so the rule above never reaches them.
         out.append((base + _SOKUON, flags | _F_SOKUON))
         if flags:
@@ -135,7 +135,7 @@ def _surface_variants(stem):
     return uniq
 
 
-# --- table loading --------------------------------------------------------
+# table loading
 
 _DATA_FILE = "kanji_readings.txt"
 
@@ -181,7 +181,7 @@ def _expand(kanji):
     to require that the expression continue with べる, but the reading alignment
     already separates 明るい/あかるい (明=あか) from 明ける/あける (明=あ) on its
     own, while the okurigana check wrongly rejected every 連用形 compound --
-    引き取る, 見送る, 続き -- because conjugation changes the okurigana. Dropping
+    引き取る, 見送る, 続き, because conjugation changes the okurigana. Dropping
     it took unresolved kanji from 9.9% to 3.6% on a 26k-word sample."""
     entry = _EXPANDED.get(kanji)
     if entry is not None:
@@ -202,12 +202,12 @@ def _expand(kanji):
     return entry
 
 
-# --- field normalisation --------------------------------------------------
+# field normalisation
 
 _TAG_RE = re.compile(r"<[^>]+>")
 _ENTITY_RE = re.compile(r"&(?:[a-zA-Z]+|#\d+);")
 # Anki furigana: 食[た]べる / 火[や]傷[けど]. The bracketed kana IS the reading,
-# so a reading field holding markup is an asset, not a problem -- without this
+# so a reading field holding markup is an asset, not a problem. Without this
 # every such note would wildcard completely and the term would match everything.
 _FURIGANA_RE = re.compile(r"[^\s\[\]]*\[([^\[\]]*)\]")
 
@@ -248,7 +248,7 @@ def _norm_read(text):
     return encode_kana(to_hiragana(_clean(text)))
 
 
-# --- the matcher ----------------------------------------------------------
+# the matcher
 
 _INF = 1 << 30
 
@@ -293,7 +293,7 @@ def _exact(expr, read, memo, i=0, j=0):
 
 def _wild(expr, read, memo, i=0, j=0):
     """(cost, slots) minimising the number of kanji left unexplained. A wildcard
-    span is always available, so every word parses -- "failure" becomes "wildcard
+    span is always available, so every word parses. "Failure" becomes "wildcard
     used", which is exactly the jukujikun/ateji case."""
     key = (i, j)
     hit = memo.get(key)
@@ -352,7 +352,7 @@ def _wild(expr, read, memo, i=0, j=0):
     return best
 
 
-# --- public API -----------------------------------------------------------
+# public API
 
 # Bounded like dictionary_manager's combined memo: evict oldest-first rather
 # than clearing wholesale, which would thrash once the working set exceeds it.
@@ -361,7 +361,7 @@ _MEMO = {}
 
 # A slot key is `kanji + stem` for a resolved reading, or `kanji + "*" + span`
 # for one the table cannot explain. Stems are kana, encoded to ASCII, so they can
-# never contain "*" (see _RESERVED) -- which makes unresolved slots detectable
+# never contain "*" (see _RESERVED), which makes unresolved slots detectable
 # with a substring test and needs no separate return value.
 
 
@@ -370,7 +370,7 @@ def reading_slots(expression, reading):
 
     Positions, not distinct kanji, matching kanji_manager._extract_kanji: 日曜日
     yields a slot for each 日, and they differ (にち vs び). Returns () when the
-    expression has no kanji, or when there is no usable reading -- callers must
+    expression has no kanji, or when there is no usable reading. Callers must
     treat that as "no information", never as "nothing new"."""
     key = (expression, reading)
     hit = _MEMO.get(key)

@@ -11,7 +11,7 @@ import html
 import re
 from typing import List, Optional
 
-# Keywords that are never colored (kept at default text color). Extend freely.
+# Keywords that are never colored, i.e. kept at the default text color.
 NO_COLOR_KEYS = frozenset(
     {
         "deck",

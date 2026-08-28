@@ -34,7 +34,7 @@ def length_recorder(calls, ids=None):
     return resolve
 
 
-# --- fast path / passthrough ------------------------------------------------
+# fast path / passthrough
 
 def test_no_custom_token_is_passthrough():
     calls = []
@@ -47,7 +47,7 @@ def test_empty_query_passthrough():
     assert search.rewrite_query("", occ_resolver=occ_recorder([])) == ""
 
 
-# --- occurrences ------------------------------------------------------------
+# occurrences
 
 def test_occurrences_single_dict():
     calls = []
@@ -107,7 +107,7 @@ def test_occurrences_all_operators():
         assert calls == [("D", op, 4)]
 
 
-# --- frequency --------------------------------------------------------------
+# frequency
 
 def test_frequency_basic():
     calls = []
@@ -129,7 +129,7 @@ def test_frequency_negation_preserved():
     assert out == "-(nid:11,22)"
 
 
-# --- kanji ------------------------------------------------------------------
+# kanji
 
 def test_kanji_new():
     calls = []
@@ -179,7 +179,7 @@ def test_kanji_new_empty_bracket_not_matched():
     assert calls == []
 
 
-# --- length -------------------------------------------------------------------
+# length
 
 def test_length_basic():
     calls = []
@@ -215,7 +215,7 @@ def test_length_combined_with_other_clauses():
     assert out == "deck:JP (nid:55,66) -tag:done"
 
 
-# --- multiple terms in one query -------------------------------------------
+# multiple terms in one query
 
 def test_multiple_distinct_terms():
     out = search.rewrite_query(
@@ -228,7 +228,7 @@ def test_multiple_distinct_terms():
     assert out == "(nid:1) (nid:2) (nid:3) (nid:4)"
 
 
-# --- resolution cache invalidation -------------------------------------------
+# resolution cache invalidation
 
 def test_resolution_cache_invalidated_on_config_change(monkeypatch):
     # Editing addon config doesn't bump mw.col.mod, so the memo signature must
@@ -265,7 +265,7 @@ def test_resolution_cache_invalidated_on_config_change(monkeypatch):
     assert calls["n"] == 3
 
 
-# --- has_custom_term --------------------------------------------------------
+# has_custom_term
 
 def test_has_custom_term():
     assert search.has_custom_term("occurrences:X>5")
@@ -281,7 +281,7 @@ def test_has_custom_term():
     assert not search.has_custom_term("")
 
 
-# --- kanji:new_reading grammar ------------------------------------------------
+# kanji:new_reading grammar
 
 @pytest.mark.parametrize("query,expected", [
     ("kanji:new_reading>=1", ("new_reading", 1, ">=", 1)),

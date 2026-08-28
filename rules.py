@@ -12,8 +12,8 @@ LIMIT_PATTERN = re.compile(r"(?<!\w)limit=(?P<limit>\d+)")
 def parse_rule_string(rule_string: str) -> Tuple[str, Optional[int]]:
     """Split a priority/normal search string into (anki_query, limit).
 
-    `limit=N` is extracted and removed; everything else — including the custom
-    occurrences:/f/kanji: terms — is returned verbatim as the query to hand to
+    `limit=N` is extracted and removed. Everything else, including the custom
+    occurrences:/f/kanji: terms, is returned verbatim as the query to hand to
     find_cards."""
     limit = None
     m_limit = LIMIT_PATTERN.search(rule_string)

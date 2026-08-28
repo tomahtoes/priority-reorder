@@ -1,3 +1,11 @@
+"""Occurrence counting over Yomitan-style term-meta dictionaries.
+
+The `_is_*_entry`, `_variant_kanji_compatible`, `_kanji_skeleton`, `_suru_reading_matches`
+and `_stem_candidates` helpers are shared with seen_manager, which implements the boolean
+(`seen:N`) twin of every counting rule here. Editing one side without the other makes the
+two drift. A drift-guard test pins them against each other.
+"""
+
 import bisect
 import json
 import os
@@ -22,11 +30,9 @@ _U_TO_I = {"う": "い", "く": "き", "ぐ": "ぎ", "す": "し", "つ": "ち",
 _ADJ_NOMINALIZERS = ("さ", "み", "げ")
 
 def _is_phrase_entry(expression: str, reading: Optional[str]) -> bool:
-    """Structural test for the single-kanji phrase rule: kanji head, whitelisted
-    particle second, and a reading to validate against. The tail is OPTIONAL — a bare
-    'X<particle>' adverbial (俗に, 特に, 既に) is as much a use of X as 'X<particle><tail>'
-    is, and requiring a tail was the only thing keeping those out. Shared with
-    seen_manager.build_seen_day so the counting and boolean sides can't drift."""
+    """Structural test for the single-kanji phrase rule: kanji head, whitelisted particle
+    second, and a reading to validate against. The tail is OPTIONAL. A bare 'X<particle>'
+    adverbial (俗に, 特に, 既に) is as much a use of X as 'X<particle><tail>' is."""
     return (
         bool(reading)
         and len(expression) >= 2
@@ -35,10 +41,8 @@ def _is_phrase_entry(expression: str, reading: Optional[str]) -> bool:
     )
 
 def _is_suffix_phrase_entry(expression: str, reading: Optional[str]) -> bool:
-    """Tail mirror of _is_phrase_entry for the single-kanji *suffix* phrase rule: kanji
-    tail, whitelisted particle right before it, non-empty head, and a reading to validate
-    against (母の日/ははのひ credits 日/ひ). Shared with seen_manager.build_seen_day so the
-    counting and boolean sides can't drift."""
+    """Tail mirror of _is_phrase_entry: kanji tail, whitelisted particle right before it,
+    non-empty head, and a reading to validate against (母の日/ははのひ credits 日/ひ)."""
     return (
         bool(reading)
         and len(expression) >= 3
@@ -50,14 +54,10 @@ def _is_suru_entry(expression: str, reading: Optional[str]) -> bool:
     """Structural test for the single-kanji suru-verb rule: a reading to validate against and
     a written form that is exactly one kanji plus する/じる/ずる (屯する, 愛する, 感じる, 信ずる).
 
-    The single-KANJI head is load-bearing, not decorative. A '㋕'-marked entry is re-keyed
-    under its reading by _build_index_from_raw, so expr_to_count can hold 'たむろする'; under
-    combine_word_forms, get_total calls prefix_total(reading), and a kana reading is long
-    enough to clear _MIN_PREFIX_LENGTH, so that path already credits the entry. Requiring a
-    kanji head is exactly what keeps this rule from crediting it a second time.
+    The single-KANJI head is what prevents double-counting. A '㋕'-marked entry is re-keyed
+    under its reading, so combine_word_forms + prefix_total(reading) already credits it.
 
-    Deliberately no tail and no infix: 重んじる is 重 + んじる, not 重 + じる, and never matches.
-    Shared with seen_manager.build_seen_day so the counting and boolean sides can't drift."""
+    No tail and no infix. 重んじる is 重 + んじる, not 重 + じる, and never matches."""
     return (
         bool(reading)
         and len(expression) == 3
@@ -66,22 +66,16 @@ def _is_suru_entry(expression: str, reading: Optional[str]) -> bool:
     )
 
 def _suru_reading_matches(card_reading: str, entry_reading: str, suffix: str) -> bool:
-    """Reading validation for the suru rule: the entry must read as the card's reading plus the
-    suffix, so a 屯/たむろ card takes 屯する/たむろする while a 屯/とん card does not (different
-    reading, and with it a meaning that no longer tracks the card).
+    """Reading validation for the suru rule: the entry must read as the card's reading plus
+    the suffix, so a 屯/たむろ card takes 屯する/たむろする while a 屯/とん card does not.
 
-    The one tolerance is the regular sokuon change before する: 察/さつ -> 察する/さっする. That is
-    the same reading undergoing a predictable euphony, not a different one, and it carries an
-    eighth of the rule (発/接/決/達/脱/失/滅/罰/律/徹/喫/屈/欲 all take it). Gated to する because
-    っじる/っずる do not occur, and to readings of 2+ morae so a bare つ cannot degenerate into
-    a bare っする.
+    One tolerance: the regular sokuon change before する (察/さつ -> 察する/さっする), which
+    carries an eighth of the rule. Gated to する because っじる/っずる do not occur, and to
+    readings of 2+ morae so a bare つ cannot degenerate into a bare っする.
 
-    Known imprecision, accepted as the price of the recall: a matching reading is not proof of
-    a matching sense, so 課/か <- 課する, 辞/じ <- 辞する, 目/もく <- 目する and 上/うわ <- 上ずる
-    all get credit. And じる is not always a suffix — 恥じる is 恥/はじ + る, so the natural
-    恥/はじ card is missed while a 恥/は card would be credited (same for 閉じる, 混じる, 交じる).
-
-    Shared with seen_manager._suru_present so the counting and boolean sides can't drift."""
+    Accepted imprecision: a matching reading is not proof of a matching sense (課/か <- 課する,
+    上/うわ <- 上ずる), and じる is not always a suffix, so 恥じる (恥/はじ + る) misses the
+    natural 恥/はじ card while crediting a 恥/は one (same for 閉じる, 混じる, 交じる)."""
     if entry_reading == card_reading + suffix:
         return True
     return (
@@ -92,38 +86,32 @@ def _suru_reading_matches(card_reading: str, entry_reading: str, suffix: str) ->
     )
 
 def _stem_candidates(expression: str, reading: str) -> List[Tuple[str, str]]:
-    """The (expression, reading) pairs a dictionary-form card should also be credited for:
-    its 連用形 (戒める -> 戒め, 遊ぶ -> 遊び) and, for い-adjectives, its さ/み/げ nominalizations
-    (強い -> 強さ, 痛い -> 痛み, 寂しげ). Forward only — the card is the base form and the entry
-    the derived one.
+    """The (expression, reading) pairs a dictionary-form card should also be credited for: its
+    連用形 (戒める -> 戒め, 遊ぶ -> 遊び) and, for い-adjectives, its さ/み/げ nominalizations
+    (強い -> 強さ, 痛い -> 痛み). Forward only. The card is the base form, the entry the derived one.
 
     The conjugation class is unknowable without a dictionary, so a る-final card yields BOTH the
-    ichidan (drop る) and godan (る -> り) candidates and lets the index arbitrate: the wrong-class
-    form is essentially never a real entry, and the exact (expression, reading) probe in stem_total
-    is what proves it. Measured over 13 dictionaries, only 3 of 827 verb gains had both hit.
+    ichidan (drop る) and godan (る -> り) candidates and lets the exact (expression, reading)
+    probe in stem_total arbitrate. Over 13 dictionaries, only 3 of 827 verb gains had both hit.
 
-    Two gates carry the rule, and neither is decorative:
+    Two gates carry the rule:
 
-      * ``expression == reading`` is REJECTED. The whole safety argument is that a candidate must
-        match on expression AND reading; when they are identical the probe degenerates to a single
-        kana lookup that validates nothing. _build_index_from_raw re-keys every '㋕' entry under its
-        reading, so the index is full of (kana, kana) pairs for such a probe to hit — measured, this
-        gate drops 49% of the rule's raw credit (それる<-それ, ほうる<-ほう, わたす<-わたし) and zero
-        legitimate matches. It also makes the rule stable under kana_normalization, which otherwise
-        turns every ウ段-final katakana loanword into a verb candidate.
-      * ``expression[-1] == reading[-1]`` — the okurigana invariant. The edit is only valid on both
-        strings when they end in the same kana, which is precisely when the tail IS okurigana. One
-        comparison, and it rejects every kanji-final card (30,510 of 40,449 pairs measured).
+      * ``expression == reading`` is REJECTED. A candidate must match on expression AND reading.
+        When the two are identical the probe degenerates to a kana lookup that validates nothing,
+        and _build_index_from_raw re-keys every '㋕' entry under its reading, so the index is full
+        of (kana, kana) pairs to hit. Drops 49% of the rule's raw credit (それる<-それ,
+        わたす<-わたし) and zero legitimate matches. Also what keeps the rule stable under
+        kana_normalization, which otherwise makes every ウ段-final loanword a verb candidate.
+      * ``expression[-1] == reading[-1]``, the okurigana invariant: the edit is valid on both
+        strings only when they end in the same kana, which is precisely when the tail IS
+        okurigana. Rejects every kanji-final card (30,510 of 40,449 pairs measured).
 
-    Candidates shorter than _MIN_STEM_LENGTH are dropped: the bare-kanji noun blowups (神る->神,
-    太る->太) outweigh the correct single-kanji stems (見る->見, 出る->出) they sit beside. The tail
-    mirror of the length gates on prefix_total/_suffix_eligible.
+    Candidates below _MIN_STEM_LENGTH are dropped: the bare-kanji noun blowups (神る->神, 太る->太)
+    outweigh the correct single-kanji stems (見る->見, 出る->出) beside them.
 
-    する is NOT handled — it is irregular, so 勉強する yields 勉強す, never the correct 勉強し (no hits,
-    so it costs nothing). じる/ずる verbs DO work (感じる -> 感じ) because they inflect as ichidan.
-    Note this differs from _is_suru_entry above, which does special-case all three.
-
-    Shared with seen_manager so the counting and boolean sides can't drift."""
+    する is NOT handled. It is irregular, so 勉強する yields 勉強す rather than the correct 勉強し
+    (no hits, so it costs nothing). じる/ずる verbs DO work (感じる -> 感じ), inflecting as ichidan.
+    _is_suru_entry above does special-case all three."""
     if not expression or not reading or expression == reading:
         return []
     tail = expression[-1]
@@ -142,9 +130,8 @@ def _stem_candidates(expression: str, reading: str) -> List[Tuple[str, str]]:
 
 def _kanji_skeleton(expression: str) -> str:
     """The deduplicated kanji of a written form, in first-appearance order (煌燦めく -> 煌燦,
-    人々 -> 人 since 々 is not a kanji). Empty for kana-only forms, which is exactly what gates
-    those out of variant matching. Shared with seen_manager so the counting and boolean sides
-    can't drift."""
+    人々 -> 人 since 々 is not a kanji). Empty for kana-only forms, which is what gates those
+    out of variant matching."""
     out: List[str] = []
     for ch in expression:
         if is_kanji(ch) and ch not in out:
@@ -153,13 +140,12 @@ def _kanji_skeleton(expression: str) -> str:
 
 def _variant_kanji_compatible(card_kanji: str, entry_kanji: str) -> bool:
     """The "like enough" test for variant matching: both skeletons non-empty AND one's kanji
-    set nested inside the other's. Equal sets are the okurigana case (煌く/煌めく, 落葉/落ち葉,
-    子ども/子供 once deduplicated); a strict superset is the added-kanji case (煌めく←煌燦めく).
+    set nested inside the other's. Equal sets are the okurigana case (煌く/煌めく, 落葉/落ち葉).
+    A strict superset is the added-kanji case (煌めく←煌燦めく).
 
-    Nesting rather than mere intersection is the whole point: same-reading homophone pairs
-    usually DO share one kanji but never nest (科学/化学, 保証/保障, 対象/対照, 開放/解放,
-    私立/市立), so requiring nesting keeps genuinely different words apart. Shared with
-    seen_manager so the counting and boolean sides can't drift."""
+    Nesting rather than mere intersection is the point. Same-reading homophone pairs usually DO
+    share one kanji but never nest (科学/化学, 保証/保障, 開放/解放), so requiring nesting keeps
+    genuinely different words apart."""
     if not card_kanji or not entry_kanji:
         return False
     a, b = set(card_kanji), set(entry_kanji)
@@ -167,38 +153,32 @@ def _variant_kanji_compatible(card_kanji: str, entry_kanji: str) -> bool:
 
 def _is_variant_entry(expression: str, reading: Optional[str]) -> bool:
     """Structural test for the variant rule: the entry needs a reading to key on (variants are
-    grouped by identical reading) and at least one kanji to share. Shared with
-    seen_manager.build_seen_day so the counting and boolean sides can't drift."""
+    grouped by identical reading) and at least one kanji to share."""
     return bool(reading) and any(is_kanji(ch) for ch in expression)
 
 def _honorific_fold_allowed(stripped: str, vocab) -> bool:
-    """Whether an honorific-stripped remainder may be registered as a fold target.
-    Allowed when the dict independently recognizes it, OR when it carries a kanji
-    (お茶の間→茶の間, お金→金 — near-certainly the same lexeme). Kana-only strips
-    stay gated on dict membership: that is where the unrelated-word junk lives
-    (おかず→かず, おはよう→はよう). Shared with seen_manager.build_seen_day so the
-    counting and boolean sides can't drift."""
+    """Whether an honorific-stripped remainder may be registered as a fold target. Allowed when
+    the dict independently recognizes it, OR when it carries a kanji (お茶の間→茶の間, お金→金,
+    near-certainly the same lexeme). Kana-only strips stay gated on dict membership, since that
+    is where the unrelated-word junk lives (おかず→かず, おはよう→はよう)."""
     return bool(stripped) and (stripped in vocab or any(is_kanji(ch) for ch in stripped))
 
 def _suffix_eligible(expression: str) -> bool:
-    """Whether a card expression may receive *bare* suffix-matching credit. Gate:
-    length >= 2 AND contains a kanji. That set is exactly "real words" — 2+ kanji terms
-    (学校, 目的) and single-kanji-plus-okurigana words (食べる, 見る, 強い) — which carry
-    their reading/meaning across compounds, while excluding bare single kanji (日/手/語,
-    whose reading/meaning does not carry) and pure kana (する/こと/しい, katakana loanwords)
-    that would match far too broadly. This is the tail mirror of _MIN_PREFIX_LENGTH; single
-    kanji return only via the reading-validated tail phrase carve-out
-    (single_kanji_suffix_phrase_total; the head-side length gate has two such carve-outs,
-    single_kanji_phrase_total and single_kanji_suru_total). Shared with the honorific-fold subsumption in
-    get_total and the seen boolean twin so the sides can't drift."""
+    """Whether a card expression may receive *bare* suffix-matching credit: length >= 2 AND
+    contains a kanji. That set is "real words" (学校, 目的, 食べる, 強い), whose reading and
+    meaning carry across compounds. It excludes bare single kanji (日/手/語) and pure kana
+    (する/こと, loanwords), which would match far too broadly.
+
+    The tail mirror of _MIN_PREFIX_LENGTH. Single kanji return only via the reading-validated
+    carve-out single_kanji_suffix_phrase_total (the head-side gate has two,
+    single_kanji_phrase_total and single_kanji_suru_total)."""
     return len(expression) >= _MIN_SUFFIX_LENGTH and any(is_kanji(ch) for ch in expression)
 _COMBINED_MEMO_CAP = 50_000
 
 # Reserved child folder under user_files holding the daily seen dicts
-# (user_files/_seen/<YYYY-MM-DD>/term_meta_bank_*.json). The leading underscore keeps it
-# visually distinct and sorted above real dictionaries. It is owned by the `seen:N`
-# search term (see seen_manager.py) and must never be treated as a normal occurrence
-# dictionary, so it is excluded from dict enumeration / expansion / updating.
+# (user_files/_seen/<YYYY-MM-DD>/term_meta_bank_*.json). Owned by the `seen:N` search term
+# (see seen_manager.py) and must never be treated as a normal occurrence dictionary, so it
+# is excluded from dict enumeration, expansion and updating.
 SEEN_FOLDER = "_seen"
 
 class OccurrenceIndex:
@@ -206,22 +186,19 @@ class OccurrenceIndex:
         self.expr_to_count: Dict[str, int] = {}
         self.expr_reading_to_count: Dict[Tuple[str, str], int] = {}
         self.honorific_to_count: Dict[str, int] = {}
-        # Built lazily on first prefix query (see _ensure_prefix_index).
+        # Every index below is built lazily by its own _ensure_* method, on the first query
+        # that needs it.
         self._prefix_exprs: Optional[List[str]] = None
         self._prefix_cumsum: List[int] = []
-        # Built lazily on first suffix query (see _ensure_suffix_index): expressions sorted by
-        # their reversed form, with a parallel cumsum — the suffix analogue of the prefix index
-        # (d ends with e  <=>  reverse(d) starts with reverse(e)).
+        # Expressions sorted by their reversed form, with a parallel cumsum:
+        # d ends with e  <=>  reverse(d) starts with reverse(e).
         self._suffix_revs: Optional[List[str]] = None
         self._suffix_cumsum: List[int] = []
-        # Built lazily on first single-kanji phrase query (see _ensure_phrase_index).
         self._phrase_index: Optional[Dict[str, List[Tuple[str, str, int]]]] = None
-        # Built lazily on first single-kanji suffix phrase query (see _ensure_suffix_phrase_index).
         self._suffix_phrase_index: Optional[Dict[str, List[Tuple[str, str, int]]]] = None
-        # Built lazily on first single-kanji suru query (see _ensure_suru_index).
         self._suru_index: Optional[Dict[str, List[Tuple[str, str, int]]]] = None
-        # Built lazily on first variant query (see _ensure_variant_index): reading -> the
-        # kanji-bearing forms carrying it, as (expression, count). No skeleton is cached.
+        # reading -> the kanji-bearing forms carrying it, as (expression, count). No skeleton
+        # is cached; see _ensure_variant_index.
         self._variant_index: Optional[Dict[str, List[Tuple[str, int]]]] = None
 
     def add(self, expression: str, reading: Optional[str], count: int) -> None:
@@ -229,8 +206,7 @@ class OccurrenceIndex:
             key = (expression, reading)
             self.expr_reading_to_count[key] = self.expr_reading_to_count.get(key, 0) + count
 
-        # Always fallback to expression alone to account for reading mismatches
-        # Accumulate counts for the same expression
+        # Always fall back to expression alone, to account for reading mismatches.
         self.expr_to_count[expression] = self.expr_to_count.get(expression, 0) + count
 
     def _ensure_prefix_index(self) -> None:
@@ -244,18 +220,17 @@ class OccurrenceIndex:
         self._prefix_cumsum = cumsum
 
     def prefix_total(self, expression: str) -> int:
-        """Sum the counts of all terms that have ``expression`` as a *strict*
-        prefix (longer terms only — the exact match is credited by ``get``).
+        """Sum the counts of all terms that have ``expression`` as a *strict* prefix (longer
+        terms only, since the exact match is credited by ``get``).
 
-        Computed via binary search over a lazily-built sorted index, so there is
-        no per-term prefix explosion at build time."""
+        Binary search over a lazily-built sorted index, so there is no per-term prefix
+        explosion at build time."""
         if len(expression) < _MIN_PREFIX_LENGTH:
             return 0
         self._ensure_prefix_index()
         exprs = self._prefix_exprs
-        # U+10FFFF is the max code point, so every term starting with `expression`
-        # sorts before the sentinel — including terms whose next char is a
-        # supplementary-plane kanji like 𠮟 (U+FFFF would sort before those).
+        # Sentinel must be U+10FFFF, the max code point. U+FFFF would sort before terms whose
+        # next char is a supplementary-plane kanji like 𠮟, silently missing them.
         lo = bisect.bisect_left(exprs, expression)
         hi = bisect.bisect_left(exprs, expression + chr(0x10FFFF))
         if lo < len(exprs) and exprs[lo] == expression:
@@ -266,10 +241,9 @@ class OccurrenceIndex:
         if self._suffix_revs is not None:
             return
         # Reverse each expression ONCE into a keyed map, then sort the reversed strings
-        # directly. Sorting the forward keys under a `key=lambda kv: kv[0][::-1]` reversed
-        # every expression a second time when materializing the list below; sorting
-        # (reversed, count) tuples instead trades string comparison for tuple comparison
-        # and is slower still. The reversal is injective, so no two entries collide.
+        # directly. A `key=lambda kv: kv[0][::-1]` over the forward keys reverses every
+        # expression a second time, and sorting (reversed, count) tuples is slower still. The
+        # reversal is injective, so no two entries collide.
         rev_to_count = {expr[::-1]: count for expr, count in self.expr_to_count.items()}
         revs = sorted(rev_to_count)
         cumsum = [0]
@@ -279,20 +253,18 @@ class OccurrenceIndex:
         self._suffix_cumsum = cumsum
 
     def suffix_total(self, expression: str) -> int:
-        """Sum the counts of all terms that have ``expression`` as a *strict* written
-        suffix (longer terms only — the exact match is credited by ``get``), gated to
-        kanji-bearing card expressions (see ``_suffix_eligible``).
+        """Sum the counts of all terms that have ``expression`` as a *strict* written suffix
+        (longer terms only, since the exact match is credited by ``get``), gated to kanji-bearing
+        card expressions (see ``_suffix_eligible``).
 
-        The suffix mirror of ``prefix_total``: a binary search over a lazily-built index of
-        reversed expressions, since ``d`` ends with ``e`` iff ``reverse(d)`` starts with
-        ``reverse(e)``. Same O(log n) cost, no per-term suffix explosion at build time."""
+        The suffix mirror of ``prefix_total``, over a lazily-built index of reversed
+        expressions. Same O(log n) cost, no per-term suffix explosion at build time."""
         if not _suffix_eligible(expression):
             return 0
         self._ensure_suffix_index()
         revs = self._suffix_revs
         rev = expression[::-1]
-        # Same U+10FFFF sentinel trick as prefix_total, applied over the reversed strings, so
-        # every term ending with `expression` sorts before the sentinel.
+        # Same U+10FFFF sentinel as prefix_total, over the reversed strings.
         lo = bisect.bisect_left(revs, rev)
         hi = bisect.bisect_left(revs, rev + chr(0x10FFFF))
         if lo < len(revs) and revs[lo] == rev:
@@ -310,12 +282,13 @@ class OccurrenceIndex:
         self._phrase_index = index
 
     def single_kanji_phrase_total(self, expression: str, reading: str) -> int:
-        """Phrase credit for a single-kanji card: sums entries 'X<particle>' with an
-        optional tail, whose reading starts with the card's reading + the particle,
-        validating that X is read in-context as the card reads it (手を貸す/てをかす and
-        俗に/ぞくに credit 手/て and 俗/ぞく, but 手/しゅ gets nothing). One of the two
-        carve-outs complementing prefix_total, which gates out single-character expressions
-        entirely; the other is single_kanji_suru_total."""
+        """Phrase credit for a single-kanji card: sums entries 'X<particle>' with an optional
+        tail whose reading starts with the card's reading + the particle, validating that X is
+        read in-context as the card reads it (手を貸す/てをかす and 俗に/ぞくに credit 手/て and
+        俗/ぞく, but 手/しゅ gets nothing).
+
+        One of the two carve-outs complementing prefix_total, which gates out single-character
+        expressions entirely. The other is single_kanji_suru_total."""
         if len(expression) != 1 or not reading or not is_kanji(expression):
             return 0
         self._ensure_phrase_index()
@@ -336,12 +309,11 @@ class OccurrenceIndex:
         self._suffix_phrase_index = index
 
     def single_kanji_suffix_phrase_total(self, expression: str, reading: str) -> int:
-        """Tail mirror of single_kanji_phrase_total: phrase credit for a single-kanji card
-        from entries '<head><particle>X' whose reading ends with the particle + the card's
-        reading, validating that X is read in-context as the card reads it (母の日/ははのひ
-        credits 日/ひ but not 日/にち). An EXACT match — particles sit on a word boundary, so
-        the tail kanji never rendaku's. Complements suffix_total, which gates out
-        single-character expressions entirely."""
+        """Tail mirror of single_kanji_phrase_total: credit from entries '<head><particle>X'
+        whose reading ends with the particle + the card's reading (母の日/ははのひ credits 日/ひ
+        but not 日/にち). An EXACT match, because particles sit on a word boundary, so the tail
+        kanji never rendakus. Complements suffix_total, which gates out single-character
+        expressions entirely."""
         if len(expression) != 1 or not reading or not is_kanji(expression):
             return 0
         self._ensure_suffix_phrase_index()
@@ -364,14 +336,12 @@ class OccurrenceIndex:
     def single_kanji_suru_total(self, expression: str, reading: str) -> int:
         """Suru-verb credit for a single-kanji card: sums entries 'X<する|じる|ずる>' whose reading
         is the card's reading plus that suffix (屯/たむろ takes 屯する/たむろする, 感/かん takes
-        感じる/かんじる, but 屯/とん takes nothing). The verb's meaning tracks the bare form's
-        closely enough that a card for X is worth prioritizing off the verb's occurrences.
+        感じる/かんじる, but 屯/とん takes nothing).
 
-        The third complement to prefix_total, which gates out single-character expressions
-        entirely — す/じ/ず are not phrase particles, so single_kanji_phrase_total could never
-        reach these. Nothing else double-counts them either: the entry ends in る (not in X) so
-        the suffix rules miss it, and its reading is strictly longer than the card's, so
-        variant_total — which buckets on an IDENTICAL reading — cannot see it."""
+        The third complement to prefix_total. Nothing double-counts these: す/じ/ず are not phrase
+        particles so single_kanji_phrase_total cannot reach them, the entry ends in る (not in X)
+        so the suffix rules miss it, and its reading is strictly longer than the card's, so
+        variant_total, which buckets on an IDENTICAL reading, cannot see it."""
         if len(expression) != 1 or not reading or not is_kanji(expression):
             return 0
         self._ensure_suru_index()
@@ -384,13 +354,12 @@ class OccurrenceIndex:
     def _ensure_variant_index(self) -> None:
         """Bucket the (expression, reading) pairs by reading, keeping only kanji-bearing entries.
 
-        Deliberately stores NO kanji skeleton: a bucket averages under two forms, so recomputing
-        the handful that a query actually touches beats skeletonizing every entry up front —
-        measured 28% off the build and 35% off the retained memory across 10 dictionaries.
+        Stores NO kanji skeleton: a bucket averages under two forms, so recomputing the handful a
+        query touches beats skeletonizing every entry up front (28% off the build and 35% off the
+        retained memory across 10 dictionaries).
 
-        ``_is_variant_entry`` is also what keeps kana-only entries out of the index entirely, which
-        is what makes a kana dict entry unable to credit a kanji card (that bridge belongs to
-        combine_word_forms). Do not relax the gate."""
+        Do not relax ``_is_variant_entry``. Keeping kana-only entries out of the index is what
+        stops a kana dict entry crediting a kanji card. That bridge belongs to combine_word_forms."""
         if self._variant_index is not None:
             return
         index: Dict[str, List[Tuple[str, int]]] = {}
@@ -410,24 +379,22 @@ class OccurrenceIndex:
         suffix_matching: bool = False,
     ) -> int:
         """Sum the counts of *other written forms of the same word*: entries with the identical
-        reading whose kanji nest with the card's (see _variant_kanji_compatible). This is the one
-        rule that bridges okurigana and alternate-spelling differences, which the written
-        prefix/suffix indexes structurally cannot see — 煌く is neither a prefix nor a suffix of
-        煌めく. Kana-only forms have an empty skeleton and so never participate on either side.
+        reading whose kanji nest with the card's (see _variant_kanji_compatible). The one rule
+        that bridges okurigana and alternate-spelling differences, which the written prefix/suffix
+        indexes structurally cannot see, since 煌く is neither a prefix nor a suffix of 煌めく.
+        Kana-only forms have an empty skeleton and never participate on either side.
 
-        Grouping by reading keeps the candidate list per query tiny (the handful of forms sharing
-        one exact reading), so this is a dict lookup plus a few short-string comparisons.
+        Grouping by reading keeps the per-query candidate list tiny, so this is a dict lookup plus
+        a few short-string comparisons.
 
-        ``card_kanji`` is an optional precomputed ``_kanji_skeleton(expression)`` — purely an
-        optimization for the multi-dict path, where CombinedOccurrenceIndex would otherwise
-        recompute the same skeleton once per dictionary. It must always equal what this function
-        would derive itself; it can never change the result. Left None, it is derived here.
+        ``card_kanji`` is an optional precomputed ``_kanji_skeleton(expression)`` for the
+        multi-dict path, where CombinedOccurrenceIndex would otherwise recompute it once per
+        dictionary. It cannot change the result. Left None, it is derived here.
 
-        ``prefix_matching``/``suffix_matching`` are DEDUP GUARDS, not widening knobs: when those
-        flags are on, a variant that is also a strict written prefix/suffix of the card expression
-        was already summed by prefix_total/suffix_total (card 気持/きもち + entry 気持ち/きもち),
-        so it is skipped here instead of counted twice — the same subsumption reasoning as the
-        honorific/suffix guard in get_total."""
+        ``prefix_matching``/``suffix_matching`` are DEDUP GUARDS, not widening knobs. With those
+        flags on, a variant that is also a strict written prefix/suffix of the card expression was
+        already summed by prefix_total/suffix_total (card 気持/きもち + entry 気持ち/きもち), so it
+        is skipped rather than counted twice."""
         if card_kanji is None:
             card_kanji = _kanji_skeleton(expression)
         if not card_kanji or not reading:
@@ -438,7 +405,7 @@ class OccurrenceIndex:
         total = 0
         for entry_expr, count in self._variant_index.get(reading, ()):
             if entry_expr == expression:
-                continue  # the card's own form — credited by get()
+                continue  # the card's own form, credited by get()
             # Cheap string guards first: a candidate already credited by prefix_total/suffix_total
             # never has to pay for a skeleton computation plus the nesting test.
             if prefix_dedup and entry_expr.startswith(expression):
@@ -457,37 +424,29 @@ class OccurrenceIndex:
         *,
         combine_word_forms: bool = False,
     ) -> int:
-        """Sum the counts of the card's 連用形 / さ・み・げ forms — the one rule that bridges a
-        dictionary-form card to the derived noun an occurrence dict lists separately (戒める takes
-        戒め, 遊ぶ takes 遊び, 強い takes 強さ). See _stem_candidates for how the candidates are
-        built and why its two gates are load-bearing.
+        """Sum the counts of the card's 連用形 and さ/み/げ forms, bridging a dictionary-form card
+        to the derived noun an occurrence dict lists separately (戒める takes 戒め, 強い takes 強さ).
+        See _stem_candidates for the candidates and its two gates.
 
-        Forward only, deliberately. The reverse (a 連用形 card taking its dictionary form) was
-        measured and rejected: a rare derived form would inherit the count of a far commoner base
-        (無げ, base 1, would take 無い's 8484), inverting the priority ordering this addon exists to
-        produce. Forward has the opposite property — a large transfer only happens when the derived
-        form genuinely IS the commoner form of the same word (匂う <- 匂い), which is exactly when
-        the credit is deserved. prefix_matching still covers the ichidan half of the reverse.
+        Forward only. The reverse (a 連用形 card taking its dictionary form) was measured and
+        rejected: a rare derived form would inherit the count of a far commoner base (無げ, base 1,
+        would take 無い's 8484), inverting the priority ordering this addon exists to produce.
+        Forward transfers large counts only when the derived form genuinely IS the commoner form of
+        the same word (匂う <- 匂い). prefix_matching still covers the ichidan half of the reverse.
 
-        Probes ``expr_reading_to_count`` DIRECTLY and must never route through ``self.get`` — get
-        carries a per-dict reading-mismatch fallback that is the one non-linear term in the index.
-        Using it here would still pass every single-dict test while silently breaking the
-        merged-vs-per-dict drift guard for multi-dict combinators only. Both maps this reads are
-        plain per-dict sums, which is what keeps sum_d stem_total_d == stem_total_merged.
+        Probes ``expr_reading_to_count`` DIRECTLY and must never route through ``self.get``, whose
+        per-dict reading-mismatch fallback is the one non-linear term in the index. Routing through
+        it passes every single-dict test while silently breaking the merged-vs-per-dict drift guard
+        for combinators only. Both maps read here are plain per-dict sums, which is what keeps
+        sum_d stem_total_d == stem_total_merged.
 
-        Needs no lazy view of its own — both maps are eager — so unlike every other rule here this
-        is a few dict lookups behind two character tests, with no build cost and no retained memory.
-
-        No dedup guard, and it is the only rule in this file that needs none. Every candidate either
-        shortens the card (ichidan) or replaces its final character (godan, adjective), so:
-        prefix_total needs strictly LONGER terms; suffix_total needs terms ending with the whole
-        expression; variant_total buckets on the card's EXACT reading and every candidate reading
-        differs; honorific_to_count is keyed on entries a character longer; get is keyed on the card
-        itself. The single-kanji carve-outs are unreachable too — a 1-character card either fails the
-        okurigana invariant or yields a candidate below _MIN_STEM_LENGTH. Two near-misses worth
-        naming: cand_expr == cand_reading iff expression == reading (gated in _stem_candidates), and
-        cand_expr == reading is impossible because the replacement character differs from
-        expression[-1] == reading[-1] by construction."""
+        No dedup guard, the only rule here needing none. Every candidate either shortens the card
+        (ichidan) or replaces its final character (godan, adjective), so prefix_total needs strictly
+        longer terms, suffix_total needs terms ending with the whole expression, variant_total
+        buckets on the card's exact reading while every candidate reading differs, honorific_to_count
+        is keyed a character longer, and get is keyed on the card itself. The single-kanji carve-outs
+        are unreachable: a 1-character card either fails the okurigana invariant or yields a
+        candidate below _MIN_STEM_LENGTH."""
         candidates = _stem_candidates(expression, reading)
         if not candidates:
             return 0
@@ -496,10 +455,9 @@ class OccurrenceIndex:
         for cand_expr, cand_reading in candidates:
             total += pair_counts.get((cand_expr, cand_reading), 0)
         if combine_word_forms:
-            # Mirror of the combine_word_forms term in get_total: a kana-only entry is keyed under
-            # its reading, so the stem's kana form is credited from expr_to_count. reading_is_distinct
-            # is guaranteed here — _stem_candidates rejects expression == reading — so the two terms
-            # can never be the same entry counted twice.
+            # Mirror of get_total's combine_word_forms term. A kana-only entry is keyed under its
+            # reading, so the stem's kana form is credited from expr_to_count. _stem_candidates
+            # rejects expression == reading, so the two terms can never be one entry counted twice.
             for _cand_expr, cand_reading in candidates:
                 total += self.expr_to_count.get(cand_reading, 0)
         return total
@@ -522,9 +480,8 @@ class OccurrenceIndex:
         honorific_folding: bool = False,
         card_kanji: Optional[str] = None,
     ) -> int:
-        """``card_kanji`` is forwarded to variant_total as a precomputed skeleton; see there. It is
-        an optimization hint only and must match what variant_total would derive from
-        ``expression``."""
+        """``card_kanji`` is forwarded to variant_total as a precomputed skeleton. An optimization
+        hint only, and it must match what variant_total would derive from ``expression``."""
         total = self.get(expression, reading)
         reading_is_distinct = bool(reading) and reading != expression
         if combine_word_forms and reading_is_distinct:
@@ -536,17 +493,16 @@ class OccurrenceIndex:
             total += self.single_kanji_phrase_total(expression, reading)
             total += self.single_kanji_suru_total(expression, reading)
         if suffix_matching:
-            # No reading-side term (unlike prefix): a kana reading is never suffix-eligible
+            # No reading-side term, unlike prefix. A kana reading is never suffix-eligible
             # (contains no kanji), so suffix_total(reading) is a definitional no-op.
             total += self.suffix_total(expression)
-            # Single-kanji cards (gated out of the bare path) return only via the tail phrase
-            # carve-out — the mirror of single_kanji_phrase_total.
+            # Single-kanji cards, gated out of the bare path, return only via the tail phrase
+            # carve-out.
             total += self.single_kanji_suffix_phrase_total(expression, reading)
         if variant_matching:
-            # No reading-side term (unlike combine_word_forms x prefix_matching above): a kana
-            # reading has an empty kanji skeleton, so variant_total(reading) is a definitional
-            # no-op. The prefix/suffix flags are passed only so overlapping credit already taken
-            # by prefix_total/suffix_total is skipped — see variant_total.
+            # No reading-side term. A kana reading has an empty kanji skeleton, so
+            # variant_total(reading) is a definitional no-op. The prefix/suffix flags are passed
+            # only so credit already taken by prefix_total/suffix_total is skipped.
             total += self.variant_total(
                 expression,
                 reading,
@@ -555,18 +511,18 @@ class OccurrenceIndex:
                 suffix_matching=suffix_matching,
             )
         if stem_matching:
-            # No reading-side term of its own beyond the one inside stem_total: a kana reading is
-            # identical to its own stem candidates' readings, and _stem_candidates rejects the
+            # No reading-side term beyond the one inside stem_total. A kana reading is identical
+            # to its own stem candidates' readings, and _stem_candidates rejects the
             # expression == reading case outright, so stem_total(reading, reading) is a no-op.
             total += self.stem_total(
                 expression, reading, combine_word_forms=combine_word_forms
             )
         if honorific_folding:
-            # honorific_to_count credits the bare form from an 'お/ご/御 + form' entry, which is
-            # a strict written suffix of that entry — so when the expression is suffix-eligible,
-            # suffix_total(expression) already counted it. Skip the expression-side term then to
-            # avoid double-counting. Kana-only folds (かず←おかず) are not suffix-eligible, so they
-            # are never subsumed and keep their credit; the reading side is kana-tailed likewise.
+            # honorific_to_count credits the bare form from an 'お/ご/御 + form' entry, which is a
+            # strict written suffix of that entry. So when the expression is suffix-eligible,
+            # suffix_total(expression) already counted it, and the expression-side term is skipped
+            # to avoid double-counting. Kana-only folds (かず←おかず) are not suffix-eligible, are
+            # never subsumed, and keep their credit. The reading side is kana-tailed likewise.
             if not (suffix_matching and _suffix_eligible(expression)):
                 total += self.honorific_to_count.get(expression, 0)
             if combine_word_forms and reading_is_distinct:
@@ -577,36 +533,28 @@ class CombinedOccurrenceIndex(OccurrenceIndex):
     """One MERGED index over several dictionaries, not a loop over them.
 
     Summing ``get_total`` across N per-dict indexes costs N times as much per card and
-    materializes N sets of lazy prefix/suffix/variant views. Folding the dictionaries into a
-    single index up front makes every lookup O(1) in the dictionary count (measured 33.5 ->
-    9.6 us/card at 4 dicts, and flat as dicts are added) and builds one set of views.
+    materializes N sets of lazy views. Folding up front makes every lookup O(1) in the
+    dictionary count (33.5 -> 9.6 us/card at 4 dicts, flat as dicts are added).
 
-    The fold is EXACTLY equivalent to the old per-dict sum, not an approximation:
+    The fold is EXACTLY equivalent to the per-dict sum, not an approximation:
 
-      * ``expr_to_count`` / ``expr_reading_to_count`` are plain sums, and every rule that
-        reads them (combine_word_forms, prefix/suffix totals, the phrase rules, variant
-        matching) sums linearly over entries whose gates are structural tests on the query
-        or on one entry's own strings — never on a dictionary's contents. So
-        sum_d sum_entries == sum over the merged entries.
-      * ``honorific_to_count`` is NOT rebuilt from the merged vocabulary: its
+      * ``expr_to_count`` / ``expr_reading_to_count`` are plain sums, and every rule reading
+        them sums linearly over entries whose gates are structural tests on the query or on
+        one entry's own strings, never on a dictionary's contents.
+      * ``honorific_to_count`` is NOT rebuilt from the merged vocabulary. Its
         ``_honorific_fold_allowed`` gate consults the dictionary's own expr_to_count, and the
         merged vocabulary is a superset that would admit folds no single dict allowed. Each
-        dict's map is built under its own gate (by _build_index_from_raw) and only then summed.
-      * ``get`` is the one non-linear term, because of its per-dict reading-mismatch fallback
-        (pair count if the dict has the pair, else the dict's expression total). That can't
-        collapse into either merged map, so ``_base_total`` precomputes it per pair; see
-        ``_fold``.
+        dict's map is built under its own gate, then summed.
+      * ``get`` is the one non-linear term, because of its per-dict reading-mismatch fallback.
+        That cannot collapse into either merged map, so ``_base_total`` precomputes it per pair.
 
-    A drift-guard test pins merged totals against the per-dict sum across every flag
-    combination.
+    A drift-guard test pins merged totals against the per-dict sum across every flag combination.
 
-    Only the two BUILD-time flags are constructor state, for the same reason
-    ``get_occurrence_index`` keys on only those: combine/prefix/suffix/variant/stem are
-    query-time flags that neither the fold nor any lazy view reads, so an index built
-    under one combination is byte-identical to one built under another. They are passed
-    to ``total`` instead — keeping them in the cache key left up to 32 identical merged
-    copies of every dictionary resident after a few config flips, and a merged copy is an
-    order of magnitude larger than a single-dict index."""
+    Only the two BUILD-time flags are constructor state. combine/prefix/suffix/variant/stem are
+    query-time flags that neither the fold nor any lazy view reads, so an index built under one
+    combination is byte-identical to one built under another. Keeping them in the cache key left
+    up to 32 identical merged copies of every dictionary resident after a few config flips, and a
+    merged copy is an order of magnitude larger than a single-dict index."""
 
     def __init__(self, dict_names: List[str], normalize_kana: bool = False, honorific_folding: bool = False) -> None:
         super().__init__()
@@ -617,16 +565,16 @@ class CombinedOccurrenceIndex(OccurrenceIndex):
         # Filled by _fold; a pair absent from every dict falls back to expr_to_count.
         self._base_total: Dict[Tuple[str, str], int] = {}
         self._folded = False
-        # Per-card memo of finished totals. MUST stay separate from expr_reading_to_count:
-        # that now holds real dictionary data, and the FIFO eviction below would silently
-        # delete entries the fold can never recompute. Totals depend on the query-time
-        # flags, which are fixed for a run but not for the object's lifetime, so the memo
-        # is dropped whenever they change (see total) rather than widening every key.
+        # Per-card memo of finished totals. MUST stay separate from expr_reading_to_count,
+        # which holds real dictionary data the FIFO eviction below would silently delete and
+        # the fold could never recompute. Totals depend on the query-time flags, fixed for a
+        # run but not for the object's lifetime, so the memo is dropped when they change
+        # rather than widening every key.
         self._memo: Dict[Tuple[str, str], int] = {}
         self._memo_flags: Optional[Tuple[bool, bool, bool, bool, bool]] = None
 
     def _fold(self) -> None:
-        """Merge every dictionary into this index. Lazy: a combined index that is never
+        """Merge every dictionary into this index. Lazy, so a combined index that is never
         queried (a search whose standard part matched nothing) never pays for it."""
         if self._folded:
             return
@@ -637,9 +585,9 @@ class CombinedOccurrenceIndex(OccurrenceIndex):
         honorific_to_count = self.honorific_to_count
         base_total = self._base_total
 
-        # Folded from the SHARED cache rather than a private parse: dictionaries recur
-        # across combinators (`occurrences:[A,B]` and `occurrences:[A,C]`), and reparsing
-        # A for each would cost more than the fold saves.
+        # Folded from the SHARED cache rather than a private parse. Dictionaries recur across
+        # combinators (`occurrences:[A,B]` and `occurrences:[A,C]`), and reparsing A for each
+        # would cost more than the fold saves.
         indexes = [get_occurrence_index(name, self.normalize_kana, self.honorific_folding)
                    for name in self.dict_names]
 
@@ -665,7 +613,7 @@ class CombinedOccurrenceIndex(OccurrenceIndex):
                 base_total[key] += count - index_expr_to_count.get(expr, 0)
 
     def get(self, expression: str, reading: str) -> int:
-        """The merged BASE count — the per-dict `get` fallback, summed. Overrides
+        """The merged BASE count, i.e. the per-dict `get` fallback summed. Overrides
         OccurrenceIndex.get, which the inherited get_total calls first."""
         if not self._folded:
             self._fold()
@@ -686,20 +634,19 @@ class CombinedOccurrenceIndex(OccurrenceIndex):
         variant_matching: bool = False,
         stem_matching: bool = False,
     ) -> int:
-        """Flag-inclusive total across every dict for one card — the entry point
-        ``occurrence_count``/``occurrence_counter`` use, memoized per card.
+        """Flag-inclusive total across every dict for one card, memoized per card. The entry
+        point ``occurrence_count`` and ``occurrence_counter`` use.
 
-        PRECONDITION: ``expression``/``reading`` must already be kana-folded when
-        ``normalize_kana`` is set — the callers do that unconditionally before reaching
-        either the single-dict or the combined path, and the indexes are keyed on folded
-        strings.
+        PRECONDITION: ``expression`` and ``reading`` must already be kana-folded when
+        ``normalize_kana`` is set. The callers do that unconditionally before reaching either
+        path, and the indexes are keyed on folded strings.
 
         The five query-time flags are arguments rather than constructor state so the merged
-        index can be shared across flag combinations (see the class docstring);
-        ``honorific_folding`` stays on the instance because it is a build flag —
+        index can be shared across flag combinations (see the class docstring).
+        ``honorific_folding`` stays on the instance because it is a build flag, and
         ``honorific_to_count`` is only populated when the per-dict indexes were built with it.
 
-        ``card_kanji`` is an optional precomputed skeleton; see ``variant_total``."""
+        ``card_kanji`` is an optional precomputed skeleton. See ``variant_total``."""
         flags = (combine_word_forms, prefix_matching, suffix_matching, variant_matching,
                  stem_matching)
         memo = self._memo
@@ -717,9 +664,9 @@ class CombinedOccurrenceIndex(OccurrenceIndex):
         if not self._folded:
             self._fold()
 
-        # to_hiragana leaves CJK ideographs untouched, so this is identical whether or not
-        # the caller folded — see the precondition above. Derived after the memo check so
-        # repeat lookups don't pay for it, and skipped entirely when the caller already has it.
+        # Derived after the memo check so repeat lookups don't pay for it, and skipped when
+        # the caller already has it. to_hiragana leaves CJK ideographs untouched, so this is
+        # identical whether or not the caller folded (see the precondition above).
         if card_kanji is None and variant_matching:
             card_kanji = _kanji_skeleton(expression)
 
@@ -771,11 +718,10 @@ def get_all_dict_names() -> List[str]:
     return sorted(dict_names)
 
 def _load_term_meta_raw(dict_name: str) -> Optional[list]:
-    """Parse the dictionary's term meta bank from disk. Deliberately NOT cached:
-    the raw list is huge (every entry of a 100k+ term bank) and only needed while
-    building an OccurrenceIndex — get_occurrence_index memoizes the compact result,
-    so in the steady state each dict is parsed once per session and the raw list
-    is garbage-collected right after the build."""
+    """Parse the dictionary's term meta bank from disk. Deliberately NOT cached. The raw list
+    is huge (every entry of a 100k+ term bank) and only needed while building an
+    OccurrenceIndex, and get_occurrence_index memoizes the compact result, so each dict is
+    parsed once per session and the raw list is collected right after the build."""
     dir_path = _dict_dir(dict_name)
     index_path = _load_index_file(dir_path)
     if not index_path:
@@ -803,7 +749,7 @@ def _build_index_from_raw(data: list, normalize_kana: bool = False, honorific_fo
         if isinstance(meta, dict):
             reading = meta.get("reading") if isinstance(meta.get("reading"), str) else None
 
-            # Check for '㋕' (kana-only indicator) in display values
+            # '㋕' in a display value marks the entry as kana-only.
             display_val = str(meta.get("displayValue", ""))
             freq_obj = meta.get("frequency")
             if isinstance(freq_obj, dict):
@@ -825,8 +771,8 @@ def _build_index_from_raw(data: list, normalize_kana: bool = False, honorific_fo
                 pass
 
         if isinstance(expression, str) and count > 0:
-            # If specifically marked as kana occurrences, attribute to the reading
-            # (requires combine_word_forms at lookup time to credit kanji-bearing cards)
+            # Kana-only entries are attributed to the reading, so crediting a kanji-bearing
+            # card from one requires combine_word_forms at lookup time.
             effective_expression = reading if (is_kana_occurrences and reading) else expression
             if normalize_kana:
                 effective_expression = to_hiragana(effective_expression)
@@ -838,7 +784,7 @@ def _build_index_from_raw(data: list, normalize_kana: bool = False, honorific_fo
         for expr, count in list(index.expr_to_count.items()):
             if not expr.startswith(_HONORIFIC_PREFIXES):
                 continue
-            # strip one-character honorific prefix (all entries in the tuple are single chars)
+            # Every entry in _HONORIFIC_PREFIXES is a single character.
             stripped = expr[1:]
             if not _honorific_fold_allowed(stripped, index.expr_to_count):
                 continue
@@ -851,11 +797,11 @@ def get_occurrence_index(dict_name: str, normalize_kana: bool = False, honorific
     """Parsed index for one dictionary, memoized for the session.
 
     Only the two BUILD-time flags key this cache. prefix/suffix/variant/stem matching are
-    query-time flags: their indexes are lazy views derived from expr_to_count /
-    expr_reading_to_count (stem matching has no view at all), so an index built with them off is identical to one built with
-    them on, and the view is materialized on first use either way. Keying on them used to
-    leave up to 16 byte-identical copies of the same dictionary resident after a few flag
-    flips (measured 8.1 MB per dict with every view built)."""
+    query-time flags whose indexes are lazy views derived from expr_to_count and
+    expr_reading_to_count (stem matching has no view at all), so an index built with them off
+    is identical to one built with them on. Keying on them left up to 16 byte-identical copies
+    of the same dictionary resident after a few flag flips (8.1 MB per dict with every view
+    built)."""
     data = _load_term_meta_raw(dict_name)
     if data is None:
         return OccurrenceIndex()
@@ -865,10 +811,10 @@ def get_occurrence_index(dict_name: str, normalize_kana: bool = False, honorific
 def get_combined_occurrence_index(dict_names_tuple: Tuple[str, ...], normalize_kana: bool = False, honorific_folding: bool = False) -> CombinedOccurrenceIndex:
     """Merged index for one combinator, memoized for the session.
 
-    Keyed on the same two BUILD-time flags as ``get_occurrence_index``, for the same reason
-    (see ``CombinedOccurrenceIndex``). ``maxsize`` is small on purpose: an entry holds a full
-    merged copy of every dictionary in the combinator plus its lazy views — tens to hundreds
-    of MB — while a real config has a handful of distinct dict tuples at most."""
+    Keyed on the same two BUILD-time flags as ``get_occurrence_index``, for the same reason.
+    ``maxsize`` is small on purpose. An entry holds a full merged copy of every dictionary in
+    the combinator plus its lazy views, tens to hundreds of MB, while a real config has a
+    handful of distinct dict tuples at most."""
     sorted_dict_names = tuple(sorted(dict_names_tuple))
     return CombinedOccurrenceIndex(list(sorted_dict_names), normalize_kana, honorific_folding)
 
@@ -888,9 +834,9 @@ def expand_dict_names(dict_str: str) -> List[str]:
         else:
             dict_names.append(name)
 
-    # Remove duplicates to act as a true combinator (preserves first-seen order), and
-    # drop the reserved '_seen' folder so `occurrences:_seen` / `occurrences:[A,_seen]`
-    # can never reach the daily seen dicts — only `seen:N` may.
+    # Duplicates are removed so this acts as a true combinator (first-seen order preserved).
+    # The reserved '_seen' folder is dropped so `occurrences:_seen` and `occurrences:[A,_seen]`
+    # can never reach the daily seen dicts. Only `seen:N` may.
     return [name for name in dict.fromkeys(dict_names) if name != SEEN_FOLDER]
 
 def occurrence_counter(
@@ -908,18 +854,15 @@ def occurrence_counter(
     """``(expression, reading, card_kanji=None) -> int``, with index resolution and flag
     dispatch hoisted OUT of the per-card loop.
 
-    Semantically identical to ``occurrence_count`` — that function is now a one-shot wrapper
-    around this one, so the two cannot drift. The difference is purely where the work
-    happens: ``occurrence_count`` re-did the dict-name tuple allocation, the ``lru_cache``
-    probe on a seven-element key, and the nine-way keyword binding for *every card*, which
-    measured as 79% of the warm multi-dict path. Callers evaluating many notes against one
-    term (``DataManager._term_predicate``, ``search.resolve_occurrences``) should build the
-    counter once and call it per note.
+    Semantically identical to ``occurrence_count``, which is a one-shot wrapper around this,
+    so the two cannot drift. Only the placement of the work differs. Doing it per card cost
+    the dict-name tuple allocation, an ``lru_cache`` probe on a seven-element key, and a
+    nine-way keyword binding, together 79% of the warm multi-dict path. Callers evaluating
+    many notes against one term should build the counter once and call it per note.
 
-    ``prefolded`` says the caller already kana-folded both strings, so the fold here would be
-    a pure re-allocation; ``card_kanji`` is a precomputed ``_kanji_skeleton``. Both are for
-    callers that evaluate one note against several predicates (see
-    ``DataManager._note_derived``) and neither can change the result."""
+    ``prefolded`` says the caller already kana-folded both strings, making the fold here a
+    pure re-allocation. ``card_kanji`` is a precomputed ``_kanji_skeleton``. Both are for
+    callers evaluating one note against several predicates, and neither changes the result."""
     fold = normalize_kana and not prefolded
 
     if len(dict_names) == 1:
@@ -980,15 +923,12 @@ def occurrence_count(
     prefolded: bool = False,
     card_kanji: Optional[str] = None,
 ) -> int:
-    """Total occurrence count for ``(expression, reading)`` across ``dict_names``,
-    honoring all seven lookup flags. Mirrors the body of the former
-    ``OccurrenceRule.matches`` so both the reorder path and the browser/API search
-    term resolve identically. Callers must ensure expression/reading are present;
-    a note missing either should be treated as a non-match upstream rather than
-    fed a 0 here.
+    """Total occurrence count for ``(expression, reading)`` across ``dict_names``, honoring all
+    seven lookup flags. Callers must ensure expression and reading are present. A note missing
+    either should be treated as a non-match upstream rather than fed a 0 here.
 
-    One-shot convenience wrapper over ``occurrence_counter``; anything evaluating more than
-    a handful of notes should build the counter once instead."""
+    One-shot convenience wrapper over ``occurrence_counter``. Anything evaluating more than a
+    handful of notes should build the counter once instead."""
     return occurrence_counter(
         dict_names,
         normalize_kana=normalize_kana,
