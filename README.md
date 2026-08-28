@@ -21,10 +21,7 @@ This addon ensures you learn the cards you think are most important first. Inste
   
     ```
     {
-      "normal_prioritization": null,
       "normal_search": "deck:日本語::Mining",
-      "priority_cutoff": null,
-      "priority_limit": null,
       "priority_search": [
         "deck:日本語::Mining occurrences:[9-nine-ここのつここのかここのいろ,9-nine-そらいろそらうたそらのおと,9-nine-はるいろはるこいはるのかぜ,9-nine-ゆきいろゆきはなゆきのあと]>=10",
         "deck:日本語::Mining occurrences:[9-nine-ここのつここのかここのいろ,9-nine-そらいろそらうたそらのおと,9-nine-はるいろはるこいはるのかぜ,9-nine-ゆきいろゆきはなゆきのあと]>=3",
@@ -36,14 +33,22 @@ This addon ensures you learn the cards you think are most important first. Inste
         "deck:日本語::Mining occurrences:穢翼のユースティア>=5"
       ],
       "priority_search_mode": "sequential",
-      "reorder_on_sync": true,
+      "sort_field": "FreqSort",
+      "sort_reverse": false,
+      "queue_rules": {
+        "priority_cutoff": null,
+        "normal_prioritization": null,
+        "priority_limit": null,
+        "shift_existing": true
+      },
+      "automation": {
+        "reorder_on_sync": true,
+        "auto_update_dicts": false
+      },
       "search_fields": {
         "expression_field": "Expression",
         "expression_reading_field": "ExpressionReading"
-      },
-      "shift_existing": true,
-      "sort_field": "FreqSort",
-      "sort_reverse": false
+      }
     }
     ```
   </details>
@@ -76,6 +81,11 @@ The addon ships with a default config that prioritizes cards added in the last 3
 3. Change `"FreqSort"` to the actual name of the sort field in your note type (e.g., `"FreqSort"`, `"Frequency"`).
 4. Press **OK**. 
 5. The addon will automatically reorder your new cards **after** each sync completes. You can also press ``Ctrl+Alt+` `` to reorder manually.
+
+> **Config layout**: the searches and sorting above live at the top level; the rest of the options are
+> grouped into `queue_rules`, `matching`, `automation` and `search_fields` sections. If you're upgrading
+> from a version without those sections, there is nothing to do — your existing config keeps working and
+> is moved over automatically. See [config.md](config.md) for every option and its full path.
 
 > **Multi-device users**: Reordering runs *after* sync, so your desktop will always have fresh ordering. If you review on your phone, keep this in mind and either run a manual reorder (``Ctrl+Alt+` ``) before syncing or sync a second time to ensure your phone has the updated order.
 
@@ -139,6 +149,13 @@ Prioritize words found in specific media (requires Yomitan dictionaries).
    }
    ```
 
+> The five options below all live in the `matching` section of your config, alongside
+> `kana_normalization` and `combine_word_forms`:
+> ```json
+> "matching": { "prefix_matching": true, "variant_matching": true }
+> ```
+> They apply anywhere `occurrences:`/`seen:` are resolved — the reorder and the Browse bar alike.
+
 #### Prefix Matching
 Set `"prefix_matching": true` in your config to allow a card to match with the counts of longer dictionary entries that start with the card's expression. This is useful when a short word shows up in the dictionary primarily as part of longer compounds.
 
@@ -170,7 +187,7 @@ Set `"stem_matching": true` in your config to credit a dictionary-form card with
 
 - **Semantics**: the card's final kana is edited and the result must match a dict entry on **both** expression and reading. Ichidan verbs drop `る` (`戒める`→`戒め`), godan verbs shift the う-row kana to its い-row counterpart (`遊ぶ`→`遊び`, `待つ`→`待ち`, `話す`→`話し`, `泳ぐ`→`泳ぎ`). い-adjectives take all three nominalizers (`強い`→`強さ`/`強み`/`強げ`).
 - **No dictionary needed**: the conjugation class is not looked up. Both the ichidan and godan candidates are generated and the *reading* arbitrates — `起きる` finds `起き` and `走る` finds `走り`, while the wrong-class candidate simply matches nothing.
-- **Forward only**: a `戒め` card is **not** credited by a `戒める` entry. That direction inverts priority ordering — a rare derived form inherits the count of a much commoner base word (`無げ`, seen once, would absorb `無い`'s thousands). Enable `prefix_matching` if you want it anyway.
+- **Forward only**: a `戒め` card is **not** credited by a `戒める` entry. That direction inverts priority ordering — a rare derived form inherits the count of a much commoner base word (`無げ`, seen once, would absorb `無い`'s thousands). Enable `matching.prefix_matching` if you want it anyway.
 - **Gates**: expression and reading must end in the **same kana** (that is what makes the tail okurigana — a kanji-final card like `学校` never qualifies); they must **differ from each other**, so a kana-only card cannot validate a match and `それる` will not absorb the pronoun `それ`; and the derived form must be **≥ 2 characters**, which skips both `見る`→`見` and the noun blowups like `神る`→`神`.
 - **Not covered**: `する` is irregular, so `勉強する` does not reach `勉強し` (it would produce `勉強す`, which matches nothing). `じる`/`ずる` verbs do work — `感じる`→`感じ` — because they inflect as ichidan.
 - **Known imprecision**: a card ending in `る` that is really a past-tense form is caught (`来たる`←`来た`), and a 連用形 noun ending in `い` is treated as an adjective (`囲い`←`囲み`). Measured across 13 dictionaries these were 2 cases in 917 matches.
@@ -188,9 +205,9 @@ Set `"honorific_folding": true` in your config to credit bare-form cards with th
 If your occurrence dictionaries were downloaded from [Jiten](https://jiten.moe/), the addon can keep them up to date automatically or on demand.
 
 - **Manual Update**: Go to **Tools** -> **Priority Reorder** -> **Update Jiten Occurrence Dictionaries** to force-check all dictionaries for updates.
-- **Auto Update**: Set `"auto_update_dicts": true` in your config to automatically attempt to update dictionaries once per day after syncing.
+- **Auto Update**: Set `"auto_update_dicts": true` inside the `automation` section of your config to automatically attempt to update dictionaries once per day after syncing.
 
-> **⚠️ Many dictionaries**: Jiten's API allows roughly 10 requests per minute, so with more than 10 dictionaries updates slow down while the addon waits out the limit. If that delay on sync bothers you, prefer the manual update option over `auto_update_dicts`.
+> **⚠️ Many dictionaries**: Jiten's API allows roughly 10 requests per minute, so with more than 10 dictionaries updates slow down while the addon waits out the limit. If that delay on sync bothers you, prefer the manual update option over `automation.auto_update_dicts`.
    
 ### 3. Kanji Prioritization (`kanji:`)
 Prioritize words based on your existing Kanji knowledge (scanned from your Review cards).
@@ -242,7 +259,7 @@ Common in the visual novel you're reading, looks fully known, and will actually 
 ### 4. Recently Seen Words (`seen:`)
 > ⚠️ **Experimental** — `seen:` is a newer, experimental feature and may change or be removed in a future version.
 
-Prioritize words you've encountered recently in your immersion, using *daily* occurrence dictionaries. It's resolved through this addon, so the occurrence options above (`prefix_matching`, `variant_matching`, `stem_matching`, `kana_normalization`, etc.) apply to `seen:` too.
+Prioritize words you've encountered recently in your immersion, using *daily* occurrence dictionaries. It's resolved through this addon, so the `matching` options above (`prefix_matching`, `variant_matching`, `stem_matching`, `kana_normalization`, etc.) apply to `seen:` too.
 - **Syntax**: `seen:N` matches words appearing in any of the last **N** daily dictionaries. It's boolean — "seen at all", regardless of how many times. A leading `-` negates (`-seen:30`).
 - **Examples**: `seen:1` (today), `seen:7` (appeared in any of the last 7 days).
 - **Day boundaries**: "today" honors Anki's rollover hour ("Next day starts at" setting).
@@ -275,8 +292,8 @@ Match multiple unrelated criteria by using a list.
 ### 7. Limits and Cutoffs
 - **`limit=X`**: Use in a search string to take only the top X cards.
   - Example: `added:3 limit=20` (Only the top 20 most frequent recent cards).
-- **`priority_limit`**: Global limit for the priority queue.
-- **`priority_cutoff`**: Send high-frequency words back to the normal queue even if they matched priority.
+- **`queue_rules.priority_limit`**: Global limit for the priority queue.
+- **`queue_rules.priority_cutoff`**: Send high-frequency words back to the normal queue even if they matched priority.
 
 ## Credits
 Kanji reading data is derived from **KANJIDIC2**, Copyright © the

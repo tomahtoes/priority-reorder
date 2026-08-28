@@ -6,19 +6,25 @@
     "normal_search": "deck:日本語::Mining -added:3",
     "sort_field": "FreqSort",
     "sort_reverse": false,
-    "priority_cutoff": null,
-    "normal_prioritization": null,
-    "priority_limit": null,
-    "shift_existing": true,
-    "reorder_on_sync": true,
-    "auto_update_dicts": false,
-    "kana_normalization": false,
-    "combine_word_forms": false,
-    "variant_matching": false,
-    "prefix_matching": false,
-    "suffix_matching": false,
-    "honorific_folding": false,
-    "stem_matching": false,
+    "queue_rules": {
+        "priority_cutoff": null,
+        "normal_prioritization": null,
+        "priority_limit": null,
+        "shift_existing": true
+    },
+    "matching": {
+        "kana_normalization": false,
+        "combine_word_forms": false,
+        "variant_matching": false,
+        "stem_matching": false,
+        "prefix_matching": false,
+        "suffix_matching": false,
+        "honorific_folding": false
+    },
+    "automation": {
+        "reorder_on_sync": true,
+        "auto_update_dicts": false
+    },
     "search_fields": {
         "expression_field": "Expression",
         "expression_reading_field": "ExpressionReading"

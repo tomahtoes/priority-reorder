@@ -28,6 +28,7 @@ from aqt.qt import ( # type: ignore
 from aqt.theme import theme_manager # type: ignore
 from aqt.utils import showInfo # type: ignore
 
+from .config_manager import migrate_config_in_place
 from .reorder_log import PrioritySearchSummary, ReorderReport, get_last_report
 from .reorderer import run_reorder
 from .search_colors import colorize_query_html
@@ -570,7 +571,10 @@ class SummaryDialog(QDialog):
 
         pkg = __name__.split(".")[0]
         try:
-            conf = mw.addonManager.getConfig(pkg)
+            # Normally a no-op — the config was migrated at addon load. It matters
+            # only if that write failed (read-only meta.json), where reads still
+            # work but the editor would otherwise show the pre-section layout.
+            conf = migrate_config_in_place(pkg)
             ConfigEditor(self, pkg, conf)
         except Exception as e:
             showInfo(f"Could not open config: {e}")

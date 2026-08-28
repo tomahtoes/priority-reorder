@@ -17,7 +17,7 @@ else:
     import threading
 
     from .reorderer import run_reorder
-    from .config_manager import get_config
+    from .config_manager import get_config, migrate_config_in_place
     from .summary_window import show_summary_window
     from .reorder_log import clear_last_report
     from .data_manager import clear_note_cache
@@ -212,7 +212,22 @@ else:
 
         mw.form.menuTools.addMenu(menu)
 
+    def setup_config_migration() -> None:
+        """Bring an older flat config onto the current sectioned layout, in place.
+
+        Addon config lives in the global meta.json rather than per-profile, so import
+        time is early enough — no collection required. Registering the updated-action
+        too means a config the user pastes or restores by hand in Anki's editor is
+        normalized on save instead of at the next restart. Reading tolerates either
+        layout regardless (see config_manager.migrate_config), so a failure here only
+        costs the rewrite.
+        """
+        pkg = __name__.split(".")[0]
+        migrate_config_in_place(pkg)
+        mw.addonManager.setConfigUpdatedAction(pkg, lambda _conf: migrate_config_in_place(pkg))
+
     # Initialize the addon
+    setup_config_migration()
     setup_sync_hook()
     setup_search_terms()
     setup_menu()
