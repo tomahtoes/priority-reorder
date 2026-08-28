@@ -1,15 +1,17 @@
 # Priority Reorder Config
 
 Options are grouped into sections: the searches and sorting you tune day to day stay at the
-top level, and the rest live under `queue_rules`, `matching`, `automation` and `search_fields`.
+top level, and the rest live under `matching`, `tuning`, `sync_behavior` and `word_fields`.
 Headings below give each option's full path, e.g. `matching.prefix_matching` means:
 
 ```json
 "matching": { "prefix_matching": true }
 ```
 
-**Upgrading?** Nothing to do. A config written before the sections existed keeps working, and is
-moved to the new layout automatically the next time Anki loads the addon.
+**Upgrading?** Nothing to do. Any older config keeps working — whether it predates the sections
+entirely or uses their earlier names — and is moved to the current layout automatically the next
+time Anki loads the addon. Note that Anki's config editor always sorts keys alphabetically, so it
+won't show them in the order below.
 
 ## Core Settings
 
@@ -44,41 +46,41 @@ moved to the new layout automatically the next time Anki loads the addon.
 
 ---
 
-## Queue Rules (`queue_rules`)
+## Tuning (`tuning`)
 
-### `queue_rules.priority_cutoff` (int | null)
+### `tuning.priority_cutoff` (int | null)
 - **Description**: A threshold used to bump cards from the priority queue.
 - **Behavior**: If a priority card's sort value exceeds this number, it is moved to the Normal Queue.
 - **Multi-search**: Applied to each priority bucket separately. Cards bumped from any bucket go to the normal list.
 - **Note**: If the top-level `sort_reverse` is `true`, cards with values *below* the cutoff are moved instead.
 - **Default**: `null`
 
-### `queue_rules.normal_prioritization` (int | null)
+### `tuning.normal_prioritization` (int | null)
 - **Description**: A threshold used to promote cards from the normal list into the priority queue.
 - **Behavior**: If a normal card's sort value is below this number, it moves into the Priority Queue.
 - **Multi-search**: Promoted cards form their own tier placed *after* all priority searches (so they are exempt from any single search's `limit=`). In `mix` mode the tier is folded into the single sorted pool, so promoted cards interleave with priority matches by sort value. For stricter placement, define an explicit `priority_search` instead.
 - **Note**: If the top-level `sort_reverse` is `true`, cards with values *above* the threshold are moved instead.
 - **Default**: `null`
 
-### `queue_rules.priority_limit` (int | null)
+### `tuning.priority_limit` (int | null)
 - **Description**: A hard cap on the total number of cards allowed in the Priority Queue.
 - **Behavior**: If the priority queue exceeds this count (after all other rules are applied), only the top N cards remain; the rest move to the Normal Queue.
 - **Default**: `null`
 
-### `queue_rules.shift_existing` (bool)
+### `tuning.shift_existing` (bool)
 - **Description**: Whether to shift the position of existing new cards in your deck when repositioning. If `false`, cards are simply placed at the target positions, potentially overlapping.
 - **Default**: `true`
 
 ---
 
-## Automation (`automation`)
+## Sync Behavior (`sync_behavior`)
 
-### `automation.reorder_on_sync` (bool)
+### `sync_behavior.reorder_on_sync` (bool)
 - **Description**: When enabled, the addon will automatically run the reordering logic after each sync completes.
-- **Alias**: the older top-level `reorder_after_sync` / `reorder_before_sync` spellings are still accepted, and are folded into this key automatically.
+- **Alias**: the older top-level `reorder_after_sync` / `reorder_before_sync` spellings are still accepted, and are folded into this key automatically. So is the section's former name, `automation`.
 - **Default**: `true`
 
-### `automation.auto_update_dicts` (bool)
+### `sync_behavior.auto_update_dicts` (bool)
 - **Description**: When enabled, the addon will automatically check your Jiten-sourced occurrence dictionaries and download any updates exactly once per day on sync.
 - **Default**: `false`
 
@@ -145,7 +147,7 @@ The `occurrences:`, `f`, `kanji:`, `seen:`, and `length` terms below are **real 
 `priority_search`/`normal_search`, they work directly in the **Browse search bar** and through the
 collection API (`col.find_cards` / `col.find_notes`, and therefore **AnkiConnect**). This lets you
 test a priority search interactively in the browser before committing it to config. They honor the
-same `matching` settings and the configured `search_fields` / `sort_field` as the reorderer.
+same `matching` settings and the configured `word_fields` / `sort_field` as the reorderer.
 Leading `-` negates a term as usual (e.g. `-occurrences:Dict>5`).
 
 - **Anki Standard**: `added:3`, `deck:Japanese`, `tag:mining`, etc.
@@ -153,7 +155,7 @@ Leading `-` negates a term as usual (e.g. `-occurrences:Dict>5`).
 - **Length**: `length>=3` — Matches cards whose expression field is 3 or more characters long (`length=1` for single-character words). Counts Unicode characters of the raw field value (markup included; an empty field is length 0). Supports any comparison operator.
 - **Kanji i+1**: `kanji:new=1` — Matches words where exactly 1 character is unknown to you.
 - **Kanji target**: `kanji:new[3]>=1` — A Kanji counts as "new" until 3 of your learned words contain it; matches words with at least 1 such Kanji. `kanji:new` is equivalent to `kanji:new[1]`.
-- **New Reading**: `kanji:new_reading>=1` — Matches words where at least 1 Kanji is used in a *reading* no learned word has taught you. Once you know 食事 (しょくじ), 食べる (たべる) still matches, because 食=た is new. Takes the same bracket as `kanji:new`: `kanji:new_reading[3]>=1`. Requires `search_fields.expression_reading_field`.
+- **New Reading**: `kanji:new_reading>=1` — Matches words where at least 1 Kanji is used in a *reading* no learned word has taught you. Once you know 食事 (しょくじ), 食べる (たべる) still matches, because 食=た is new. Takes the same bracket as `kanji:new`: `kanji:new_reading[3]>=1`. Requires `word_fields.expression_reading_field`.
 - **Kanji Count**: `kanji:num=2` — Matches words containing exactly 2 Kanji.
 
 - **Occurrences**: `occurrences:銀色、遥か>5` — Matches words appearing more than 5 times in the specified dictionary.
@@ -165,15 +167,15 @@ Leading `-` negates a term as usual (e.g. `-occurrences:Dict>5`).
 
 ---
 
-## Occurrence Setup (`search_fields`)
+## Occurrence Setup (`word_fields`)
 
 To use occurrences queries, you must configure which fields the addon should look at:
 
-### `search_fields.expression_field` (string)
+### `word_fields.expression_field` (string)
 - **Description**: The field name containing the Japanese word or expression (e.g. `"Expression"`, `"Word"`).
 - **Default**: `"Expression"`
 
-### `search_fields.expression_reading_field` (string)
+### `word_fields.expression_reading_field` (string)
 - **Description**: The field name containing the reading/furigana (e.g.  `"ExpressionReading"`,`"Reading"`).
 - **Default**: `"ExpressionReading"`
 - **Note**: Required by `occurrences:`, `seen:` and `kanji:new_reading`. If `kanji:new_reading` matches nearly every card, this is almost always the cause — the addon prints a warning to the console when it can't make sense of the readings it finds.
@@ -184,7 +186,7 @@ To use occurrences queries, you must configure which fields the addon should loo
 
 After a reorder runs, **Tools** -> **Priority Reorder** -> **Show Summary** shows, per
 `priority_search`, how many cards matched, were kept, and were discarded once these settings were
-applied. It's the quickest way to tune `queue_rules.priority_cutoff`, `queue_rules.priority_limit`, and per-search
+applied. It's the quickest way to tune `tuning.priority_cutoff`, `tuning.priority_limit`, and per-search
 `limit=` — you can see the effect of each, open the kept/discarded notes in the Browser, and press
 **Run reorder now** to re-check after editing the config. See the README's _Summary Window_ section
 for more.

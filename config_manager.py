@@ -11,14 +11,13 @@ _VALID_SEARCH_MODES = ("sequential", "mix")
 # Options are grouped into sections in config.json. `Config` itself stays flat, so
 # everything that reads a setting keeps using `config.prefix_matching` etc.; only the
 # JSON layout nests. `_GROUPS` maps each section to its keys and their defaults, and
-# drives both parsing and the migration of older flat configs.
+# drives both parsing and the migration of older layouts.
+#
+# The names are chosen for how Anki's config editor renders them: it pretty-prints
+# with sort_keys=True, so the only way to keep a section below the searches you tune
+# day to day is a name that sorts after `sort_reverse`. `matching` is the deliberate
+# exception — it leads the file because it's the section worth seeing first.
 _GROUPS = {
-    "queue_rules": {
-        "priority_cutoff": None,
-        "normal_prioritization": None,
-        "priority_limit": None,
-        "shift_existing": True,
-    },
     "matching": {
         "kana_normalization": False,
         "combine_word_forms": False,
@@ -28,20 +27,46 @@ _GROUPS = {
         "suffix_matching": False,
         "honorific_folding": False,
     },
-    "automation": {
+    "sync_behavior": {
         "reorder_on_sync": True,
         "auto_update_dicts": False,
     },
+    "tuning": {
+        "priority_cutoff": None,
+        "normal_prioritization": None,
+        "priority_limit": None,
+        "shift_existing": True,
+    },
+    "word_fields": {
+        "expression_field": "Expression",
+        "expression_reading_field": "ExpressionReading",
+    },
 }
 
-# Flat key as it appeared in pre-section configs -> (section, canonical key). Every
-# grouped key is its own legacy name; the two retired sync spellings map onto
-# reorder_on_sync, in the same precedence order from_dict used to apply by hand.
-_LEGACY_KEYS = {
-    key: (group, key) for group, keys in _GROUPS.items() for key in keys
+# Retired section name -> current one.
+_LEGACY_SECTIONS = {
+    "queue_rules": "tuning",
+    "automation": "sync_behavior",
+    "search_fields": "word_fields",
 }
-_LEGACY_KEYS["reorder_after_sync"] = ("automation", "reorder_on_sync")
-_LEGACY_KEYS["reorder_before_sync"] = ("automation", "reorder_on_sync")
+
+# Flat key as it appeared in pre-section configs -> (section, canonical key). Only
+# keys that were ever top-level belong here: `word_fields` has always been a section,
+# so its keys are deliberately absent and a stray top-level `expression_field` is
+# left alone rather than hoisted. The two retired sync spellings map onto
+# reorder_on_sync, in the precedence order from_dict used to apply by hand.
+_LEGACY_FLAT_KEYS = {
+    key: (group, key)
+    for group, keys in _GROUPS.items() if group != "word_fields"
+    for key in keys
+}
+_LEGACY_FLAT_KEYS["reorder_after_sync"] = ("sync_behavior", "reorder_on_sync")
+_LEGACY_FLAT_KEYS["reorder_before_sync"] = ("sync_behavior", "reorder_on_sync")
+
+# Legacy keys an out-of-date installed config.json is contributing, which the user
+# has not saved themselves. Populated by warn_if_defaults_stale(); empty on a healthy
+# install, which is why the read path below normally does no extra work at all.
+_stale_default_keys = frozenset()
 
 # Most-preferred first: an explicit reorder_on_sync beats the older spellings.
 _SYNC_ALIASES = ("reorder_on_sync", "reorder_after_sync", "reorder_before_sync")
@@ -91,16 +116,22 @@ def migrate_config(data: dict) -> tuple:
 
     Returns `(migrated, changed)`. Pure — no Anki imports — so it runs on every
     parse in `from_dict` as well as on the write-back path. That is deliberate:
-    reading an unmigrated config must work identically whether or not the stored
-    file was ever rewritten, so the write is only ever a convenience.
+    reading an older config must work identically whether or not the stored file
+    was ever rewritten, so the write is only ever a convenience.
 
-    Two things happen: user values living under a pre-section flat key are hoisted
-    into their section (and the flat key dropped), then any section key still
-    missing is backfilled with its default, so Anki's JSON editor always shows the
-    complete current schema. The backfill matters because `getConfig` shallow-merges
-    config.json over the user's dict: a section the user has saved replaces the
-    shipped default wholesale, so options added in later versions would otherwise
-    never reach an existing user's editor. Keys we don't own are left untouched.
+    Three passes: sections saved under a retired name are folded into the current
+    one, values living under a pre-section flat key are hoisted into their section,
+    and any section key still missing is backfilled with its default so Anki's JSON
+    editor always shows the complete current schema. The backfill matters because
+    `getConfig` shallow-merges config.json over the user's dict: a section the user
+    has saved replaces the shipped default wholesale, so options added in later
+    versions would otherwise never reach an existing user's editor. Keys we don't
+    own are left untouched.
+
+    Legacy names win over current ones wherever both appear. That is sound because
+    the shipped config.json contains no legacy name (enforced by a test), so a
+    legacy name in the input can only have come from the user's own saved config,
+    while the current-named section beside it may be nothing but merged-in defaults.
     """
     migrated = dict(data)
     changed = False
@@ -114,14 +145,24 @@ def migrate_config(data: dict) -> tuple:
                 _warn(group, original, "expected object")
             section = {}
 
+        # Retired section names first, so their entries are in place before the
+        # backfill below can paper over them with defaults.
+        for old_name, new_name in _LEGACY_SECTIONS.items():
+            if new_name != group:
+                continue
+            old_section = migrated.get(old_name)
+            if isinstance(old_section, dict):
+                # Everything, not just keys we recognize: the retired section is
+                # about to be deleted, so anything left behind is lost for good.
+                section.update(old_section)
+            elif old_section is not None:
+                _warn(old_name, old_section, "expected object")
+
         for key, default in defaults.items():
             aliases = _SYNC_ALIASES if key == "reorder_on_sync" else (key,)
-            flat = next((a for a in aliases if a in migrated), None)
+            flat = next((a for a in aliases if a in migrated
+                         and _LEGACY_FLAT_KEYS.get(a) == (group, key)), None)
             if flat is not None:
-                # A flat key present at all means this config predates the sections
-                # (migration always removes them), so it carries the user's real
-                # value while the section alongside it is just the shipped default
-                # Anki merged in. It therefore wins outright.
                 section[key] = migrated[flat]
             elif key not in section:
                 section[key] = default
@@ -130,7 +171,7 @@ def migrate_config(data: dict) -> tuple:
             changed = True
         migrated[group] = section
 
-    for legacy in _LEGACY_KEYS:
+    for legacy in list(_LEGACY_FLAT_KEYS) + list(_LEGACY_SECTIONS):
         if legacy in migrated:
             del migrated[legacy]
             changed = True
@@ -169,14 +210,14 @@ class Config:
         # Migrating first means a pre-section config parses exactly like a migrated
         # one, whether or not the stored file was ever rewritten.
         data, _ = migrate_config(data)
-        queue = data["queue_rules"]
         matching = data["matching"]
-        automation = data["automation"]
+        sync_behavior = data["sync_behavior"]
+        tuning = data["tuning"]
+        word_fields = data["word_fields"]
 
-        search_config_data = data.get("search_fields", {}) or {}
         search_config = SearchConfig(
-            expression_field=_coerce_str(search_config_data, "expression_field", "Expression") or "Expression",
-            expression_reading_field=_coerce_str(search_config_data, "expression_reading_field", "ExpressionReading") or "ExpressionReading"
+            expression_field=_coerce_str(word_fields, "expression_field", "Expression") or "Expression",
+            expression_reading_field=_coerce_str(word_fields, "expression_reading_field", "ExpressionReading") or "ExpressionReading"
         )
 
         priority_search = data.get("priority_search", "")
@@ -199,12 +240,12 @@ class Config:
             normal_search=_coerce_str(data, "normal_search", ""),
             sort_field=sort_field,
             sort_reverse=_coerce_bool(data, "sort_reverse", False),
-            priority_cutoff=_coerce_optional_int(queue, "priority_cutoff"),
-            normal_prioritization=_coerce_optional_int(queue, "normal_prioritization"),
-            priority_limit=_coerce_optional_int(queue, "priority_limit"),
-            shift_existing=_coerce_bool(queue, "shift_existing", True),
-            reorder_on_sync=_coerce_bool(automation, "reorder_on_sync", True),
-            auto_update_dicts=_coerce_bool(automation, "auto_update_dicts", False),
+            priority_cutoff=_coerce_optional_int(tuning, "priority_cutoff"),
+            normal_prioritization=_coerce_optional_int(tuning, "normal_prioritization"),
+            priority_limit=_coerce_optional_int(tuning, "priority_limit"),
+            shift_existing=_coerce_bool(tuning, "shift_existing", True),
+            reorder_on_sync=_coerce_bool(sync_behavior, "reorder_on_sync", True),
+            auto_update_dicts=_coerce_bool(sync_behavior, "auto_update_dicts", False),
             kana_normalization=_coerce_bool(matching, "kana_normalization", False),
             combine_word_forms=_coerce_bool(matching, "combine_word_forms", False),
             variant_matching=_coerce_bool(matching, "variant_matching", False),
@@ -218,22 +259,82 @@ class Config:
 def get_config() -> Config:
     """Load configuration from Anki's config manager."""
     config_data = mw.addonManager.getConfig(__name__.split('.')[0]) or {}
+    if _stale_default_keys:
+        # An out-of-date config.json is contributing legacy keys the user never
+        # saved. Migration would read them as intent and hoist them over the real
+        # sections, silently reverting settings for the session. Drop them: they
+        # carry no information, and the shipped defaults are already the fallback.
+        config_data = {k: v for k, v in config_data.items()
+                       if k not in _stale_default_keys}
     return Config.from_dict(config_data)
+
+def _stored_config(pkg: str) -> dict:
+    """The user's own saved config, without config.json's defaults merged in.
+
+    `getConfig` returns defaults updated with the saved config, which is the right
+    thing to *read* but the wrong thing to *migrate*: legacy names win during
+    migration precisely because they can only come from the user, and a merged dict
+    blurs that line the moment the installed config.json is out of date.
+    """
+    try:
+        return mw.addonManager.addonMeta(pkg).get("config") or {}
+    except Exception:  # older or changed Anki API — merged is better than nothing
+        return mw.addonManager.getConfig(pkg) or {}
+
+def warn_if_defaults_stale(pkg: str) -> bool:
+    """Warn when the installed config.json predates the current section layout.
+
+    Anki merges those defaults into every read, so a stale file reintroduces legacy
+    names that migration then treats as user intent — quietly turning real settings
+    back off for the session. It only happens with a half-copied install, which is
+    exactly the case that is otherwise invisible.
+
+    Records the offending keys in `_stale_default_keys` so reads can ignore them
+    (see `get_config`). Only keys the user has *not* saved themselves are recorded:
+    those can only have come from the stale defaults, whereas one the user really
+    did save is their own value and must still win.
+    """
+    global _stale_default_keys
+    try:
+        defaults = mw.addonManager.addonConfigDefaults(pkg) or {}
+        legacy = set(_LEGACY_FLAT_KEYS) | set(_LEGACY_SECTIONS)
+        stale = set(defaults) & legacy
+        if not stale:
+            _stale_default_keys = frozenset()
+            return False
+        _stale_default_keys = frozenset(stale - set(_stored_config(pkg)))
+        print(f"[priority-reorder] config: the installed config.json is out of date "
+              f"(it still defines {', '.join(sorted(stale))}). Update the addon's "
+              f"files together; settings will not save until you do.")
+        return True
+    except Exception:
+        return False
 
 def migrate_config_in_place(pkg: str) -> dict:
     """Rewrite the user's stored config onto the current sectioned layout.
 
-    Idempotent, and only writes when something actually moved. Returns the migrated
-    dict so callers that also want to display it (the summary window's config
-    button) don't have to re-read. Reading never depends on this having run — it
-    exists so users' own config files quietly catch up instead of staying on a
+    Idempotent, and only writes when something actually moved. Returns the config as
+    Anki would then serve it, so callers that also display it (the summary window's
+    config button) don't have to re-read. Reading never depends on this having run —
+    it exists so users' own config files quietly catch up instead of staying on a
     layout the docs no longer describe.
     """
     try:
-        migrated, changed = migrate_config(mw.addonManager.getConfig(pkg) or {})
+        if warn_if_defaults_stale(pkg):
+            # Refuse to rewrite against defaults we know are out of date. Reads
+            # still work; a half-updated install is exactly the case where a write
+            # could bake merged-in legacy defaults into the user's real config.
+            return mw.addonManager.getConfig(pkg) or {}
+        stored = _stored_config(pkg)
+        if not stored:
+            # Nothing saved yet: config.json is already the whole config, and
+            # writing the backfill here would freeze today's defaults into a fresh
+            # install that would otherwise pick up future changes to them.
+            return mw.addonManager.getConfig(pkg) or {}
+        migrated, changed = migrate_config(stored)
         if changed:
             mw.addonManager.writeConfig(pkg, migrated)
-        return migrated
+        return mw.addonManager.getConfig(pkg) or migrated
     except Exception as e:
         # A config we can't rewrite still reads fine; never block addon load. Fall
         # back to the stored dict rather than {} — a caller may hand this to the

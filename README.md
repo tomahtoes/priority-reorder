@@ -35,17 +35,17 @@ This addon ensures you learn the cards you think are most important first. Inste
       "priority_search_mode": "sequential",
       "sort_field": "FreqSort",
       "sort_reverse": false,
-      "queue_rules": {
+      "tuning": {
         "priority_cutoff": null,
         "normal_prioritization": null,
         "priority_limit": null,
         "shift_existing": true
       },
-      "automation": {
+      "sync_behavior": {
         "reorder_on_sync": true,
         "auto_update_dicts": false
       },
-      "search_fields": {
+      "word_fields": {
         "expression_field": "Expression",
         "expression_reading_field": "ExpressionReading"
       }
@@ -83,9 +83,10 @@ The addon ships with a default config that prioritizes cards added in the last 3
 5. The addon will automatically reorder your new cards **after** each sync completes. You can also press ``Ctrl+Alt+` `` to reorder manually.
 
 > **Config layout**: the searches and sorting above live at the top level; the rest of the options are
-> grouped into `queue_rules`, `matching`, `automation` and `search_fields` sections. If you're upgrading
-> from a version without those sections, there is nothing to do — your existing config keeps working and
-> is moved over automatically. See [config.md](config.md) for every option and its full path.
+> grouped into `matching`, `tuning`, `sync_behavior` and `word_fields` sections. If you're upgrading from
+> an older version, there is nothing to do — your existing config keeps working and is moved over
+> automatically. Anki's config editor sorts keys alphabetically, so expect them in that order rather
+> than the order shown here. See [config.md](config.md) for every option and its full path.
 
 > **Multi-device users**: Reordering runs *after* sync, so your desktop will always have fresh ordering. If you review on your phone, keep this in mind and either run a manual reorder (``Ctrl+Alt+` ``) before syncing or sync a second time to ensure your phone has the updated order.
 
@@ -141,9 +142,9 @@ Prioritize words found in specific media (requires Yomitan dictionaries).
    └── 穢翼のユースティア/
        └── term_meta_bank_1.json
    ```
-5. In your config, set `search_fields` to match your note type, which for [Lapis](https://github.com/donkuri/lapis) would be:
+5. In your config, set `word_fields` to match your note type, which for [Lapis](https://github.com/donkuri/lapis) would be:
    ```json
-   "search_fields": {
+   "word_fields": {
        "expression_field": "Expression",
        "expression_reading_field": "ExpressionReading"
    }
@@ -205,9 +206,9 @@ Set `"honorific_folding": true` in your config to credit bare-form cards with th
 If your occurrence dictionaries were downloaded from [Jiten](https://jiten.moe/), the addon can keep them up to date automatically or on demand.
 
 - **Manual Update**: Go to **Tools** -> **Priority Reorder** -> **Update Jiten Occurrence Dictionaries** to force-check all dictionaries for updates.
-- **Auto Update**: Set `"auto_update_dicts": true` inside the `automation` section of your config to automatically attempt to update dictionaries once per day after syncing.
+- **Auto Update**: Set `"auto_update_dicts": true` inside the `sync_behavior` section of your config to automatically attempt to update dictionaries once per day after syncing.
 
-> **⚠️ Many dictionaries**: Jiten's API allows roughly 10 requests per minute, so with more than 10 dictionaries updates slow down while the addon waits out the limit. If that delay on sync bothers you, prefer the manual update option over `automation.auto_update_dicts`.
+> **⚠️ Many dictionaries**: Jiten's API allows roughly 10 requests per minute, so with more than 10 dictionaries updates slow down while the addon waits out the limit. If that delay on sync bothers you, prefer the manual update option over `sync_behavior.auto_update_dicts`.
    
 ### 3. Kanji Prioritization (`kanji:`)
 Prioritize words based on your existing Kanji knowledge (scanned from your Review cards).
@@ -246,7 +247,7 @@ and gikun readings — count as new for every Kanji they can't explain, which is
 want: those readings are the least predictable ones. Where only part of a word is irregular, only
 that part counts (眼鏡/めがね credits 眼=め and flags only 鏡).
 
-> **This filter needs your reading field.** Set `search_fields.expression_reading_field` to the
+> **This filter needs your reading field.** Set `word_fields.expression_reading_field` to the
 > field holding the kana reading. Cards without a reading are never matched. Readings are resolved
 > against a bundled table derived from [KANJIDIC2](https://www.edrdg.org/wiki/index.php/KANJIDIC_Project).
 
@@ -277,7 +278,7 @@ user_files/
     └── 2026-06-12/
         └── term_meta_bank_1.json
 ```
-Each `term_meta_bank_*.json` is an ordinary Yomitan occurrence dictionary — the same format as occurrence mining above, and it reuses the same `search_fields` note-type config. The `_seen` folder is **reserved** (the leading underscore keeps it distinct from your real dictionaries): it's never treated as a normal occurrence dictionary, so it's excluded from `occurrences:all` and can't be reached via `occurrences:_seen` — only `seen:N` reads it.
+Each `term_meta_bank_*.json` is an ordinary Yomitan occurrence dictionary — the same format as occurrence mining above, and it reuses the same `word_fields` note-type config. The `_seen` folder is **reserved** (the leading underscore keeps it distinct from your real dictionaries): it's never treated as a normal occurrence dictionary, so it's excluded from `occurrences:all` and can't be reached via `occurrences:_seen` — only `seen:N` reads it.
 
 ### 5. Expression Length (`length`)
 Filter by the character length of the card's expression field.
@@ -292,8 +293,8 @@ Match multiple unrelated criteria by using a list.
 ### 7. Limits and Cutoffs
 - **`limit=X`**: Use in a search string to take only the top X cards.
   - Example: `added:3 limit=20` (Only the top 20 most frequent recent cards).
-- **`queue_rules.priority_limit`**: Global limit for the priority queue.
-- **`queue_rules.priority_cutoff`**: Send high-frequency words back to the normal queue even if they matched priority.
+- **`tuning.priority_limit`**: Global limit for the priority queue.
+- **`tuning.priority_cutoff`**: Send high-frequency words back to the normal queue even if they matched priority.
 
 ## Credits
 Kanji reading data is derived from **KANJIDIC2**, Copyright © the
