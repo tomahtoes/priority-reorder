@@ -124,9 +124,11 @@ def test_today_date_after_rollover_is_same_day():
 
 # --- SeenWindow.contains: presence + parity with counting -------------------
 
-def _build_window(day_raws, normalize_kana=False, honorific_folding=False, variant_matching=False):
+def _build_window(day_raws, normalize_kana=False, honorific_folding=False, variant_matching=False,
+                  stem_matching=False):
     days = [
-        seen_manager.build_seen_day(d, normalize_kana, honorific_folding, variant_matching)
+        seen_manager.build_seen_day(d, normalize_kana, honorific_folding, variant_matching,
+                                    stem_matching)
         for d in day_raws
     ]
     return seen_manager._merge_seen_days(days)
@@ -265,6 +267,27 @@ def test_seen_variant_entries_only_collected_when_asked():
     assert _build_window(raw, variant_matching=True).variant_entries == {("煌く", "きらめく")}
 
 
+def test_seen_stem_entries_only_collected_when_asked():
+    # stem_matching is a BUILD flag on the seen side for the same reason variant_matching is:
+    # the entry set spans most of the dict. A window built without it answers nothing.
+    raw = [[["戒め", "freq", {"reading": "いましめ", "frequency": {"value": 4}}]]]
+    assert _build_window(raw).stem_entries == set()
+    assert not _build_window(raw).contains("戒める", "いましめる", stem_matching=True)
+    assert _build_window(raw, stem_matching=True).stem_entries == {("戒め", "いましめ")}
+    assert _build_window(raw, stem_matching=True).contains("戒める", "いましめる",
+                                                           stem_matching=True)
+
+
+def test_seen_stem_entries_skip_forms_reading_cannot_validate():
+    # The gate mirrors what _stem_candidates can ever probe for: a candidate always carries a
+    # reading distinct from its written form, so a kana entry (expression == reading) is dead
+    # weight. Retaining it would also be the seen-side half of the distinctness hole.
+    raw = [[["それ", "freq", {"reading": "それ", "frequency": {"value": 99}}]]]
+    assert _build_window(raw, stem_matching=True).stem_entries == set()
+    assert not _build_window(raw, stem_matching=True).contains("それる", "それる",
+                                                               stem_matching=True)
+
+
 def _ref_seen(day_indices, e, r, **flags):
     """Reference presence from the counting index: seen iff the summed total is >= 1."""
     return sum(d.get_total(e, r, **flags) for d in day_indices) >= 1
@@ -306,6 +329,20 @@ def test_seen_contains_matches_counting_presence_incl_homograph():
             ["下駄屋", "freq", {"reading": "げたや", "frequency": {"value": 8}}],
             ["積もる", "freq", {"reading": "つもる", "frequency": {"value": 3}}],
             ["きらめく", "freq", {"reading": "きらめく", "frequency": {"value": 4}}],
+            # stem rule: ichidan stem, godan stem, adjective stem, and a kana entry whose
+            # (expression == reading) shape the distinctness gate must keep unreachable
+            ["戒め", "freq", {"reading": "いましめ", "frequency": {"value": 4}}],
+            ["遊び", "freq", {"reading": "あそび", "frequency": {"value": 7}}],
+            ["強さ", "freq", {"reading": "つよさ", "frequency": {"value": 11}}],
+            ["それ", "freq", {"reading": "それ", "frequency": {"value": 99}}],
+            ["いましめ", "freq", {"reading": "いましめ", "frequency": {"value": 50},
+                                  "displayValue": "50㋕"}],
+            # A ㋕ kana stem with NO kanji-written counterpart anywhere: the only way to credit a
+            # 掠める card is stem_total's SECOND term (the candidate reading probed against
+            # expr_to_count). Every other stem entry above is reachable by the pair term too, so
+            # without this row the boolean twin could drop that term and still agree.
+            ["かすめ", "freq", {"reading": "かすめ", "frequency": {"value": 13},
+                                "displayValue": "13㋕"}],
         ],
     ]
     cards = [("下駄", "げた"), ("角", "かど"), ("茶", "ちゃ"), ("下駄箱", "げたばこ"),
@@ -323,7 +360,12 @@ def test_seen_contains_matches_counting_presence_incl_homograph():
              # variant rule: credited (煌めく←煌く), not credited (燦めく — no shared kanji),
              # kana-only card, the prefix-overlap dedup case, and the homophone guard
              ("煌めく", "きらめく"), ("燦めく", "きらめく"), ("きらめく", "きらめく"),
-             ("気持", "きもち"), ("科学", "かがく")]
+             ("気持", "きもち"), ("科学", "かがく"),
+             # stem rule: forward hits (ichidan/godan/adjective), the reverse direction which
+             # must stay uncredited, a miss, and the two gated kana shapes
+             ("戒める", "いましめる"), ("遊ぶ", "あそぶ"), ("強い", "つよい"),
+             ("戒め", "いましめ"), ("痛い", "いたい"),
+             ("それる", "それる"), ("のる", "のる"), ("掠める", "かすめる")]
     flagsets = [
         {},
         {"prefix_matching": True},
@@ -340,11 +382,22 @@ def test_seen_contains_matches_counting_presence_incl_homograph():
         {"variant_matching": True, "combine_word_forms": True},
         {"variant_matching": True, "prefix_matching": True, "suffix_matching": True,
          "combine_word_forms": True, "honorific_folding": True},
+        {"stem_matching": True},
+        {"stem_matching": True, "prefix_matching": True},
+        {"stem_matching": True, "suffix_matching": True},
+        # stem x combine_word_forms is the one that pins stem_total's SECOND term (the kana
+        # reading probe into expr_to_count); a stem-only flagset cannot catch its omission.
+        {"stem_matching": True, "combine_word_forms": True},
+        {"stem_matching": True, "variant_matching": True, "combine_word_forms": True},
+        {"stem_matching": True, "variant_matching": True, "prefix_matching": True,
+         "suffix_matching": True, "combine_word_forms": True, "honorific_folding": True},
     ]
     for fs in flagsets:
         honor = fs.get("honorific_folding", False)
         variant = fs.get("variant_matching", False)
-        window = _build_window(raws, honorific_folding=honor, variant_matching=variant)
+        stem = fs.get("stem_matching", False)
+        window = _build_window(raws, honorific_folding=honor, variant_matching=variant,
+                               stem_matching=stem)
         day_indices = [dm._build_index_from_raw(r, honorific_folding=honor) for r in raws]
         for e, r in cards:
             assert window.contains(e, r, **fs) == _ref_seen(day_indices, e, r, **fs), (e, r, fs)

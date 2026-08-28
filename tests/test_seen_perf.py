@@ -195,11 +195,12 @@ def _config():
 # ---------------------------------------------------------------------------
 
 _FLAG_COMBOS = [
-    ("none", dict(normalize_kana=False, combine_word_forms=False, prefix_matching=False, suffix_matching=False, variant_matching=False, honorific_folding=False)),
-    ("prefix", dict(normalize_kana=False, combine_word_forms=False, prefix_matching=True, suffix_matching=False, variant_matching=False, honorific_folding=False)),
-    ("suffix", dict(normalize_kana=False, combine_word_forms=False, prefix_matching=False, suffix_matching=True, variant_matching=False, honorific_folding=False)),
-    ("varnt", dict(normalize_kana=False, combine_word_forms=False, prefix_matching=False, suffix_matching=False, variant_matching=True, honorific_folding=False)),
-    ("all", dict(normalize_kana=True, combine_word_forms=True, prefix_matching=True, suffix_matching=True, variant_matching=True, honorific_folding=True)),
+    ("none", dict(normalize_kana=False, combine_word_forms=False, prefix_matching=False, suffix_matching=False, variant_matching=False, stem_matching=False, honorific_folding=False)),
+    ("prefix", dict(normalize_kana=False, combine_word_forms=False, prefix_matching=True, suffix_matching=False, variant_matching=False, stem_matching=False, honorific_folding=False)),
+    ("suffix", dict(normalize_kana=False, combine_word_forms=False, prefix_matching=False, suffix_matching=True, variant_matching=False, stem_matching=False, honorific_folding=False)),
+    ("varnt", dict(normalize_kana=False, combine_word_forms=False, prefix_matching=False, suffix_matching=False, variant_matching=True, stem_matching=False, honorific_folding=False)),
+    ("stem", dict(normalize_kana=False, combine_word_forms=False, prefix_matching=False, suffix_matching=False, variant_matching=False, stem_matching=True, honorific_folding=False)),
+    ("all", dict(normalize_kana=True, combine_word_forms=True, prefix_matching=True, suffix_matching=True, variant_matching=True, stem_matching=True, honorific_folding=True)),
 ]
 
 
@@ -250,6 +251,7 @@ def test_seen_count_vs_boolean_benchmark(capsys, tmp_path):
                 prefix_matching=flags["prefix_matching"],
                 suffix_matching=flags["suffix_matching"],
                 variant_matching=flags["variant_matching"],
+                stem_matching=flags["stem_matching"],
                 honorific_folding=flags["honorific_folding"],
             )
 
@@ -273,7 +275,7 @@ def test_seen_count_vs_boolean_benchmark(capsys, tmp_path):
             # ---- boolean (production): build x days -> union(+sort) -> contains ----
             bdays, b_build = _timed(lambda: [
                 seen_manager.build_seen_day(d, flags["normalize_kana"], flags["honorific_folding"],
-                                           flags["variant_matching"])
+                                           flags["variant_matching"], flags["stem_matching"])
                 for d in days_raw
             ])
 

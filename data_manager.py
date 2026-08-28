@@ -360,6 +360,7 @@ class DataManager:
                 prefix_matching=cfg.prefix_matching,
                 suffix_matching=cfg.suffix_matching,
                 variant_matching=cfg.variant_matching,
+                stem_matching=cfg.stem_matching,
                 honorific_folding=cfg.honorific_folding,
                 prefolded=True,
             )
@@ -449,11 +450,13 @@ class DataManager:
             prefix_matching = cfg.prefix_matching
             suffix_matching = cfg.suffix_matching
             variant_matching = cfg.variant_matching
+            stem_matching = cfg.stem_matching
             honorific_folding = cfg.honorific_folding
             # Resolve every level's window ONCE per run (one filesystem stat per day), so the
             # per-card check is a pure in-memory membership lookup.
             t0 = time.perf_counter()
-            windows = self._seen_windows(n, normalize_kana, honorific_folding, variant_matching)
+            windows = self._seen_windows(n, normalize_kana, honorific_folding,
+                                         variant_matching, stem_matching)
             self._add_ms("seen_win", t0)
             levels = self._seen_levels
             top = levels[-1]
@@ -474,6 +477,7 @@ class DataManager:
                 prefix_matching=prefix_matching,
                 suffix_matching=suffix_matching,
                 variant_matching=variant_matching,
+                stem_matching=stem_matching,
                 honorific_folding=honorific_folding,
                 prefolded=True,
             )
@@ -614,7 +618,8 @@ class DataManager:
         return self._seen_levels
 
     def _seen_windows(self, n: int, normalize_kana: bool, honorific_folding: bool,
-                      variant_matching: bool) -> Dict[int, "seen_manager.SeenWindow"]:
+                      variant_matching: bool, stem_matching: bool
+                      ) -> Dict[int, "seen_manager.SeenWindow"]:
         """All configured levels' windows, resolved against ONE reference date.
 
         Sharing `today` across levels is what makes them nest: resolved independently, two
@@ -625,7 +630,8 @@ class DataManager:
             today = seen_manager.today_date()
             self._seen_window_map = {
                 level: seen_manager.get_seen_window(
-                    level, normalize_kana, honorific_folding, variant_matching, today=today
+                    level, normalize_kana, honorific_folding, variant_matching,
+                    stem_matching, today=today
                 )
                 for level in levels
             }

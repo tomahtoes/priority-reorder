@@ -102,6 +102,14 @@
 - **Single kanji**: excluded from the bare rule; credited only via reading-validated **tail** particle phrases — `母の日`/ははのひ credits `日`/ひ.
 - **Default**: `false`
 
+### `stem_matching` (bool)
+- **Description**: Credits a dictionary-form card with the counts of its **conjugated noun form** — the 連用形 (masu-stem) for verbs, and the `さ`/`み`/`げ` nominalizations for い-adjectives. Card `戒める` picks up `戒め`, `遊ぶ` picks up `遊び`, `強い` picks up `強さ`/`強み`/`強げ`.
+- **Rule**: the card's final kana is edited and the result must match a dict entry on **both** expression and reading. Ichidan verbs drop `る` (`戒める`→`戒め`), godan verbs shift う-row to い-row (`待つ`→`待ち`, `話す`→`話し`). The conjugation class is not looked up — both candidates are tried and the reading decides, so the wrong one simply finds nothing.
+- **Direction**: forward only. A `戒め` card is **not** credited by a `戒める` entry — a rare derived form would inherit the count of a far commoner base word and jump the queue (`無げ` would absorb `無い`'s). Turn on `prefix_matching` if you want that direction.
+- **Gates**: the expression and reading must end in the *same* kana (that is what makes the tail okurigana), they must differ from each other (a kana-only card has nothing to validate against, so `それる` cannot absorb `それ`), and the derived form must be ≥ 2 chars (so `見る`→`見` and `神る`→`神` are both skipped).
+- **Not covered**: `する` is irregular, so `勉強する` does not reach `勉強し`. `じる`/`ずる` verbs do work (`感じる`→`感じ`), since they inflect as ichidan.
+- **Default**: `false`
+
 ### `honorific_folding` (bool)
 - **Description**: Credits a bare-form card with the counts of dict entries that start with an honorific (`お`/`ご`/`御`) and strip to the same word — dict-side only (a card `お茶` is unchanged). Card `茶` with `お茶` (50) + `茶` (10) → 60.
 - **Gate**: the stripped remainder must contain a kanji (`お金`→`金`, `お茶の間`→`茶の間`) or itself be a dict entry — kana-only strips need the entry, blocking junk like `おかず`→`かず`.
@@ -115,7 +123,7 @@ The `occurrences:`, `f`, `kanji:`, `seen:`, and `length` terms below are **real 
 `priority_search`/`normal_search`, they work directly in the **Browse search bar** and through the
 collection API (`col.find_cards` / `col.find_notes`, and therefore **AnkiConnect**). This lets you
 test a priority search interactively in the browser before committing it to config. They honor the
-same `kana_normalization` / `combine_word_forms` / `variant_matching` / `prefix_matching` / `suffix_matching` / `honorific_folding` settings,
+same `kana_normalization` / `combine_word_forms` / `variant_matching` / `stem_matching` / `prefix_matching` / `suffix_matching` / `honorific_folding` settings,
 and the configured `search_fields` / `sort_field`, as the reorderer. Leading `-` negates a term as
 usual (e.g. `-occurrences:Dict>5`).
 

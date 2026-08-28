@@ -454,3 +454,30 @@ def test_variant_index_not_built_when_flag_off(capsys):
     assert idx._variant_index is None
     idx.get_total("日00001", "よみ00001", variant_matching=True)
     assert idx._variant_index is not None
+
+
+def test_stem_matching_builds_no_index_at_all(capsys):
+    """Stem matching reads only the two EAGER maps, so unlike every other rule it has no
+    view to build: a stem lookup must leave the prefix, suffix and variant views untouched,
+    and its cost must not scale with the dictionary."""
+    small = _variant_bench_index(1_000)
+    large = _variant_bench_index(50_000)
+    for idx in (small, large):
+        for _ in range(1000):
+            idx.get_total("日00001る", "よみ00001る", stem_matching=True)
+        assert idx._variant_index is None
+        assert idx._prefix_exprs is None
+        assert idx._suffix_revs is None
+
+    def _scan_ms(idx):
+        t0 = time.perf_counter()
+        for _ in range(20_000):
+            idx.get_total("日00001る", "よみ00001る", stem_matching=True)
+        return (time.perf_counter() - t0) * 1000
+
+    small_ms = _scan_ms(small)
+    large_ms = _scan_ms(large)
+    with capsys.disabled():
+        print(f"\n  stem_total: 1k dict {small_ms:.1f}ms  50k dict {large_ms:.1f}ms")
+    # O(1) in dictionary size: a 50x larger index must not cost materially more.
+    assert large_ms < small_ms * 3 + 20

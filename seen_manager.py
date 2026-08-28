@@ -3,11 +3,11 @@
 
 `seen:N` is boolean: it matches a word that appears in ANY of the last ``N`` daily dicts. Each
 day's dict is parsed into a membership set (not a counting index), and the global occurrence
-flags (``prefix_matching``, ``suffix_matching``, ``variant_matching``, ``kana_normalization``,
-``combine_word_forms``, ``honorific_folding``) apply to ``seen:`` exactly as they do to
+flags (``prefix_matching``, ``suffix_matching``, ``variant_matching``, ``stem_matching``,
+``kana_normalization``, ``combine_word_forms``, ``honorific_folding``) apply to ``seen:`` exactly as they do to
 ``occurrences:`` — e.g. a 下駄 card is matched by a 下駄箱 entry when prefix matching is on, a 箱
-card by the same entry when suffix matching is on, and a 煌めく card by a 煌く entry when variant
-matching is on. (Counts are deliberately not tracked: bare ``seen:N``
+card by the same entry when suffix matching is on, a 煌めく card by a 煌く entry when variant
+matching is on, and a 戒める card by a 戒め entry when stem matching is on. (Counts are deliberately not tracked: bare ``seen:N``
 only asks "seen at all", so presence is all that is needed.)
 
 The current day's dict is rewritten while you immerse, so a day's set is cached keyed on the
@@ -91,10 +91,12 @@ class SeenWindow:
     the ``(expression, reading)`` pairs of particle-phrase entries (``phrase_entries`` — kanji
     head — and ``suffix_phrase_entries`` — kanji tail), for the single-kanji suru rule the
     pairs of 'X<する|じる|ずる>' entries (``suru_entries``), and for variant matching the
-    ``(expression, reading)`` pairs of every kanji-bearing entry (``variant_entries``).
+    ``(expression, reading)`` pairs of every kanji-bearing entry (``variant_entries``), and for
+    stem matching the ``(expression, reading)`` pairs of every entry whose reading differs from its
+    written form (``stem_entries``).
 
     ``contains`` is the boolean analogue of the old ``window_total(...) >= 1`` — the same base /
-    combine / prefix / suffix / variant / honorific paths, ORed."""
+    combine / prefix / suffix / variant / stem / honorific paths, ORed."""
 
     def __init__(
         self,
@@ -104,6 +106,7 @@ class SeenWindow:
         suffix_phrase_entries: Set[Tuple[str, str]],
         suru_entries: Set[Tuple[str, str]],
         variant_entries: Set[Tuple[str, str]],
+        stem_entries: Set[Tuple[str, str]],
     ) -> None:
         self.exprs = exprs
         self.honorific_stripped = honorific_stripped
@@ -111,6 +114,7 @@ class SeenWindow:
         self.suffix_phrase_entries = suffix_phrase_entries
         self.suru_entries = suru_entries
         self.variant_entries = variant_entries
+        self.stem_entries = stem_entries
         # Sorted view of `exprs`, built lazily on the first prefix query (mirrors
         # OccurrenceIndex._ensure_prefix_index — no per-term prefix explosion at build time).
         self._sorted_exprs: Optional[List[str]] = None
@@ -129,6 +133,9 @@ class SeenWindow:
         # Reading buckets of `variant_entries`, built lazily on the first variant query
         # (mirrors OccurrenceIndex._ensure_variant_index — bare expressions, no cached skeleton).
         self._variant_by_reading: Optional[Dict[str, List[str]]] = None
+        # No lazy view for stem matching: `stem_entries` is already a set of the exact
+        # (expression, reading) pairs _stem_candidates probes for, so unlike the prefix/suffix/
+        # phrase/variant rules there is nothing to reshape at query time.
 
     def _prefix_present(self, expression: str) -> bool:
         """True if some *strictly longer* term has ``expression`` as a prefix. Same binary-search
@@ -248,6 +255,40 @@ class SeenWindow:
             for expr in self._variant_by_reading.get(reading, ())
         )
 
+    def _stem_present(
+        self, expression: str, reading: str, combine_word_forms: bool = False
+    ) -> bool:
+        """Boolean analogue of ``OccurrenceIndex.stem_total``: True if the card's 連用形 or its
+        さ/み/げ nominalization is present (戒める finds 戒め, 遊ぶ finds 遊び, 強い finds 強さ).
+
+        Mirrors BOTH of the counting side's terms, which is what the cross-module drift guard pins:
+        the ``(expression, reading)`` pair in ``stem_entries``, and — under ``combine_word_forms`` —
+        the candidate's bare reading in ``exprs``, the presence analogue of stem_total's
+        ``expr_to_count.get(cand_reading)``. Dropping the second silently diverges from the counting
+        side on any flagset combining stem with combine_word_forms.
+
+        Reads ``stem_entries``, which ``build_seen_day`` only fills when built with
+        ``stem_matching`` — so this answers False on a window built without it. Callers pass the one
+        config flag to both ``get_seen_window`` and ``contains``, keeping the two in step.
+
+        No prefix/suffix dedup guard, for the same reason ``_variant_present`` has none — presence is
+        idempotent — and in any case ``stem_total`` needs no such guard either (see there).
+
+        Probes ``stem_entries`` directly: it is already keyed the way the candidates are, so this is
+        the one rule with no lazy view to build on either side."""
+        candidates = dm._stem_candidates(expression, reading)
+        if not candidates:
+            return False
+        pairs = self.stem_entries
+        for cand in candidates:
+            if cand in pairs:
+                return True
+        if combine_word_forms:
+            for _cand_expr, cand_reading in candidates:
+                if cand_reading in self.exprs:
+                    return True
+        return False
+
     def contains(
         self,
         expression: str,
@@ -258,6 +299,7 @@ class SeenWindow:
         prefix_matching: bool = False,
         suffix_matching: bool = False,
         variant_matching: bool = False,
+        stem_matching: bool = False,
         honorific_folding: bool = False,
         prefolded: bool = False,
         card_kanji: Optional[str] = None,
@@ -295,6 +337,8 @@ class SeenWindow:
                 return True
         if variant_matching and self._variant_present(expression, reading, card_kanji):
             return True
+        if stem_matching and self._stem_present(expression, reading, combine_word_forms):
+            return True
         if honorific_folding:
             if expression in self.honorific_stripped:
                 return True
@@ -305,10 +349,11 @@ class SeenWindow:
 
 def build_seen_day(
     data, normalize_kana: bool = False, honorific_folding: bool = False,
-    variant_matching: bool = False,
-) -> Tuple[Set[str], Set[str], Set[Tuple[str, str]], Set[Tuple[str, str]], Set[Tuple[str, str]], Set[Tuple[str, str]]]:
+    variant_matching: bool = False, stem_matching: bool = False,
+) -> Tuple[Set[str], Set[str], Set[Tuple[str, str]], Set[Tuple[str, str]], Set[Tuple[str, str]], Set[Tuple[str, str]], Set[Tuple[str, str]]]:
     """Parse one day's raw term_meta entries into ``(exprs, honorific_stripped,
-    phrase_entries, suffix_phrase_entries, suru_entries, variant_entries)`` presence sets.
+    phrase_entries, suffix_phrase_entries, suru_entries, variant_entries, stem_entries)``
+    presence sets.
 
     Mirrors the entry parsing of ``dictionary_manager._build_index_from_raw`` (the ``count > 0``
     gate, the ``㋕`` kana-occurrence marker that attributes the entry to its reading, kana
@@ -320,13 +365,16 @@ def build_seen_day(
     ('X<する|じる|ずる>' — kanji head), each a sliver of any dict
     and so retained unconditionally, plus ``variant_entries`` — every kanji-bearing entry, i.e. most of the dict,
     which is why it is gated on ``variant_matching`` rather than always built (retaining it
-    unconditionally cost ~70% on this function). A drift-guard test pins these against the
+    unconditionally cost ~70% on this function) — and ``stem_entries``, gated on ``stem_matching``
+    for the same reason: every entry whose reading differs from its written form is an even larger
+    share of a dict than the kanji-bearing ones. A drift-guard test pins these against the
     counting index's ``get_total(...) >= 1``."""
     exprs: Set[str] = set()
     phrase_entries: Set[Tuple[str, str]] = set()
     suffix_phrase_entries: Set[Tuple[str, str]] = set()
     suru_entries: Set[Tuple[str, str]] = set()
     variant_entries: Set[Tuple[str, str]] = set()
+    stem_entries: Set[Tuple[str, str]] = set()
     for entry in data:
         if not isinstance(entry, list) or len(entry) < 3:
             continue
@@ -373,6 +421,12 @@ def build_seen_day(
                 suru_entries.add((effective, reading))
             if variant_matching and dm._is_variant_entry(effective, reading):
                 variant_entries.add((effective, reading))
+            # Gate mirrors what _stem_candidates can ever probe for: a candidate always carries a
+            # reading distinct from its written form (the card's expression == reading case is
+            # rejected outright), so entries where the two are equal can never be hit and are not
+            # worth retaining.
+            if stem_matching and reading and reading != effective:
+                stem_entries.add((effective, reading))
 
     honorific_stripped: Set[str] = set()
     if honorific_folding:
@@ -383,22 +437,32 @@ def build_seen_day(
             stripped = expr[1:]
             if dm._honorific_fold_allowed(stripped, exprs):
                 honorific_stripped.add(stripped)
-    return exprs, honorific_stripped, phrase_entries, suffix_phrase_entries, suru_entries, variant_entries
+    return (exprs, honorific_stripped, phrase_entries, suffix_phrase_entries, suru_entries,
+            variant_entries, stem_entries)
 
 
 # ---------------------------------------------------------------------------
 # per-day set cache (lite: keyed on source mtime + build-time flags)
 # ---------------------------------------------------------------------------
 
-# (folder_name, mtime, normalize_kana, honorific_folding, variant_matching) -> (exprs,
-# honorific_stripped, phrase_entries, suffix_phrase_entries, suru_entries, variant_entries). mtime
+# How many presence sets build_seen_day returns, and how many BUILD-time flags key the caches
+# (normalize_kana, honorific_folding, variant_matching, stem_matching). Named rather than inlined
+# because get_seen_window slices its cache keys positionally to prune stale windows — hard-coding
+# the width there is what made adding a flag a silent breakage.
+_SEEN_SET_COUNT = 7
+_BUILD_FLAG_COUNT = 4
+
+# (folder_name, mtime, normalize_kana, honorific_folding, variant_matching, stem_matching) ->
+# (exprs, honorific_stripped, phrase_entries, suffix_phrase_entries, suru_entries,
+# variant_entries, stem_entries). mtime
 # self-invalidates on current-day rewrites; the build flags are in the key so a config change
 # rebuilds. prefix_matching / suffix_matching / combine_word_forms are query-time flags (applied in
 # SeenWindow.contains), so they are deliberately NOT part of the build key — the phrase-entry sets
 # are a sliver of any dict, retained unconditionally and only consulted when the matching flag is
-# on. variant_matching IS a build flag: its entry set spans most of the dict, so building it
-# unconditionally would tax every seen lookup for a feature that is off by default.
-_day_cache: Dict[Tuple, Tuple[Set[str], Set[str], Set[Tuple[str, str]], Set[Tuple[str, str]], Set[Tuple[str, str]]]] = {}
+# on. variant_matching and stem_matching ARE build flags: their entry sets span most of the dict,
+# so building them unconditionally would tax every seen lookup for features that are off by default.
+_day_cache: Dict[Tuple, Tuple[Set[str], Set[str], Set[Tuple[str, str]], Set[Tuple[str, str]],
+                              Set[Tuple[str, str]], Set[Tuple[str, str]], Set[Tuple[str, str]]]] = {}
 
 
 def _seen_dict_name(folder: str) -> str:
@@ -419,12 +483,13 @@ def _source_mtime(folder: str) -> Optional[float]:
         return None
 
 
-def _seen_day_for(folder, mtime, normalize_kana, honorific_folding, variant_matching=False):
+def _seen_day_for(folder, mtime, normalize_kana, honorific_folding, variant_matching=False,
+                  stem_matching=False):
     """Cached presence sets (see ``build_seen_day``) for one date folder at a known
     ``mtime``. Rebuilt when the mtime or the build-time flags change. A missing folder/file
     yields empty sets ("nothing seen that day"). Splitting the mtime out lets ``get_seen_window``
     stat each day once and reuse it for both the build and the cache key."""
-    key = (folder, mtime, normalize_kana, honorific_folding, variant_matching)
+    key = (folder, mtime, normalize_kana, honorific_folding, variant_matching, stem_matching)
     cached = _day_cache.get(key)
     if cached is not None:
         return cached
@@ -435,14 +500,15 @@ def _seen_day_for(folder, mtime, normalize_kana, honorific_folding, variant_matc
         del _day_cache[stale]
 
     data = dm._load_term_meta_raw(_seen_dict_name(folder))
-    sets = build_seen_day(data, normalize_kana, honorific_folding, variant_matching) if data is not None else (set(), set(), set(), set(), set(), set())
+    sets = (build_seen_day(data, normalize_kana, honorific_folding, variant_matching, stem_matching)
+            if data is not None else tuple(set() for _ in range(_SEEN_SET_COUNT)))
     _day_cache[key] = sets
     return sets
 
 
 def _merge_seen_days(days) -> "SeenWindow":
     """Union the per-day ``(exprs, honorific_stripped, phrase_entries, suffix_phrase_entries,
-    suru_entries, variant_entries)`` sets into one ``SeenWindow``. Presence is idempotent across days, so a plain
+    suru_entries, variant_entries, stem_entries)`` sets into one ``SeenWindow``. Presence is idempotent across days, so a plain
     union replaces the old additive count merge (and the per-day separation it needed for the
     non-additive reading-mismatch fallback)."""
     exprs: Set[str] = set()
@@ -451,14 +517,16 @@ def _merge_seen_days(days) -> "SeenWindow":
     suffix_phrases: Set[Tuple[str, str]] = set()
     surus: Set[Tuple[str, str]] = set()
     variants: Set[Tuple[str, str]] = set()
-    for de, dh, dp, dsp, dsu, dv in days:
+    stems: Set[Tuple[str, str]] = set()
+    for de, dh, dp, dsp, dsu, dv, dst in days:
         exprs |= de
         honorific |= dh
         phrases |= dp
         suffix_phrases |= dsp
         surus |= dsu
         variants |= dv
-    return SeenWindow(exprs, honorific, phrases, suffix_phrases, surus, variants)
+        stems |= dst
+    return SeenWindow(exprs, honorific, phrases, suffix_phrases, surus, variants, stems)
 
 
 # Merged-window cache: signature (per-day (folder, mtime) + build flags) -> SeenWindow. Keyed on
@@ -496,33 +564,38 @@ def get_seen_window(
     normalize_kana: bool = False,
     honorific_folding: bool = False,
     variant_matching: bool = False,
+    stem_matching: bool = False,
     today: Optional[date] = None,
 ) -> "SeenWindow":
     """Resolve the last ``n`` days (rollover-aware) to a single ``SeenWindow``. Stats each day's
     file once; the window is cached by its (per-day folder+mtime, build flags) signature.
     ``prefix_matching``/``suffix_matching`` are not parameters — the union sets are identical with
     or without them, and the sorted prefix/suffix views are built lazily on the returned object.
-    ``variant_matching`` IS a parameter: its entry set spans most of the dict, so it is only
-    collected when asked for (see ``build_seen_day``). ``today`` injectable for tests."""
+    ``variant_matching`` and ``stem_matching`` ARE parameters: their entry sets span most of the
+    dict, so they are only collected when asked for (see ``build_seen_day``). ``today`` injectable
+    for tests."""
     if n <= 0:
-        return SeenWindow(set(), set(), set(), set(), set(), set())
+        return SeenWindow(*(set() for _ in range(_SEEN_SET_COUNT)))
     if today is None:
         today = today_date()
     folders = [date_to_folder(d) for d in window_dates(today, n)]
     mtimes = [_source_mtime(f) for f in folders]  # one stat per day
-    sig = tuple(zip(folders, mtimes)) + (normalize_kana, honorific_folding, variant_matching)
+    sig = tuple(zip(folders, mtimes)) + (normalize_kana, honorific_folding, variant_matching,
+                                        stem_matching)
     cached = _window_cache.get(sig)
     if cached is not None:
         return cached
-    days = [_seen_day_for(f, m, normalize_kana, honorific_folding, variant_matching) for f, m in zip(folders, mtimes)]
+    days = [_seen_day_for(f, m, normalize_kana, honorific_folding, variant_matching, stem_matching)
+            for f, m in zip(folders, mtimes)]
     window = _merge_seen_days(days)
 
     # Drop any window built over these same days and build flags at an older set of mtimes: a
     # rewrite of today's dict must REPLACE its windows, not stack a fresh one beside every
     # previous version. Mirrors the stale-entry prune in _seen_day_for.
-    identity = (tuple(folders),) + sig[-3:]
+    identity = (tuple(folders),) + sig[-_BUILD_FLAG_COUNT:]
     for stale in [k for k in _window_cache
-                  if (tuple(f for f, _m in k[:-3]),) + k[-3:] == identity]:
+                  if (tuple(f for f, _m in k[:-_BUILD_FLAG_COUNT]),)
+                  + k[-_BUILD_FLAG_COUNT:] == identity]:
         del _window_cache[stale]
 
     if len(_window_cache) >= _WINDOW_CACHE_CAP:

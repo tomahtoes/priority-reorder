@@ -7,6 +7,7 @@ from dictionary_manager import (
     CombinedOccurrenceIndex,
     OccurrenceIndex,
     _build_index_from_raw,
+    _stem_candidates,
     expand_dict_names,
     occurrence_count,
 )
@@ -826,6 +827,140 @@ def test_variant_multi_dict_with_kana_normalization(monkeypatch):
     assert count == 40  # 20 credited from each of the two dicts
 
 
+# --- stem matching (連用形 / さ・み・げ) --------------------------------------
+
+def _stem_index(entries):
+    ix = OccurrenceIndex()
+    for expr, reading, count in entries:
+        ix.add(expr, reading, count)
+    return ix
+
+
+def test_stem_credits_ichidan_verb_from_its_masu_stem():
+    # The motivating case: a 戒める card and a dict that only lists the 連用形 noun 戒め.
+    ix = _stem_index([("戒め", "いましめ", 4)])
+    assert ix.get_total("戒める", "いましめる") == 0
+    assert ix.get_total("戒める", "いましめる", stem_matching=True) == 4
+
+
+def test_stem_credits_godan_verb_via_u_row_to_i_row_shift():
+    ix = _stem_index([("遊び", "あそび", 7), ("待ち", "まち", 5), ("話し", "はなし", 3),
+                      ("泳ぎ", "およぎ", 2)])
+    for expr, reading, expected in [("遊ぶ", "あそぶ", 7), ("待つ", "まつ", 5),
+                                    ("話す", "はなす", 3), ("泳ぐ", "およぐ", 2)]:
+        assert ix.get_total(expr, reading, stem_matching=True) == expected, expr
+
+
+def test_stem_credits_adjective_nominalizations():
+    ix = _stem_index([("強さ", "つよさ", 11), ("痛み", "いたみ", 6), ("寂しげ", "さびしげ", 2)])
+    assert ix.get_total("強い", "つよい", stem_matching=True) == 11
+    assert ix.get_total("痛い", "いたい", stem_matching=True) == 6
+    assert ix.get_total("寂しい", "さびしい", stem_matching=True) == 2
+
+
+def test_stem_sums_every_adjective_nominalizer_present():
+    # さ/み/げ are probed together, so an adjective with more than one derived noun takes all.
+    ix = _stem_index([("強さ", "つよさ", 11), ("強み", "つよみ", 3), ("強げ", "つよげ", 1)])
+    assert ix.get_total("強い", "つよい", stem_matching=True) == 15
+
+
+def test_stem_lets_the_reading_arbitrate_the_conjugation_class():
+    # A る-final card yields BOTH the ichidan (drop る) and godan (る->り) candidates; the index
+    # decides. 起きる is ichidan so only 起き exists, 走る is godan so only 走り does — and the
+    # wrong-class candidate contributes nothing rather than needing a dictionary to rule it out.
+    ix = _stem_index([("起き", "おき", 9), ("走り", "はしり", 4)])
+    assert ix.get_total("起きる", "おきる", stem_matching=True) == 9
+    assert ix.get_total("走る", "はしる", stem_matching=True) == 4
+
+
+def test_stem_requires_the_reading_to_match_the_written_stem():
+    # The exact (expression, reading) probe is the whole safety argument: a homograph stem read
+    # differently is a different word and earns nothing.
+    ix = _stem_index([("戒め", "かいめ", 4)])
+    assert ix.get_total("戒める", "いましめる", stem_matching=True) == 0
+
+
+def test_stem_is_forward_only_and_never_credits_the_dictionary_form():
+    # Deliberate: crediting a 連用形 card from its (far commoner) dictionary form inverts the
+    # priority ordering — 無げ would inherit 無い's count. prefix_matching still covers that
+    # direction for anyone who wants it.
+    ix = _stem_index([("戒める", "いましめる", 40)])
+    assert ix.get_total("戒め", "いましめ", stem_matching=True) == 0
+    assert ix.get_total("戒め", "いましめ", stem_matching=True, prefix_matching=True) == 40
+
+
+def test_stem_rejects_kana_only_cards_where_the_reading_validates_nothing():
+    # expression == reading collapses the pair probe into a single kana lookup, so それる would
+    # take the pronoun それ's entire count. Measured, this gate drops ~49% of the rule's raw
+    # credit and no legitimate matches.
+    ix = _stem_index([("それ", "それ", 99), ("ほう", "ほう", 50), ("のり", "のり", 30)])
+    assert ix.get_total("それる", "それる", stem_matching=True) == 0
+    assert ix.get_total("ほうる", "ほうる", stem_matching=True) == 0
+    assert ix.get_total("のる", "のる", stem_matching=True) == 0
+
+
+def test_stem_requires_the_okurigana_invariant():
+    # The edit is only valid when expression and reading end in the SAME kana — that is what
+    # makes the tail okurigana. A kanji-final card can never qualify.
+    ix = _stem_index([("学", "がく", 5)])
+    assert ix.get_total("学校", "がっこう", stem_matching=True) == 0
+    assert _stem_candidates("学校", "がっこう") == []
+
+
+def test_stem_drops_single_character_candidates():
+    # 見る/見 is correct but rare, while the bare-kanji nouns the wrong class produces (神る->神)
+    # are common and large. The length gate is the same call prefix_total/_suffix_eligible make.
+    ix = _stem_index([("見", "み", 9), ("神", "かみ", 94)])
+    assert ix.get_total("見る", "みる", stem_matching=True) == 0
+    assert ix.get_total("神る", "かみる", stem_matching=True) == 0
+
+
+def test_stem_candidates_survive_empty_and_absent_readings():
+    assert _stem_candidates("", "") == []
+    assert _stem_candidates("戒める", "") == []
+    assert _stem_candidates("", "いましめる") == []
+    ix = _stem_index([("戒め", "いましめ", 4)])
+    assert ix.get_total("", "", stem_matching=True) == 0
+
+
+def test_stem_credits_kana_stem_through_combine_word_forms():
+    # A ㋕ entry is re-keyed under its reading, so the stem's kana form lives in expr_to_count
+    # only. That is stem_total's second term, and it is gated on combine_word_forms like every
+    # other reading-side term in get_total.
+    ix = OccurrenceIndex()
+    ix.add("いましめ", "いましめ", 50)   # as _build_index_from_raw re-keys a ㋕ entry
+    assert ix.get_total("戒める", "いましめる", stem_matching=True) == 0
+    assert ix.get_total("戒める", "いましめる", stem_matching=True,
+                        combine_word_forms=True) == 50
+
+
+def test_stem_does_not_double_count_with_prefix_suffix_or_variant():
+    # Every candidate either shortens the card or replaces its last character, so no other rule
+    # can reach it — this is the one rule in the file that needs no dedup guard. Pinning it here
+    # means a future widening that breaks the property fails loudly.
+    ix = _stem_index([
+        ("戒め", "いましめ", 4),          # the stem itself
+        ("戒めるもの", "いましめるもの", 8),  # prefix candidate for 戒める
+        ("自戒める", "じいましめる", 3),      # suffix candidate for 戒める
+        ("誡める", "いましめる", 5),          # variant candidate (same reading, nesting kanji)
+    ])
+    base = ix.get_total("戒める", "いましめる", prefix_matching=True, suffix_matching=True,
+                        variant_matching=True)
+    withstem = ix.get_total("戒める", "いましめる", prefix_matching=True, suffix_matching=True,
+                            variant_matching=True, stem_matching=True)
+    assert withstem - base == 4   # exactly the stem, counted once
+
+
+def test_stem_total_builds_no_lazy_view():
+    # Unlike every other rule here, stem matching reads only the two eager maps. A stem query
+    # must not materialize the prefix / suffix / variant views.
+    ix = _stem_index([("戒め", "いましめ", 4)])
+    assert ix.get_total("戒める", "いましめる", stem_matching=True) == 4
+    assert ix._prefix_exprs is None
+    assert ix._suffix_revs is None
+    assert ix._variant_index is None
+
+
 # --- CombinedOccurrenceIndex memo eviction ----------------------------------
 
 def test_combined_index_evicts_oldest_when_cap_reached(monkeypatch):
@@ -880,6 +1015,10 @@ def test_combined_index_memo_resets_when_query_flags_change(monkeypatch):
 #   手を貸す / 母の日                     -> the single-kanji head/tail phrase carve-outs
 #   屯する / 察する                       -> the single-kanji suru carve-out (plain + sokuon)
 #   ㋕-marked entry                       -> re-keyed under its reading (combine_word_forms)
+#   戒め / 強さ / 遊び split               -> stem matching (ichidan, adjective, godan), each in a
+#                                           DIFFERENT dict from the card form the probe uses
+#   それ (kana, expr == reading)          -> the stem distinctness gate: a それる card must not
+#                                           reach it, or the pair probe validates nothing
 _EQUIV_DICTS = {
     "A": [
         ["茶", "freq", {"reading": "ちゃ", "value": 10}],
@@ -897,6 +1036,8 @@ _EQUIV_DICTS = {
         # what makes the broad equivalence check sensitive to a honorific fold rebuilt from
         # merged vocabulary rather than summed per dict.
         ["おかず", "freq", {"reading": "おかず", "value": 50}],
+        ["戒め", "freq", {"reading": "いましめ", "value": 4}],      # ichidan stem of 戒める
+        ["それ", "freq", {"reading": "それ", "value": 99}],         # kana: stem gate must exclude
     ],
     "B": [
         ["茶", "freq", {"reading": "さ", "value": 3}],           # same expr, other reading
@@ -907,6 +1048,9 @@ _EQUIV_DICTS = {
         ["屯する", "freq", {"reading": "たむろする", "value": 17}],
         ["察する", "freq", {"reading": "さっする", "value": 23}],   # sokuon branch
         ["学校", "freq", {"reading": "がっこう", "value": 6}],
+        ["強さ", "freq", {"reading": "つよさ", "value": 11}],       # adjective stem of 強い
+        ["いましめ", "freq", {"reading": "いましめ", "value": 50,
+                              "displayValue": "50㋕"}],             # kana stem: combine_word_forms
     ],
     "C": [
         ["ぎりぎり", "freq", {"reading": "ぎりぎり", "value": 8, "displayValue": "8㋕"}],
@@ -914,6 +1058,7 @@ _EQUIV_DICTS = {
         ["茶", "freq", {"reading": "ちゃ", "value": 4}],          # expr+reading also present in A
         ["日", "freq", {"reading": "ひ", "value": 2}],
         ["屯", "freq", {"reading": "たむろ", "value": 6}],        # bare head, other dict than 屯する
+        ["遊び", "freq", {"reading": "あそび", "value": 7}],        # godan stem of 遊ぶ
     ],
     "D": [
         ["茶", "freq", {"value": 33}],                           # no reading at all
@@ -930,11 +1075,14 @@ _EQUIV_PROBES = [
     ("屯", "たむろ"), ("屯", "とん"), ("察", "さつ"),      # suru carve-out: hit, reading miss, sokuon
     ("ぎりぎり", "ぎりぎり"), ("ギリギリ", "ギリギリ"),
     ("かず", "かず"), ("おかず", "おかず"),                # cross-dict honorific fold gate
+    ("戒める", "いましめる"), ("戒め", "いましめ"),        # stem: forward hit, and no reverse
+    ("遊ぶ", "あそぶ"), ("強い", "つよい"), ("痛い", "いたい"),  # godan, adjective, adjective miss
+    ("それる", "それる"), ("のる", "のる"),                # kana cards: distinctness / length gates
     ("存在しない", "そんざいしない"), ("", ""),            # absent everywhere, empty
 ]
 
 _FLAG_NAMES = ("combine_word_forms", "prefix_matching", "suffix_matching",
-               "variant_matching", "honorific_folding")
+               "variant_matching", "stem_matching", "honorific_folding")
 
 
 def _all_flag_combos():
@@ -945,7 +1093,7 @@ def _all_flag_combos():
 def _split_flags(flags):
     """(build-time kwargs, query-time kwargs). honorific_folding is a BUILD flag —
     honorific_to_count only exists when the per-dict indexes were built with it — while the
-    other four are passed per lookup so one merged index serves every combination."""
+    other five are passed per lookup so one merged index serves every combination."""
     return (
         {"honorific_folding": flags["honorific_folding"]},
         {k: v for k, v in flags.items() if k != "honorific_folding"},

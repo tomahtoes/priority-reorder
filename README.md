@@ -165,6 +165,17 @@ Set `"variant_matching": true` in your config to credit a card with the counts o
 - **Kana spellings are excluded** — a kana-only entry has no kanji to share. Enable `combine_word_forms` alongside this if you want those credited too. Entries carrying no reading never match, since the rule identifies a word by its reading.
 - **Default**: `false`. Composes with the other options without double-counting an entry that prefix/suffix matching already credited. Costs nothing while off; when on, each dictionary pays a one-time index build on first use.
 
+#### Stem Matching
+Set `"stem_matching": true` in your config to credit a dictionary-form card with the counts of its **conjugated noun form** — the 連用形 (masu-stem) for verbs, and the `さ`/`み`/`げ` nominalizations for い-adjectives. Occurrence dictionaries list these as separate entries, so a `戒める` card scores zero against a deck that only contains `戒め`.
+
+- **Semantics**: the card's final kana is edited and the result must match a dict entry on **both** expression and reading. Ichidan verbs drop `る` (`戒める`→`戒め`), godan verbs shift the う-row kana to its い-row counterpart (`遊ぶ`→`遊び`, `待つ`→`待ち`, `話す`→`話し`, `泳ぐ`→`泳ぎ`). い-adjectives take all three nominalizers (`強い`→`強さ`/`強み`/`強げ`).
+- **No dictionary needed**: the conjugation class is not looked up. Both the ichidan and godan candidates are generated and the *reading* arbitrates — `起きる` finds `起き` and `走る` finds `走り`, while the wrong-class candidate simply matches nothing.
+- **Forward only**: a `戒め` card is **not** credited by a `戒める` entry. That direction inverts priority ordering — a rare derived form inherits the count of a much commoner base word (`無げ`, seen once, would absorb `無い`'s thousands). Enable `prefix_matching` if you want it anyway.
+- **Gates**: expression and reading must end in the **same kana** (that is what makes the tail okurigana — a kanji-final card like `学校` never qualifies); they must **differ from each other**, so a kana-only card cannot validate a match and `それる` will not absorb the pronoun `それ`; and the derived form must be **≥ 2 characters**, which skips both `見る`→`見` and the noun blowups like `神る`→`神`.
+- **Not covered**: `する` is irregular, so `勉強する` does not reach `勉強し` (it would produce `勉強す`, which matches nothing). `じる`/`ずる` verbs do work — `感じる`→`感じ` — because they inflect as ichidan.
+- **Known imprecision**: a card ending in `る` that is really a past-tense form is caught (`来たる`←`来た`), and a 連用形 noun ending in `い` is treated as an adjective (`囲い`←`囲み`). Measured across 13 dictionaries these were 2 cases in 917 matches.
+- **Default**: `false`. Costs nothing while off, and unlike the other options builds **no index at all** — it reads the exact-match tables directly, so it adds no startup time and no memory.
+
 #### Honorific Folding
 Set `"honorific_folding": true` in your config to credit bare-form cards with the counts of dictionary entries that start with an honorific morpheme (`お`, `ご`, `御`) and whose stripped remainder is the same word. Useful when you want counts for `お茶` or `御社` to also be attributed to the bare forms.
 
@@ -231,7 +242,7 @@ Common in the visual novel you're reading, looks fully known, and will actually 
 ### 4. Recently Seen Words (`seen:`)
 > ⚠️ **Experimental** — `seen:` is a newer, experimental feature and may change or be removed in a future version.
 
-Prioritize words you've encountered recently in your immersion, using *daily* occurrence dictionaries. It's resolved through this addon, so the occurrence options above (`prefix_matching`, `variant_matching`, `kana_normalization`, etc.) apply to `seen:` too.
+Prioritize words you've encountered recently in your immersion, using *daily* occurrence dictionaries. It's resolved through this addon, so the occurrence options above (`prefix_matching`, `variant_matching`, `stem_matching`, `kana_normalization`, etc.) apply to `seen:` too.
 - **Syntax**: `seen:N` matches words appearing in any of the last **N** daily dictionaries. It's boolean — "seen at all", regardless of how many times. A leading `-` negates (`-seen:30`).
 - **Examples**: `seen:1` (today), `seen:7` (appeared in any of the last 7 days).
 - **Day boundaries**: "today" honors Anki's rollover hour ("Next day starts at" setting).

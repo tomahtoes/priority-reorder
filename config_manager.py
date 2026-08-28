@@ -69,6 +69,7 @@ class Config:
     kana_normalization: bool = False
     combine_word_forms: bool = False
     variant_matching: bool = False
+    stem_matching: bool = False
     prefix_matching: bool = False
     suffix_matching: bool = False
     honorific_folding: bool = False
@@ -113,6 +114,7 @@ class Config:
             kana_normalization=_coerce_bool(data, "kana_normalization", False),
             combine_word_forms=_coerce_bool(data, "combine_word_forms", False),
             variant_matching=_coerce_bool(data, "variant_matching", False),
+            stem_matching=_coerce_bool(data, "stem_matching", False),
             prefix_matching=_coerce_bool(data, "prefix_matching", False),
             suffix_matching=_coerce_bool(data, "suffix_matching", False),
             honorific_folding=_coerce_bool(data, "honorific_folding", False),

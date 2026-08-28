@@ -14,14 +14,18 @@ def test_defaults_from_empty_dict():
     assert c.variant_matching is False
     assert c.prefix_matching is False
     assert c.suffix_matching is False
+    assert c.stem_matching is False
     assert c.honorific_folding is False
 
 
 def test_matching_flags_parse_and_reject_non_bools():
-    c = Config.from_dict({"variant_matching": True, "prefix_matching": True})
+    c = Config.from_dict({"variant_matching": True, "prefix_matching": True,
+                          "stem_matching": True})
     assert c.variant_matching is True
     assert c.prefix_matching is True
+    assert c.stem_matching is True
     assert Config.from_dict({"variant_matching": "yes"}).variant_matching is False
+    assert Config.from_dict({"stem_matching": "yes"}).stem_matching is False
 
 
 def test_invalid_mode_falls_back_to_sequential():

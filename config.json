@@ -18,6 +18,7 @@
     "prefix_matching": false,
     "suffix_matching": false,
     "honorific_folding": false,
+    "stem_matching": false,
     "search_fields": {
         "expression_field": "Expression",
         "expression_reading_field": "ExpressionReading"
