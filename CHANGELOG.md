@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-08-30
+- New `compound_matching` occurrence option. Credits a dictionary-form card with the counts of entries *built on its stem*, which no other option can see.
+  - `奮う` picks up `奮い立つ`, `取る` picks up `取り消す`, `受ける` picks up `受け入れる`, `食べる` picks up `食べ物`, `間違う` picks up `間違いない`.
+  - Both the written form and the reading must match, so `抱く`/だく takes `抱きしめる` while `抱く`/いだく does not.
+  - Works on its own (it covers the plain 連用形 too), and counts the shared entry once when `stem_matching` is also on.
+  - Deliberately generous: transitive pairs (`見回る`←`見回す`) and drifted idioms (`当たる`←`当たり前`) come along with the real compounds.
+  - Applies to `occurrences:` and `seen:` alike.
+
 ## 2026-08-28
 - New `kanji:new_reading` search term. Prioritizes words that use a Kanji in a *reading* you haven't learned, not just a new Kanji, so `食べる` (た) still matches after you've learned `食事` (しょく).
   - Takes the same bracketed target as `kanji:new`. `kanji:new_reading[3]>=1` counts a reading as new until 3 learned words use it.

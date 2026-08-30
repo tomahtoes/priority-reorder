@@ -179,7 +179,7 @@ def test_partial_section_is_backfilled_with_defaults():
     assert migrated["matching"]["variant_matching"] is False
     assert set(migrated["matching"]) == {
         "kana_normalization", "combine_word_forms", "variant_matching", "stem_matching",
-        "prefix_matching", "suffix_matching", "honorific_folding",
+        "compound_matching", "prefix_matching", "suffix_matching", "honorific_folding",
     }
 
 

@@ -455,6 +455,44 @@ def test_variant_index_not_built_when_flag_off(capsys):
     assert idx._variant_index is not None
 
 
+def test_compound_index_not_built_when_flag_off(capsys):
+    """Compound matching is the one lazy view stem matching does not build, so a stem-only lookup
+    must not pay for it (and vice versa: the sweep must not drag in the variant index)."""
+    idx = _variant_bench_index(20_000)
+    for _ in range(1000):
+        idx.get_total("日00001る", "よみ00001る", prefix_matching=True, suffix_matching=True,
+                      stem_matching=True)
+    assert idx._stem_compound_keys is None
+    idx.get_total("日00001る", "よみ00001る", compound_matching=True)
+    assert idx._stem_compound_keys is not None
+    assert idx._variant_index is None
+
+
+def test_compound_total_scales_with_the_stem_range_not_index_size(capsys):
+    """stem_compound_total sweeps the entries under one stem, so its cost is O(that range) plus a
+    binary search, NOT O(index). Unlike prefix_total there is no cumsum to collapse the range,
+    which is why this is worth pinning: the rule is only affordable while a stem's range stays
+    small, and the sweep must not degrade into a scan as the dictionary grows."""
+    SMALL, LARGE = 5_000, 50_000
+    small = _variant_bench_index(SMALL)
+    large = _variant_bench_index(LARGE)
+
+    def timed(idx, reps=2000):
+        idx.stem_compound_total("日00001る", "よみ00001る")  # warm the lazy view
+        t0 = time.perf_counter()
+        for _ in range(reps):
+            idx.stem_compound_total("日00001る", "よみ00001る")
+        return (time.perf_counter() - t0) * 1000
+
+    small_ms = timed(small)
+    large_ms = timed(large)
+    print(f"\nstem_compound_total: {SMALL} terms {small_ms:.1f} ms, "
+          f"{LARGE} terms {large_ms:.1f} ms (2000 reps)")
+    assert large_ms < small_ms * 3, (
+        f"cost grew with index size ({small_ms:.1f} -> {large_ms:.1f} ms for 10x the terms)"
+    )
+
+
 def test_stem_matching_builds_no_index_at_all(capsys):
     """Stem matching reads only the two EAGER maps, so unlike every other rule it has no
     view to build: a stem lookup must leave the prefix, suffix and variant views untouched,

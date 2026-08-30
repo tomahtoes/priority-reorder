@@ -126,7 +126,15 @@ These flags all change how a card is credited with dictionary occurrences. They 
 - **Rule**: the card's final kana is edited and the result must match a dict entry on **both** expression and reading. Ichidan verbs drop `る` (`戒める`→`戒め`), godan verbs shift う-row to い-row (`待つ`→`待ち`, `話す`→`話し`). The conjugation class is not looked up. Both candidates are tried and the reading decides, so the wrong one simply finds nothing.
 - **Direction**: forward only. A `戒め` card is **not** credited by a `戒める` entry, because a rare derived form would inherit the count of a far commoner base word and jump the queue (`無げ` would absorb `無い`'s). Turn on `matching.prefix_matching` if you want that direction.
 - **Gates**: the expression and reading must end in the *same* kana (that is what makes the tail okurigana), they must differ from each other (a kana-only card has nothing to validate against, so `それる` cannot absorb `それ`), and the derived form must be ≥ 2 chars (so `見る`→`見` and `神る`→`神` are both skipped).
-- **Not covered**: `する` is irregular, so `勉強する` does not reach `勉強し`. `じる`/`ずる` verbs do work (`感じる`→`感じ`), since they inflect as ichidan.
+- **Not covered**: `する` is irregular, so `勉強する` does not reach `勉強し`. `じる`/`ずる` verbs do work (`感じる`→`感じ`), since they inflect as ichidan. A compound *built on* the stem (`奮い立つ`) needs `matching.compound_matching` below.
+- **Default**: `false`
+
+### `matching.compound_matching` (bool)
+- **Description**: Credits a dictionary-form card with the counts of entries that **compound on its stem**, which is where most verb vocabulary lives. Card `奮う` picks up `奮い立つ`, `取る` picks up `取り消す`/`取り扱い`, `受ける` picks up `受け入れる`, `食べる` picks up `食べ物`, `間違う` picks up `間違いない`.
+- **Rule**: same stem candidates as `matching.stem_matching`, but taken as a prefix rather than an exact match. The entry must start with the stem on **both** sides, so `抱く`/だく takes `抱きしめる`/だきしめる while `抱く`/いだく takes nothing.
+- **Standalone**: covers the exact stem itself as well, so this option alone is enough (`取る` gets both `取り` and `取り消す`). With `matching.stem_matching` on too, the exact stem is counted once, not twice.
+- **Overlap**: entries that start with the card as written (`食べる`←`食べるもの`) belong to `matching.prefix_matching` and are only credited when *that* option is on, so the two never double-count.
+- **Looseness**: the credit is deliberately generous. Transitive pairs cross over (`見回る`←`見回す`), idioms ride along (`当たる`←`当たり前`), and a rare base can inherit a big count (`生く`/いく, seen twice in the author's dicts, takes `生きる`'s compounds). Across 12 dictionaries it moved 942 of 9,877 eligible entries, a median of +9 counts.
 - **Default**: `false`
 
 ### `matching.honorific_folding` (bool)

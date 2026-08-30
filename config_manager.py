@@ -23,6 +23,7 @@ _GROUPS = {
         "combine_word_forms": False,
         "variant_matching": False,
         "stem_matching": False,
+        "compound_matching": False,
         "prefix_matching": False,
         "suffix_matching": False,
         "honorific_folding": False,
@@ -196,6 +197,7 @@ class Config:
     combine_word_forms: bool = False
     variant_matching: bool = False
     stem_matching: bool = False
+    compound_matching: bool = False
     prefix_matching: bool = False
     suffix_matching: bool = False
     honorific_folding: bool = False
@@ -246,6 +248,7 @@ class Config:
             combine_word_forms=_coerce_bool(matching, "combine_word_forms", False),
             variant_matching=_coerce_bool(matching, "variant_matching", False),
             stem_matching=_coerce_bool(matching, "stem_matching", False),
+            compound_matching=_coerce_bool(matching, "compound_matching", False),
             prefix_matching=_coerce_bool(matching, "prefix_matching", False),
             suffix_matching=_coerce_bool(matching, "suffix_matching", False),
             honorific_folding=_coerce_bool(matching, "honorific_folding", False),

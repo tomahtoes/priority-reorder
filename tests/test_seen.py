@@ -125,10 +125,10 @@ def test_today_date_after_rollover_is_same_day():
 # SeenWindow.contains: presence + parity with counting
 
 def _build_window(day_raws, normalize_kana=False, honorific_folding=False, variant_matching=False,
-                  stem_matching=False):
+                  stem_matching=False, compound_matching=False):
     days = [
         seen_manager.build_seen_day(d, normalize_kana, honorific_folding, variant_matching,
-                                    stem_matching)
+                                    stem_matching, compound_matching)
         for d in day_raws
     ]
     return seen_manager._merge_seen_days(days)
@@ -278,6 +278,35 @@ def test_seen_stem_entries_only_collected_when_asked():
                                                            stem_matching=True)
 
 
+def test_seen_window_compound_matching():
+    # Boolean mirror of stem_compound_total: 奮い立つ marks a 奮う card as seen, and the entry
+    # must validate on both sides, so the same compound leaves a 奮う card read differently alone.
+    raw = [[["奮い立つ", "freq", {"reading": "ふるいたつ", "frequency": {"value": 16}}]]]
+    window = _build_window(raw, compound_matching=True)
+    assert not window.contains("奮う", "ふるう")
+    assert window.contains("奮う", "ふるう", compound_matching=True)
+    assert not window.contains("奮う", "ふんう", compound_matching=True)
+
+
+def test_seen_compound_concedes_card_prefixes_like_the_counting_side():
+    # The counting rule hands entries beginning with the card expression to prefix_total
+    # unconditionally, so with prefix_matching off nothing credits them and presence must be
+    # False. Mirroring this is what keeps the parity sweep honest.
+    raw = [[["食べるもの", "freq", {"reading": "たべるもの", "frequency": {"value": 30}}]]]
+    window = _build_window(raw, compound_matching=True)
+    assert not window.contains("食べる", "たべる", compound_matching=True)
+    assert window.contains("食べる", "たべる", compound_matching=True, prefix_matching=True)
+
+
+def test_seen_stem_entries_collected_for_compound_matching_too():
+    # stem_entries serves both rules, so either build flag fills it.
+    raw = [[["奮い立つ", "freq", {"reading": "ふるいたつ", "frequency": {"value": 16}}]]]
+    assert _build_window(raw).stem_entries == set()
+    assert not _build_window(raw).contains("奮う", "ふるう", compound_matching=True)
+    assert _build_window(raw, compound_matching=True).stem_entries == {("奮い立つ", "ふるいたつ")}
+    assert _build_window(raw, stem_matching=True).stem_entries == {("奮い立つ", "ふるいたつ")}
+
+
 def test_seen_stem_entries_skip_forms_reading_cannot_validate():
     # The gate mirrors what _stem_candidates can ever probe for: a candidate always carries a
     # reading distinct from its written form, so a kana entry (expression == reading) is dead
@@ -343,6 +372,12 @@ def test_seen_contains_matches_counting_presence_incl_homograph():
             # without this row the boolean twin could drop that term and still agree.
             ["かすめ", "freq", {"reading": "かすめ", "frequency": {"value": 13},
                                 "displayValue": "13㋕"}],
+            # compound rule: a compound on 奮う's stem, one on 食べる's that the card-prefix
+            # concession must exclude, and an okurigana variant of the 立ち止る card, which is
+            # where the compound and variant rules can both reach the same entry
+            ["奮い立つ", "freq", {"reading": "ふるいたつ", "frequency": {"value": 16}}],
+            ["食べるもの", "freq", {"reading": "たべるもの", "frequency": {"value": 30}}],
+            ["立ち止まる", "freq", {"reading": "たちどまる", "frequency": {"value": 109}}],
         ],
     ]
     cards = [("下駄", "げた"), ("角", "かど"), ("茶", "ちゃ"), ("下駄箱", "げたばこ"),
@@ -365,7 +400,11 @@ def test_seen_contains_matches_counting_presence_incl_homograph():
              # must stay uncredited, a miss, and the two gated kana shapes
              ("戒める", "いましめる"), ("遊ぶ", "あそぶ"), ("強い", "つよい"),
              ("戒め", "いましめ"), ("痛い", "いたい"),
-             ("それる", "それる"), ("のる", "のる"), ("掠める", "かすめる")]
+             ("それる", "それる"), ("のる", "のる"), ("掠める", "かすめる"),
+             # compound rule: a hit, the card-prefix concession, the variant overlap, and the
+             # reverse direction, which stays uncredited like the stem rule's
+             ("奮う", "ふるう"), ("食べる", "たべる"), ("立ち止る", "たちどまる"),
+             ("奮い立つ", "ふるいたつ")]
     flagsets = [
         {},
         {"prefix_matching": True},
@@ -391,13 +430,25 @@ def test_seen_contains_matches_counting_presence_incl_homograph():
         {"stem_matching": True, "variant_matching": True, "combine_word_forms": True},
         {"stem_matching": True, "variant_matching": True, "prefix_matching": True,
          "suffix_matching": True, "combine_word_forms": True, "honorific_folding": True},
+        {"compound_matching": True},
+        {"compound_matching": True, "prefix_matching": True},
+        {"compound_matching": True, "suffix_matching": True},
+        {"compound_matching": True, "combine_word_forms": True},
+        # The two dedup guards: with either partner rule running, the entry it owns must be
+        # conceded rather than answered twice, and presence must still agree with the total.
+        {"compound_matching": True, "stem_matching": True},
+        {"compound_matching": True, "variant_matching": True},
+        {"compound_matching": True, "stem_matching": True, "variant_matching": True,
+         "prefix_matching": True, "suffix_matching": True, "combine_word_forms": True,
+         "honorific_folding": True},
     ]
     for fs in flagsets:
         honor = fs.get("honorific_folding", False)
         variant = fs.get("variant_matching", False)
         stem = fs.get("stem_matching", False)
+        compound = fs.get("compound_matching", False)
         window = _build_window(raws, honorific_folding=honor, variant_matching=variant,
-                               stem_matching=stem)
+                               stem_matching=stem, compound_matching=compound)
         day_indices = [dm._build_index_from_raw(r, honorific_folding=honor) for r in raws]
         for e, r in cards:
             assert window.contains(e, r, **fs) == _ref_seen(day_indices, e, r, **fs), (e, r, fs)

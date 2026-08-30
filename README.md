@@ -191,6 +191,16 @@ Set `"stem_matching": true` in your config to credit a dictionary-form card with
 - **Known imprecision**: a card ending in `る` that is really a past-tense form is caught (`来たる`←`来た`), and a 連用形 noun ending in `い` is treated as an adjective (`囲い`←`囲み`). Measured across 13 dictionaries these were 2 cases in 917 matches.
 - **Default**: `false`. Costs nothing while off, and unlike the other options builds **no index at all**. It reads the exact-match tables directly, so it adds no startup time and no memory.
 
+#### Compound Matching
+Set `"compound_matching": true` in your config to credit a dictionary-form card with the counts of entries **built on its stem**. This is where most verb vocabulary actually lives: a dict listing `奮い立つ` says nothing about `奮う` under any other option, because the compound neither starts nor ends with `奮う` and does not share its reading.
+
+- **Semantics**: the same 連用形 and `さ`/`み`/`げ` candidates stem matching derives, taken as a prefix instead of an exact match. `奮う` reaches `奮い立つ`, `取る` reaches `取り消す` and `取り扱い`, `受ける` reaches `受け入れる`, `食べる` reaches `食べ物`, `間違う` reaches `間違いない`/`間違いなく`.
+- **Both sides must match**: the entry starts with the stem's written form *and* its reading. That is what keeps `抱く`/いだく off `抱きしめる`/だきしめる while `抱く`/だく takes it.
+- **Standalone**: this option also covers the exact stem, so it works on its own. Run it with `stem_matching` and the shared entry is counted once.
+- **No overlap with prefix matching**: entries starting with the card as written (`食べる`←`食べるもの`) stay with `prefix_matching` whether or not it is on, so turning this on never smuggles in prefix behavior.
+- **How loose it is**: measured across 12 dictionaries, 942 of 9,877 eligible entries gained something, a median of +9 counts. The gains are real compounds, but the rule cannot tell a compound from a relative: transitive pairs cross over (`見回る`←`見回す`, `起こる`←`起こす`), drifted idioms ride along (`当たる`←`当たり前`), and a rare base form can inherit a common word's count (`生く`/いく, seen twice, absorbs `生きる`'s compounds). Kana-only cards are excluded by the same gate stem matching uses, so loanwords are safe.
+- **Default**: `false`. Costs nothing while off; when on, each dictionary sorts its entry keys once on first use.
+
 #### Honorific Folding
 Set `"honorific_folding": true` in your config to credit bare-form cards with the counts of dictionary entries that start with an honorific morpheme (`お`, `ご`, `御`) and whose stripped remainder is the same word. Useful when you want counts for `お茶` or `御社` to also be attributed to the bare forms.
 
@@ -257,7 +267,7 @@ Common in the visual novel you're reading, looks fully known, and will actually 
 ### 4. Recently Seen Words (`seen:`)
 > ⚠️ **Experimental**: `seen:` is a newer feature and may change or be removed in a future version.
 
-Prioritize words you've encountered recently in your immersion, using *daily* occurrence dictionaries. It's resolved through this addon, so the `matching` options above (`prefix_matching`, `variant_matching`, `stem_matching`, `kana_normalization`, etc.) apply to `seen:` too.
+Prioritize words you've encountered recently in your immersion, using *daily* occurrence dictionaries. It's resolved through this addon, so the `matching` options above (`prefix_matching`, `variant_matching`, `stem_matching`, `compound_matching`, `kana_normalization`, etc.) apply to `seen:` too.
 - **Syntax**: `seen:N` matches words appearing in any of the last **N** daily dictionaries. It's boolean, meaning "seen at all" regardless of how many times. A leading `-` negates (`-seen:30`).
 - **Examples**: `seen:1` (today), `seen:7` (appeared in any of the last 7 days).
 - **Day boundaries**: "today" honors Anki's rollover hour ("Next day starts at" setting).

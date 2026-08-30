@@ -11,6 +11,7 @@
         "combine_word_forms": false,
         "variant_matching": false,
         "stem_matching": false,
+        "compound_matching": false,
         "prefix_matching": false,
         "suffix_matching": false,
         "honorific_folding": false

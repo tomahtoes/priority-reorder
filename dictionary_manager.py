@@ -200,6 +200,9 @@ class OccurrenceIndex:
         # reading -> the kanji-bearing forms carrying it, as (expression, count). No skeleton
         # is cached; see _ensure_variant_index.
         self._variant_index: Optional[Dict[str, List[Tuple[str, int]]]] = None
+        # The (expression, reading) keys sorted, with their expressions alongside for the bisect.
+        self._stem_compound_keys: Optional[List[Tuple[str, str]]] = None
+        self._stem_compound_exprs: List[str] = []
 
     def add(self, expression: str, reading: Optional[str], count: int) -> None:
         if reading:
@@ -462,6 +465,110 @@ class OccurrenceIndex:
                 total += self.expr_to_count.get(cand_reading, 0)
         return total
 
+    def _ensure_stem_compound_index(self) -> None:
+        """Sort the (expression, reading) keys, keeping the expressions in a parallel list.
+
+        Two lists of pointers, not a materialized (expr, reading, count) row per entry: the keys
+        are the dict's own tuples and the expressions its own strings, so the view costs the two
+        lists and nothing else. On a merged index, an order of magnitude larger than a single
+        dict, that difference is the whole memory cost of the rule."""
+        if self._stem_compound_keys is not None:
+            return
+        keys = sorted(self.expr_reading_to_count)
+        self._stem_compound_keys = keys
+        self._stem_compound_exprs = [key[0] for key in keys]
+
+    def stem_compound_total(
+        self,
+        expression: str,
+        reading: str,
+        *,
+        card_kanji: Optional[str] = None,
+        stem_matching: bool = False,
+        variant_matching: bool = False,
+    ) -> int:
+        """Sum the counts of entries that COMPOUND on the card's stem: same 連用形 and さ/み/げ
+        candidates as stem_total, but taken as a prefix rather than probed exactly, so a 奮う card
+        reaches 奮い立つ and a 取る card reaches 取り消す. Occurrence dicts list those as their own
+        entries, and no other rule can see them: 奮い立つ neither starts nor ends with 奮う, and
+        its reading is not the card's, so prefix, suffix and variant matching all miss it.
+
+        Both sides must match. The entry's expression starts with the candidate expression AND its
+        reading with the candidate reading, which is what keeps a 抱く/いだく card off 抱きしめる
+        while the 抱く/だく card takes it.
+
+        Four gates beyond that, none of them optional:
+
+          * Entries that start with the CARD expression are skipped unconditionally, not just
+            under prefix_matching. They belong to prefix_total (and the card itself to get), and
+            crediting them here would make this rule a silent superset of prefix matching for
+            る-final cards, whose ichidan candidate 食べ swallows every 食べる… entry. Only that
+            candidate can reach them: the godan and adjective candidates REPLACE the final
+            character, so their range and the card's cannot overlap.
+          * ``entry_expr == entry_reading`` is skipped. _build_index_from_raw re-keys every '㋕'
+            entry under its reading, so the pair map is full of (kana, kana) entries that validate
+            nothing. They are combine_word_forms' bridge, not this rule's.
+          * ``stem_matching`` is a DEDUP GUARD, in the sense variant_total uses the term, not a
+            widening knob. It skips the one entry stem_total already credits, and only when that
+            rule is running: with stem_matching off this rule covers the exact stem itself, so it
+            is a superset of stem_total's expression-side term rather than a hole beside it. The
+            test is on the PAIR, since an entry spelled like the stem but read longer
+            (戒め/いましめる) is invisible to stem_total's exact probe and belongs here.
+          * ``variant_matching`` is the second dedup guard. The ichidan candidate reading is the
+            card's reading minus its last kana, so an entry carrying the card's exact reading can
+            sit inside the swept range and be credited by variant_total too. Okurigana variants
+            are where this bites (立ち止る card, 立ち止まる entry).
+
+        Candidates are swept shortest first, and one whose expression AND reading both extend an
+        already-swept candidate is skipped: for a る-final card the godan range (食べり/たべり)
+        nests inside the ichidan one (食べ/たべ), so its matches would be counted twice. The check
+        has to be dynamic rather than 'sweep the ichidan one', because _MIN_STEM_LENGTH can drop
+        the ichidan candidate (見る -> 見) and leave the godan sweep to run alone. The three
+        adjective candidates are pairwise disjoint.
+
+        Nothing else double-counts. suffix_total would need an entry both beginning with the stem
+        and ending with the whole base form; honorific_to_count sums 'お|ご|御 + expression'
+        entries, which begin with the honorific; the single-kanji carve-outs are unreachable,
+        since a 1-character card either fails _stem_candidates' okurigana invariant or yields a
+        candidate below _MIN_STEM_LENGTH.
+
+        Reads only expr_reading_to_count, a plain per-dict sum, and never routes through
+        ``self.get``, so sum_d stem_compound_total_d == stem_compound_total_merged."""
+        candidates = _stem_candidates(expression, reading)
+        if not candidates:
+            return 0
+        self._ensure_stem_compound_index()
+        keys = self._stem_compound_keys
+        exprs = self._stem_compound_exprs
+        pair_counts = self.expr_reading_to_count
+        if card_kanji is None and variant_matching:
+            card_kanji = _kanji_skeleton(expression)
+        total = 0
+        swept: List[Tuple[str, str]] = []
+        for cand_expr, cand_reading in sorted(candidates, key=lambda pair: len(pair[0])):
+            if any(cand_expr.startswith(expr) and cand_reading.startswith(read)
+                   for expr, read in swept):
+                continue
+            swept.append((cand_expr, cand_reading))
+            # Same U+10FFFF sentinel as prefix_total: U+FFFF would sort before terms whose next
+            # character is a supplementary-plane kanji.
+            lo = bisect.bisect_left(exprs, cand_expr)
+            hi = bisect.bisect_left(exprs, cand_expr + chr(0x10FFFF))
+            for position in range(lo, hi):
+                key = keys[position]
+                entry_expr, entry_reading = key
+                if entry_expr.startswith(expression) or entry_expr == entry_reading:
+                    continue
+                if not entry_reading.startswith(cand_reading):
+                    continue
+                if stem_matching and entry_expr == cand_expr and entry_reading == cand_reading:
+                    continue
+                if (variant_matching and entry_reading == reading and card_kanji
+                        and _variant_kanji_compatible(card_kanji, _kanji_skeleton(entry_expr))):
+                    continue
+                total += pair_counts[key]
+        return total
+
     def get(self, expression: str, reading: str) -> int:
         if (expression, reading) in self.expr_reading_to_count:
             return self.expr_reading_to_count[(expression, reading)]
@@ -477,11 +584,13 @@ class OccurrenceIndex:
         suffix_matching: bool = False,
         variant_matching: bool = False,
         stem_matching: bool = False,
+        compound_matching: bool = False,
         honorific_folding: bool = False,
         card_kanji: Optional[str] = None,
     ) -> int:
-        """``card_kanji`` is forwarded to variant_total as a precomputed skeleton. An optimization
-        hint only, and it must match what variant_total would derive from ``expression``."""
+        """``card_kanji`` is forwarded to variant_total and stem_compound_total as a precomputed
+        skeleton. An optimization hint only, and it must match what those would derive from
+        ``expression``."""
         total = self.get(expression, reading)
         reading_is_distinct = bool(reading) and reading != expression
         if combine_word_forms and reading_is_distinct:
@@ -517,6 +626,17 @@ class OccurrenceIndex:
             total += self.stem_total(
                 expression, reading, combine_word_forms=combine_word_forms
             )
+        if compound_matching:
+            # No reading-side term and no combine_word_forms term. Both would mean sweeping the
+            # kana stem, and the kana-keyed entries a sweep would find are exactly the ones the
+            # rule's second gate throws out.
+            total += self.stem_compound_total(
+                expression,
+                reading,
+                card_kanji=card_kanji,
+                stem_matching=stem_matching,
+                variant_matching=variant_matching,
+            )
         if honorific_folding:
             # honorific_to_count credits the bare form from an 'お/ご/御 + form' entry, which is a
             # strict written suffix of that entry. So when the expression is suffix-eligible,
@@ -550,10 +670,10 @@ class CombinedOccurrenceIndex(OccurrenceIndex):
 
     A drift-guard test pins merged totals against the per-dict sum across every flag combination.
 
-    Only the two BUILD-time flags are constructor state. combine/prefix/suffix/variant/stem are
-    query-time flags that neither the fold nor any lazy view reads, so an index built under one
+    Only the two BUILD-time flags are constructor state. combine/prefix/suffix/variant/stem/
+    compound are query-time flags that neither the fold nor any lazy view reads, so an index built under one
     combination is byte-identical to one built under another. Keeping them in the cache key left
-    up to 32 identical merged copies of every dictionary resident after a few config flips, and a
+    up to 64 identical merged copies of every dictionary resident after a few config flips, and a
     merged copy is an order of magnitude larger than a single-dict index."""
 
     def __init__(self, dict_names: List[str], normalize_kana: bool = False, honorific_folding: bool = False) -> None:
@@ -571,7 +691,7 @@ class CombinedOccurrenceIndex(OccurrenceIndex):
         # run but not for the object's lifetime, so the memo is dropped when they change
         # rather than widening every key.
         self._memo: Dict[Tuple[str, str], int] = {}
-        self._memo_flags: Optional[Tuple[bool, bool, bool, bool, bool]] = None
+        self._memo_flags: Optional[Tuple[bool, bool, bool, bool, bool, bool]] = None
 
     def _fold(self) -> None:
         """Merge every dictionary into this index. Lazy, so a combined index that is never
@@ -633,6 +753,7 @@ class CombinedOccurrenceIndex(OccurrenceIndex):
         suffix_matching: bool = False,
         variant_matching: bool = False,
         stem_matching: bool = False,
+        compound_matching: bool = False,
     ) -> int:
         """Flag-inclusive total across every dict for one card, memoized per card. The entry
         point ``occurrence_count`` and ``occurrence_counter`` use.
@@ -641,14 +762,14 @@ class CombinedOccurrenceIndex(OccurrenceIndex):
         ``normalize_kana`` is set. The callers do that unconditionally before reaching either
         path, and the indexes are keyed on folded strings.
 
-        The five query-time flags are arguments rather than constructor state so the merged
+        The six query-time flags are arguments rather than constructor state so the merged
         index can be shared across flag combinations (see the class docstring).
         ``honorific_folding`` stays on the instance because it is a build flag, and
         ``honorific_to_count`` is only populated when the per-dict indexes were built with it.
 
         ``card_kanji`` is an optional precomputed skeleton. See ``variant_total``."""
         flags = (combine_word_forms, prefix_matching, suffix_matching, variant_matching,
-                 stem_matching)
+                 stem_matching, compound_matching)
         memo = self._memo
         if flags != self._memo_flags:
             # Run-fixed in practice; this only fires when a config flag is flipped between
@@ -667,7 +788,7 @@ class CombinedOccurrenceIndex(OccurrenceIndex):
         # Derived after the memo check so repeat lookups don't pay for it, and skipped when
         # the caller already has it. to_hiragana leaves CJK ideographs untouched, so this is
         # identical whether or not the caller folded (see the precondition above).
-        if card_kanji is None and variant_matching:
+        if card_kanji is None and (variant_matching or compound_matching):
             card_kanji = _kanji_skeleton(expression)
 
         total_count = self.get_total(
@@ -678,6 +799,7 @@ class CombinedOccurrenceIndex(OccurrenceIndex):
             suffix_matching=suffix_matching,
             variant_matching=variant_matching,
             stem_matching=stem_matching,
+            compound_matching=compound_matching,
             honorific_folding=self.honorific_folding,
             card_kanji=card_kanji,
         )
@@ -796,10 +918,11 @@ def _build_index_from_raw(data: list, normalize_kana: bool = False, honorific_fo
 def get_occurrence_index(dict_name: str, normalize_kana: bool = False, honorific_folding: bool = False) -> OccurrenceIndex:
     """Parsed index for one dictionary, memoized for the session.
 
-    Only the two BUILD-time flags key this cache. prefix/suffix/variant/stem matching are
-    query-time flags whose indexes are lazy views derived from expr_to_count and
-    expr_reading_to_count (stem matching has no view at all), so an index built with them off
-    is identical to one built with them on. Keying on them left up to 16 byte-identical copies
+    Only the two BUILD-time flags key this cache. prefix/suffix/variant/stem/compound matching
+    are query-time flags whose indexes are lazy views derived from expr_to_count and
+    expr_reading_to_count (stem matching has no view at all; compound matching sorts the pair
+    keys), so an index built with them off is identical to one built with them on. Keying on
+    them left up to 32 byte-identical copies
     of the same dictionary resident after a few flag flips (8.1 MB per dict with every view
     built)."""
     data = _load_term_meta_raw(dict_name)
@@ -848,6 +971,7 @@ def occurrence_counter(
     suffix_matching: bool = False,
     variant_matching: bool = False,
     stem_matching: bool = False,
+    compound_matching: bool = False,
     honorific_folding: bool = False,
     prefolded: bool = False,
 ):
@@ -857,7 +981,7 @@ def occurrence_counter(
     Semantically identical to ``occurrence_count``, which is a one-shot wrapper around this,
     so the two cannot drift. Only the placement of the work differs. Doing it per card cost
     the dict-name tuple allocation, an ``lru_cache`` probe on a seven-element key, and a
-    nine-way keyword binding, together 79% of the warm multi-dict path. Callers evaluating
+    ten-way keyword binding, together 79% of the warm multi-dict path. Callers evaluating
     many notes against one term should build the counter once and call it per note.
 
     ``prefolded`` says the caller already kana-folded both strings, making the fold here a
@@ -880,6 +1004,7 @@ def occurrence_counter(
                 suffix_matching=suffix_matching,
                 variant_matching=variant_matching,
                 stem_matching=stem_matching,
+                compound_matching=compound_matching,
                 honorific_folding=honorific_folding,
                 card_kanji=card_kanji,
             )
@@ -903,6 +1028,7 @@ def occurrence_counter(
             suffix_matching=suffix_matching,
             variant_matching=variant_matching,
             stem_matching=stem_matching,
+            compound_matching=compound_matching,
         )
 
     return count
@@ -919,12 +1045,13 @@ def occurrence_count(
     suffix_matching: bool = False,
     variant_matching: bool = False,
     stem_matching: bool = False,
+    compound_matching: bool = False,
     honorific_folding: bool = False,
     prefolded: bool = False,
     card_kanji: Optional[str] = None,
 ) -> int:
     """Total occurrence count for ``(expression, reading)`` across ``dict_names``, honoring all
-    seven lookup flags. Callers must ensure expression and reading are present. A note missing
+    eight lookup flags. Callers must ensure expression and reading are present. A note missing
     either should be treated as a non-match upstream rather than fed a 0 here.
 
     One-shot convenience wrapper over ``occurrence_counter``. Anything evaluating more than a
@@ -937,6 +1064,7 @@ def occurrence_count(
         suffix_matching=suffix_matching,
         variant_matching=variant_matching,
         stem_matching=stem_matching,
+        compound_matching=compound_matching,
         honorific_folding=honorific_folding,
         prefolded=prefolded,
     )(expression, reading, card_kanji)

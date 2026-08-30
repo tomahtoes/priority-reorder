@@ -335,13 +335,13 @@ def test_occ_predicate_forwards_all_matching_flags(fake_col, monkeypatch):
     monkeypatch.setattr(dmod, "occurrence_counter", fake_occurrence_counter)
     cfg = Config(kana_normalization=True, combine_word_forms=True, prefix_matching=True,
                  suffix_matching=True, variant_matching=True, stem_matching=True,
-                 honorific_folding=True)
+                 compound_matching=True, honorific_folding=True)
     DataManager(cfg).get_cards_from_search("deck:X occurrences:D>5")
     matching_flags = {k: v for k, v in built.items() if k != "prefolded"}
     assert matching_flags == dict(normalize_kana=True, combine_word_forms=True,
                                   prefix_matching=True, suffix_matching=True,
                                   variant_matching=True, stem_matching=True,
-                                  honorific_folding=True)
+                                  compound_matching=True, honorific_folding=True)
     # The note is folded and skeletonized once per run and handed down, so the counter
     # must be told not to redo either (see DataManager._note_derived).
     assert built["prefolded"] is True
@@ -413,15 +413,15 @@ def test_custom_seen_term_fast_path_filters_via_window(fake_col, monkeypatch):
     built = []
     monkeypatch.setattr(
         dmod.seen_manager, "get_seen_window",
-        lambda n, kana, honorific, variant, stem, today=None:
-            built.append((n, kana, honorific, variant, stem)) or window,
+        lambda n, kana, honorific, variant, stem, compound, today=None:
+            built.append((n, kana, honorific, variant, stem, compound)) or window,
     )
 
     cfg = Config(prefix_matching=True)
     res = DataManager(cfg).get_cards_from_search("deck:X seen:3")
 
     assert [c.card_id for c in res.cards] == [1]
-    assert built == [(3, False, False, False, False)]  # window resolved once
+    assert built == [(3, False, False, False, False, False)]  # window resolved once
     assert [c[:2] for c in window.calls] == [("下駄", "げた"), ("茶", "ちゃ")]  # empty expr skipped
     assert all(f["prefix_matching"] is True for _, _, f in window.calls)  # config flags forwarded
 
@@ -450,7 +450,7 @@ def test_seen_contains_memoized_per_note(fake_col, monkeypatch):
     )
     window = _FakeWindow(present={"下駄"})
     monkeypatch.setattr(dmod.seen_manager, "get_seen_window",
-                        lambda n, k, h, v, s, today=None: window)
+                        lambda n, k, h, v, s, c, today=None: window)
 
     dm = DataManager(Config())
     r1 = dm.get_cards_from_search("deck:X seen:3")
@@ -466,7 +466,7 @@ def test_seen_memo_keyed_by_n(fake_col, monkeypatch):
     )
     window = _FakeWindow(present={"下駄"})
     monkeypatch.setattr(dmod.seen_manager, "get_seen_window",
-                        lambda n, k, h, v, s, today=None: window)
+                        lambda n, k, h, v, s, c, today=None: window)
 
     dm = DataManager(Config())
     dm.get_cards_from_search("deck:X seen:2")
@@ -549,7 +549,7 @@ class _NestedWindows:
         self.windows = {n: _FakeWindow(present=p) for n, p in by_level.items()}
         self.todays = []
 
-    def get_seen_window(self, n, kana, honorific, variant, stem, today=None):
+    def get_seen_window(self, n, kana, honorific, variant, stem, compound, today=None):
         self.todays.append(today)
         return self.windows[n]
 

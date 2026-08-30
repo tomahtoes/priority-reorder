@@ -961,6 +961,132 @@ def test_stem_total_builds_no_lazy_view():
     assert ix._variant_index is None
 
 
+# compound matching (entries built ON the stem)
+
+def test_compound_credits_a_verb_from_a_compound_built_on_its_stem():
+    # The motivating case: a 奮う card and a dict that only lists 奮い立つ. No other rule sees it,
+    # since 奮い立つ neither starts nor ends with 奮う and its reading is not the card's.
+    ix = _stem_index([("奮い立つ", "ふるいたつ", 16)])
+    assert ix.get_total("奮う", "ふるう", prefix_matching=True, suffix_matching=True,
+                        variant_matching=True, stem_matching=True) == 0
+    assert ix.get_total("奮う", "ふるう", compound_matching=True) == 16
+
+
+def test_compound_sums_every_compound_on_a_godan_stem():
+    ix = _stem_index([("取り消す", "とりけす", 5), ("取り扱い", "とりあつかい", 7),
+                      ("取り分け", "とりわけ", 3)])
+    assert ix.get_total("取る", "とる", compound_matching=True) == 15
+
+
+def test_compound_reaches_ichidan_compounds_through_the_truncated_stem():
+    # The ichidan candidate is what covers 受ける -> 受け入れる and 食べる -> 食べ物. Dropping it
+    # would cost a third of the rule.
+    ix = _stem_index([("受け入れる", "うけいれる", 122), ("食べ物", "たべもの", 40)])
+    assert ix.get_total("受ける", "うける", compound_matching=True) == 122
+    assert ix.get_total("食べる", "たべる", compound_matching=True) == 40
+
+
+def test_compound_requires_the_reading_to_match_the_stem():
+    # Both sides must match, or a homograph card takes the other word's compounds: 抱く/だく owns
+    # 抱きしめる, 抱く/いだく does not.
+    ix = _stem_index([("抱きしめる", "だきしめる", 848)])
+    assert ix.get_total("抱く", "だく", compound_matching=True) == 848
+    assert ix.get_total("抱く", "いだく", compound_matching=True) == 0
+
+
+def test_compound_ignores_kana_keyed_entries():
+    # _build_index_from_raw re-keys every ㋕ entry under its reading, so the pair map is full of
+    # (kana, kana) entries. A kana pair validates nothing, and crediting one here would let a
+    # 取る card take every とり… kana entry in the dict.
+    ix = OccurrenceIndex()
+    ix.add("とりあえず", "とりあえず", 90)   # as _build_index_from_raw re-keys a ㋕ entry
+    assert ix.get_total("取る", "とる", compound_matching=True) == 0
+    assert ix.get_total("取る", "とる", compound_matching=True, combine_word_forms=True) == 0
+
+
+def test_compound_covers_the_exact_stem_only_while_stem_matching_is_off():
+    # stem_matching is a dedup guard, not a widening knob: with it off nothing else credits the
+    # exact stem, so this rule does; with it on, stem_total owns it and the total is unchanged.
+    ix = _stem_index([("取り", "とり", 20), ("取り消す", "とりけす", 5)])
+    assert ix.get_total("取る", "とる", compound_matching=True) == 25
+    assert ix.get_total("取る", "とる", stem_matching=True) == 20
+    assert ix.get_total("取る", "とる", compound_matching=True, stem_matching=True) == 25
+
+
+def test_compound_keeps_a_stem_spelled_entry_that_reads_longer():
+    # The dedup is on the PAIR. 戒め/いましめる is spelled like the stem but read past it, so
+    # stem_total's exact probe never sees it and it belongs to this rule.
+    ix = _stem_index([("戒め", "いましめる", 6)])
+    assert ix.get_total("戒める", "いましめる", stem_matching=True) == 0
+    assert ix.get_total("戒める", "いましめる", stem_matching=True, compound_matching=True) == 6
+
+
+def test_compound_concedes_entries_starting_with_the_card_to_prefix_matching():
+    # Those belong to prefix_total, and the concession is unconditional: crediting them with
+    # prefix_matching off would make this rule a silent superset of prefix matching, since the
+    # ichidan candidate 食べ swallows every 食べる… entry.
+    ix = _stem_index([("食べるもの", "たべるもの", 30), ("食べ物", "たべもの", 40)])
+    assert ix.get_total("食べる", "たべる", compound_matching=True) == 40
+    assert ix.get_total("食べる", "たべる", compound_matching=True, prefix_matching=True) == 70
+
+
+def test_compound_does_not_double_count_an_okurigana_variant():
+    # The ichidan candidate reading is the card's minus its last kana, so a variant carrying the
+    # card's exact reading sits inside the swept range. Measured on real dicts: 222 counts, all
+    # okurigana pairs like this one.
+    ix = _stem_index([("立ち止まる", "たちどまる", 109)])
+    withvariant = ix.get_total("立ち止る", "たちどまる", variant_matching=True)
+    assert withvariant == 109
+    assert ix.get_total("立ち止る", "たちどまる", variant_matching=True,
+                        compound_matching=True) == withvariant
+    # Without variant_matching nothing else credits it, so the sweep does.
+    assert ix.get_total("立ち止る", "たちどまる", compound_matching=True) == 109
+
+
+def test_compound_counts_a_nested_candidate_range_once():
+    # A る-final card yields both 食べ and 食べり, and the godan range nests inside the ichidan
+    # one. Summing both would count 食べりんご twice.
+    ix = _stem_index([("食べりんご", "たべりんご", 11)])
+    assert _stem_candidates("食べる", "たべる") == [("食べ", "たべ"), ("食べり", "たべり")]
+    assert ix.get_total("食べる", "たべる", compound_matching=True) == 11
+
+
+def test_compound_still_sweeps_the_godan_stem_when_the_ichidan_one_is_too_short():
+    # 見る drops its ichidan candidate at _MIN_STEM_LENGTH, so the nesting skip must be dynamic
+    # rather than "sweep the shortest and stop".
+    ix = _stem_index([("見り所", "みりどころ", 4)])
+    assert ix.get_total("見る", "みる", compound_matching=True) == 4
+
+
+def test_compound_rejects_kana_only_cards():
+    # Same gate as stem matching: expression == reading yields no candidates at all, which is
+    # what keeps a それる card off every それ… entry.
+    ix = _stem_index([("それなり", "それなり", 77)])
+    assert ix.get_total("それる", "それる", compound_matching=True) == 0
+
+
+def test_compound_credits_adjective_nominalization_compounds():
+    ix = _stem_index([("強さ比べ", "つよさくらべ", 6), ("痛み止め", "いたみどめ", 9)])
+    assert ix.get_total("強い", "つよい", compound_matching=True) == 6
+    assert ix.get_total("痛い", "いたい", compound_matching=True) == 9
+
+
+def test_compound_builds_only_its_own_lazy_view():
+    ix = _stem_index([("奮い立つ", "ふるいたつ", 16)])
+    assert ix.get_total("奮う", "ふるう", compound_matching=True) == 16
+    assert ix._prefix_exprs is None
+    assert ix._suffix_revs is None
+    assert ix._variant_index is None
+    assert ix._stem_compound_keys is not None
+
+
+def test_compound_view_is_not_built_when_the_flag_is_off():
+    ix = _stem_index([("奮い立つ", "ふるいたつ", 16)])
+    ix.get_total("奮う", "ふるう", prefix_matching=True, suffix_matching=True,
+                 variant_matching=True, stem_matching=True)
+    assert ix._stem_compound_keys is None
+
+
 # CombinedOccurrenceIndex memo eviction
 
 def test_combined_index_evicts_oldest_when_cap_reached(monkeypatch):
@@ -1038,6 +1164,7 @@ _EQUIV_DICTS = {
         ["おかず", "freq", {"reading": "おかず", "value": 50}],
         ["戒め", "freq", {"reading": "いましめ", "value": 4}],      # ichidan stem of 戒める
         ["それ", "freq", {"reading": "それ", "value": 99}],         # kana: stem gate must exclude
+        ["奮い立つ", "freq", {"reading": "ふるいたつ", "value": 16}],  # compound on 奮う's stem
     ],
     "B": [
         ["茶", "freq", {"reading": "さ", "value": 3}],           # same expr, other reading
@@ -1051,6 +1178,7 @@ _EQUIV_DICTS = {
         ["強さ", "freq", {"reading": "つよさ", "value": 11}],       # adjective stem of 強い
         ["いましめ", "freq", {"reading": "いましめ", "value": 50,
                               "displayValue": "50㋕"}],             # kana stem: combine_word_forms
+        ["奮うこと", "freq", {"reading": "ふるうこと", "value": 2}],   # compound must concede this
     ],
     "C": [
         ["ぎりぎり", "freq", {"reading": "ぎりぎり", "value": 8, "displayValue": "8㋕"}],
@@ -1059,11 +1187,15 @@ _EQUIV_DICTS = {
         ["日", "freq", {"reading": "ひ", "value": 2}],
         ["屯", "freq", {"reading": "たむろ", "value": 6}],        # bare head, other dict than 屯する
         ["遊び", "freq", {"reading": "あそび", "value": 7}],        # godan stem of 遊ぶ
+        # The exact stem, in a different dict from the compound above.
+        ["奮い", "freq", {"reading": "ふるい", "value": 3}],
     ],
     "D": [
         ["茶", "freq", {"value": 33}],                           # no reading at all
         ["手", "freq", {"reading": "て", "value": 1}],
         ["煌燦めく", "freq", {"reading": "きらめく", "value": 2}],
+        # Okurigana variant of the 立ち止る probe: compound and variant must not both credit it.
+        ["立ち止まる", "freq", {"reading": "たちどまる", "value": 109}],
     ],
 }
 
@@ -1078,11 +1210,13 @@ _EQUIV_PROBES = [
     ("戒める", "いましめる"), ("戒め", "いましめ"),        # stem: forward hit, and no reverse
     ("遊ぶ", "あそぶ"), ("強い", "つよい"), ("痛い", "いたい"),  # godan, adjective, adjective miss
     ("それる", "それる"), ("のる", "のる"),                # kana cards: distinctness / length gates
+    ("奮う", "ふるう"), ("奮い", "ふるい"),                # compound: forward hit, and no reverse
+    ("立ち止る", "たちどまる"),                            # compound / variant dedup
     ("存在しない", "そんざいしない"), ("", ""),            # absent everywhere, empty
 ]
 
 _FLAG_NAMES = ("combine_word_forms", "prefix_matching", "suffix_matching",
-               "variant_matching", "stem_matching", "honorific_folding")
+               "variant_matching", "stem_matching", "compound_matching", "honorific_folding")
 
 
 def _all_flag_combos():
@@ -1093,7 +1227,7 @@ def _all_flag_combos():
 def _split_flags(flags):
     """(build-time kwargs, query-time kwargs). honorific_folding is a BUILD flag, since
     honorific_to_count only exists when the per-dict indexes were built with it, while the
-    other five are passed per lookup so one merged index serves every combination."""
+    other six are passed per lookup so one merged index serves every combination."""
     return (
         {"honorific_folding": flags["honorific_folding"]},
         {k: v for k, v in flags.items() if k != "honorific_folding"},
@@ -1115,7 +1249,8 @@ def _assert_merged_matches_per_dict(names, raw_by_name, normalize_kana):
             expr, read = expression, reading
             if normalize_kana:  # occurrence_count folds before either path sees the strings
                 expr, read = dm.to_hiragana(expr), dm.to_hiragana(read)
-            card_kanji = dm._kanji_skeleton(expr) if flags["variant_matching"] else None
+            card_kanji = (dm._kanji_skeleton(expr)
+                          if flags["variant_matching"] or flags["compound_matching"] else None)
             expected = sum(ix.get_total(expr, read, card_kanji=card_kanji, **flags)
                            for ix in per_dict)
             assert merged.total(expr, read, **query_flags) == expected, (
@@ -1187,7 +1322,8 @@ def test_merged_index_equals_per_dict_sum_on_real_dicts():
         merged = CombinedOccurrenceIndex(names, **build_flags)
         per_dict = [dm.get_occurrence_index(n, False, flags["honorific_folding"]) for n in names]
         for expr, read in probes:
-            card_kanji = dm._kanji_skeleton(expr) if flags["variant_matching"] else None
+            card_kanji = (dm._kanji_skeleton(expr)
+                          if flags["variant_matching"] or flags["compound_matching"] else None)
             expected = sum(ix.get_total(expr, read, card_kanji=card_kanji, **flags)
                            for ix in per_dict)
             assert merged.total(expr, read, **query_flags) == expected, (expr, read, flags)

@@ -187,12 +187,13 @@ def _config():
 
 
 _FLAG_COMBOS = [
-    ("none", dict(normalize_kana=False, combine_word_forms=False, prefix_matching=False, suffix_matching=False, variant_matching=False, stem_matching=False, honorific_folding=False)),
-    ("prefix", dict(normalize_kana=False, combine_word_forms=False, prefix_matching=True, suffix_matching=False, variant_matching=False, stem_matching=False, honorific_folding=False)),
-    ("suffix", dict(normalize_kana=False, combine_word_forms=False, prefix_matching=False, suffix_matching=True, variant_matching=False, stem_matching=False, honorific_folding=False)),
-    ("varnt", dict(normalize_kana=False, combine_word_forms=False, prefix_matching=False, suffix_matching=False, variant_matching=True, stem_matching=False, honorific_folding=False)),
-    ("stem", dict(normalize_kana=False, combine_word_forms=False, prefix_matching=False, suffix_matching=False, variant_matching=False, stem_matching=True, honorific_folding=False)),
-    ("all", dict(normalize_kana=True, combine_word_forms=True, prefix_matching=True, suffix_matching=True, variant_matching=True, stem_matching=True, honorific_folding=True)),
+    ("none", dict(normalize_kana=False, combine_word_forms=False, prefix_matching=False, suffix_matching=False, variant_matching=False, stem_matching=False, compound_matching=False, honorific_folding=False)),
+    ("prefix", dict(normalize_kana=False, combine_word_forms=False, prefix_matching=True, suffix_matching=False, variant_matching=False, stem_matching=False, compound_matching=False, honorific_folding=False)),
+    ("suffix", dict(normalize_kana=False, combine_word_forms=False, prefix_matching=False, suffix_matching=True, variant_matching=False, stem_matching=False, compound_matching=False, honorific_folding=False)),
+    ("varnt", dict(normalize_kana=False, combine_word_forms=False, prefix_matching=False, suffix_matching=False, variant_matching=True, stem_matching=False, compound_matching=False, honorific_folding=False)),
+    ("stem", dict(normalize_kana=False, combine_word_forms=False, prefix_matching=False, suffix_matching=False, variant_matching=False, stem_matching=True, compound_matching=False, honorific_folding=False)),
+    ("compnd", dict(normalize_kana=False, combine_word_forms=False, prefix_matching=False, suffix_matching=False, variant_matching=False, stem_matching=False, compound_matching=True, honorific_folding=False)),
+    ("all", dict(normalize_kana=True, combine_word_forms=True, prefix_matching=True, suffix_matching=True, variant_matching=True, stem_matching=True, compound_matching=True, honorific_folding=True)),
 ]
 
 
@@ -244,6 +245,7 @@ def test_seen_count_vs_boolean_benchmark(capsys, tmp_path):
                 suffix_matching=flags["suffix_matching"],
                 variant_matching=flags["variant_matching"],
                 stem_matching=flags["stem_matching"],
+                compound_matching=flags["compound_matching"],
                 honorific_folding=flags["honorific_folding"],
             )
 
@@ -267,7 +269,8 @@ def test_seen_count_vs_boolean_benchmark(capsys, tmp_path):
             # boolean (production): build x days -> union(+sort) -> contains
             bdays, b_build = _timed(lambda: [
                 seen_manager.build_seen_day(d, flags["normalize_kana"], flags["honorific_folding"],
-                                           flags["variant_matching"], flags["stem_matching"])
+                                           flags["variant_matching"], flags["stem_matching"],
+                                           flags["compound_matching"])
                 for d in days_raw
             ])
 
@@ -285,6 +288,10 @@ def test_seen_count_vs_boolean_benchmark(capsys, tmp_path):
                     for expr, entry_reading in w.variant_entries:
                         by_reading.setdefault(entry_reading, []).append(expr)
                     w._variant_by_reading = by_reading
+                if flags["compound_matching"]:
+                    # one-time sort of the stem pairs, attributed to merge like the views above
+                    w._sorted_stem_entries = sorted(w.stem_entries)
+                    w._sorted_stem_exprs = [e for e, _r in w._sorted_stem_entries]
                 return w
 
             bmodel, b_merge = _timed(_bool_merge)
