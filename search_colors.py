@@ -93,6 +93,9 @@ OVERFLOW_PALETTE = {
 _TOKEN_RE = re.compile(r'(?:"[^"]*"|[^\s"])+')
 _COLON_RE = re.compile(r"^([\w-]+):")
 _OP_RE = re.compile(r"^([A-Za-z]+)(?:>=|<=|!=|=|<|>)\d+$")
+# Grouping parens ride along on a term's token; they are split off so the
+# bracket itself stays uncolored instead of taking the term's hue.
+_PARENS_RE = re.compile(r"^(-*\(+)?(.*?)(\)+)?$", re.DOTALL)
 
 
 def _color_key(token: str) -> Optional[str]:
@@ -176,13 +179,13 @@ def colorize_query_html(query: str, *, dark: bool, mute_toward: Optional[str] = 
     tokens: List[str] = _TOKEN_RE.findall(query or "")
     parts: List[str] = []
     for token in tokens:
-        escaped = html.escape(token)
-        key = _color_key(token)
+        lead, core, trail = _PARENS_RE.match(token).groups()
+        escaped = html.escape(core)
+        key = _color_key(core) if core else None
         color = resolve(key) if key is not None else None
-        if mute_toward is not None:
+        if mute_toward is not None and core:
             color = _blend(color, mute_toward, _MUTE_FACTOR) if color else mute_toward
         if color:
-            parts.append(f'<span style="color:{color}">{escaped}</span>')
-        else:
-            parts.append(escaped)
+            escaped = f'<span style="color:{color}">{escaped}</span>'
+        parts.append(html.escape(lead or "") + escaped + html.escape(trail or ""))
     return " ".join(parts)
