@@ -25,6 +25,15 @@ def test_custom_terms_are_left_verbatim():
     assert limit == 10
 
 
+def test_aliased_custom_terms_are_left_verbatim_and_limit_survives_the_l_alias():
+    # `length` shortens to `l`, so limit= and the length term now start with the same
+    # letter. The length pattern wants its operator directly after the `l`, which is what
+    # keeps limit= intact here.
+    query, limit = parse_rule_string("deck:JP o:[A,B]>=5 f<2000 k:new[3]>=1 l>=2 s:7 limit=10")
+    assert query == "deck:JP o:[A,B]>=5 f<2000 k:new[3]>=1 l>=2 s:7"
+    assert limit == 10
+
+
 def test_whitespace_only_is_collapsed_to_empty():
     query, limit = parse_rule_string("   limit=3   ")
     assert query == ""

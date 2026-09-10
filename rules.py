@@ -5,7 +5,9 @@ import re
 # not an Anki search term, so it is stripped here. The custom search terms
 # (occurrences:/f/kanji:) are left in the query and resolved downstream by the
 # patched Collection.find_cards (see search.py). The lookbehind keeps it from
-# firing inside a larger token like `mylimit=3`.
+# firing inside a larger token like `mylimit=3`. `length` shortens to `l`, so limit= now
+# shares a first letter with a custom term; the length pattern wants its operator
+# directly after the `l`, which is what keeps limit=N out of its reach.
 LIMIT_PATTERN = re.compile(r"(?<!\w)limit=(?P<limit>\d+)")
 
 

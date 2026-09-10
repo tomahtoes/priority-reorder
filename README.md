@@ -114,13 +114,20 @@ The addon supports several custom filters that you can mix in with standard Anki
 - **`kanji:new=1`**: Filter by the number of unknown Kanji (optionally `kanji:new[3]=1` to count a Kanji as new until 3 of your learned words contain it).
 - **`kanji:new_reading=1`**: Filter by the number of Kanji used here in a *reading* you haven't learned yet.
 
+Each custom term also answers to its first letter, so `occurrences:Dict>5 kanji:new=1 seen:7 length>=3`
+can be written `o:Dict>5 k:new=1 s:7 l>=3`. Both spellings are the same term, and you can mix them.
+`limit=` keeps its full name, because `l` belongs to `length`. If one of your note types has a field
+named `o`, `k`, `s` or `l`, use the long form for that term: the short form shadows a search on the
+field. Short forms also work only while this addon is enabled, so write the long form in a search
+you plan to share.
+
 ### 1. Frequency Sorting (`f`)
 You can prioritize cards based on the numeric value in their sort field. This is most useful in combination with other filters, if you want to prioritize common words in an occurrence search for example.
 - **Syntax**: `f<10000` or `f>=30000`. Supports all comparison operators: `=`, `!=`, `<`, `<=`, `>`, `>=`.
 
 ### 2. Occurrence Mining (`occurrences:`)
 Prioritize words found in specific media (requires Yomitan dictionaries).
-- **Syntax**: `occurrences:DictionaryName>=5` or `occurrences:[Dict1,Dict2]>=5`
+- **Syntax**: `occurrences:DictionaryName>=5` or `occurrences:[Dict1,Dict2]>=5` (short: `o:DictionaryName>=5`)
 - **Example**: `occurrences:銀色、遥か>=5` matches cards where the word appears 5 or more times in `銀色、遥か`.
 - **Combined**: `occurrences:[銀色、遥か,穢翼のユースティア]>=10` matches cards where the combined frequency across both dictionaries is 10 or more.
 - **All Dictionaries**: `occurrences:all>=10` is a special keyword that combines the occurrence counts from every dictionary in your `user_files` folder. Useful if you want to prioritize words that are common across all of your media.
@@ -218,7 +225,8 @@ If your occurrence dictionaries were downloaded from [Jiten](https://jiten.moe/)
 > **⚠️ Many dictionaries**: Jiten's API allows roughly 10 requests per minute, so with more than 10 dictionaries updates slow down while the addon waits out the limit. If that delay on sync bothers you, prefer the manual update option over `sync_behavior.auto_update_dicts`.
 
 ### 3. Kanji Prioritization (`kanji:`)
-Prioritize words based on your existing Kanji knowledge (scanned from your Review cards).
+Prioritize words based on your existing Kanji knowledge (scanned from your Review cards). Every
+example below also works with the short form `k:` (`k:new=1`, `k:new_reading>=1`, `k:num=2`).
 - **`kanji:new=0`**: Matches words where you *already know* all the characters.
 - **`kanji:new=1`**: Matches words with exactly 1 unknown character.
 - **`kanji:new>=2`**: Matches words with 2 or more unknown characters.
@@ -268,7 +276,7 @@ Common in the visual novel you're reading, looks fully known, and will actually 
 > ⚠️ **Experimental**: `seen:` is a newer feature and may change or be removed in a future version.
 
 Prioritize words you've encountered recently in your immersion, using *daily* occurrence dictionaries. It's resolved through this addon, so the `matching` options above (`prefix_matching`, `variant_matching`, `stem_matching`, `compound_matching`, `kana_normalization`, etc.) apply to `seen:` too.
-- **Syntax**: `seen:N` matches words appearing in any of the last **N** daily dictionaries. It's boolean, meaning "seen at all" regardless of how many times. A leading `-` negates (`-seen:30`).
+- **Syntax**: `seen:N` (short: `s:N`) matches words appearing in any of the last **N** daily dictionaries. It's boolean, meaning "seen at all" regardless of how many times. A leading `-` negates (`-seen:30`).
 - **Examples**: `seen:1` (today), `seen:7` (appeared in any of the last 7 days).
 - **Day boundaries**: "today" honors Anki's rollover hour ("Next day starts at" setting).
 - **⚡ Keep windows small**: cost grows with # of days, so **the smaller your window, the faster the reorder**. `seen:1`–`seen:3` are cheap, while large windows (`seen:30`+) get noticeably slower, especially with settings like `prefix_matching` or `variant_matching` on. If you care at all about sorting speed, use the smallest window that still means "recently seen". (Reusing the *same* window across several priority searches is free within a reorder.)
@@ -289,7 +297,7 @@ Each `term_meta_bank_*.json` is an ordinary Yomitan occurrence dictionary, the s
 
 ### 5. Expression Length (`length`)
 Filter by the character length of the card's expression field.
-- **Syntax**: `length>=3` (3 characters or longer), `length=1` (single-character words). Supports all comparison operators: `=`, `!=`, `<`, `<=`, `>`, `>=`.
+- **Syntax**: `length>=3` (3 characters or longer), `length=1` (single-character words). Short form: `l>=3`, `l=1`. Supports all comparison operators: `=`, `!=`, `<`, `<=`, `>`, `>=`.
 - **Counting**: the raw field value is measured in Unicode characters, with no HTML stripping or normalization, so any markup in the field counts toward the length. An empty expression counts as length 0.
 
 ### 6. Multiple Priorities

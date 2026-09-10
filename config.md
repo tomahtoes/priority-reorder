@@ -12,7 +12,7 @@ Headings below give each option's full path, e.g. `matching.prefix_matching` mea
 
 ### `priority_search` (string | list)
 - **Description**: The Anki search query used to identify cards for the Priority Queue. These cards will always be shown before the "Normal Queue". It can be a single string or a list of multiple search queries.
-- **Support**: Supports standard Anki syntax plus custom filters like `kanji:new=1`, `kanji:new[3]>=1`, `kanji:new_reading>=1`, `kanji:num=2`, `f<10000`, `length>=3`, or `occurrences:dict>5`.
+- **Support**: Supports standard Anki syntax plus custom filters like `kanji:new=1`, `kanji:new[3]>=1`, `kanji:new_reading>=1`, `kanji:num=2`, `f<10000`, `length>=3`, or `occurrences:dict>5`. Each custom term also answers to its first letter (`k:new=1`, `l>=3`, `o:dict>5`, `s:7`).
 - **Default**: `""`
 - **Example**: `"deck:Japanese added:3"`
 
@@ -153,19 +153,27 @@ test a priority search interactively in the browser before committing it to conf
 same `matching` settings and the configured `word_fields` / `sort_field` as the reorderer.
 Leading `-` negates a term as usual (e.g. `-occurrences:Dict>5`).
 
+Every custom term also answers to its first letter, so `occurrences:Dict>5 kanji:new=1 seen:7 length>=3`
+can be written `o:Dict>5 k:new=1 s:7 l>=3`. The two spellings are the same term. Anki reserves none of
+those letters, and each short form keeps the long form's operator or digit argument, which is what
+keeps `o:foo` or `s:word` working as ordinary field searches. Two caveats: if a note type in your
+collection has a field literally named `o`, `k`, `s` or `l`, the short form shadows a search on that
+field, so use the long form there. And the short forms only exist while this addon is enabled, so
+write the long form in a search you plan to share.
+
 - **Anki Standard**: `added:3`, `deck:Japanese`, `tag:mining`, etc.
 - **Frequency**: `f<=2000`. Matches cards where the sort field value is less than or equal to 2000. Useful for prioritizing common words across different search queries. Supports any comparison operator (`=`, `!=`, `<`, `<=`, `>`, `>=`).
-- **Length**: `length>=3`. Matches cards whose expression field is 3 or more characters long (`length=1` for single-character words). Counts Unicode characters of the raw field value (markup included; an empty field is length 0). Supports any comparison operator.
-- **Kanji i+1**: `kanji:new=1`. Matches words where exactly 1 character is unknown to you.
+- **Length**: `length>=3` (short: `l>=3`). Matches cards whose expression field is 3 or more characters long (`length=1` for single-character words). Counts Unicode characters of the raw field value (markup included; an empty field is length 0). Supports any comparison operator.
+- **Kanji i+1**: `kanji:new=1` (short: `k:new=1`). Matches words where exactly 1 character is unknown to you.
 - **Kanji target**: `kanji:new[3]>=1`. A Kanji counts as "new" until 3 of your learned words contain it; matches words with at least 1 such Kanji. `kanji:new` is equivalent to `kanji:new[1]`.
 - **New Reading**: `kanji:new_reading>=1`. Matches words where at least 1 Kanji is used in a *reading* no learned word has taught you. Once you know 食事 (しょくじ), 食べる (たべる) still matches, because 食=た is new. Takes the same bracket as `kanji:new`: `kanji:new_reading[3]>=1`. Requires `word_fields.expression_reading_field`.
 - **Kanji Count**: `kanji:num=2`. Matches words containing exactly 2 Kanji.
 
-- **Occurrences**: `occurrences:銀色、遥か>5`. Matches words appearing more than 5 times in the specified dictionary.
+- **Occurrences**: `occurrences:銀色、遥か>5` (short: `o:銀色、遥か>5`). Matches words appearing more than 5 times in the specified dictionary.
 - **Multi-dict**: `occurrences:[Dict1,Dict2]>10`. Matches based on the combined count across multiple dictionaries.
 - **All dicts**: `occurrences:all>5`. Combines the count across every dictionary in `user_files`.
-- **Recently seen**: `seen:7`. Matches words appearing in any of the last 7 *daily* occurrence dictionaries (in `user_files/_seen/<YYYY-MM-DD>/`). It's boolean ("seen at all"). "Today" honors Anki's rollover hour. The `_seen` folder is reserved. It is never a normal occurrence dict, so `occurrences:_seen` and `occurrences:all` can't reach it, and only `seen:N` does. See the README for folder setup.
-- **`limit=X`**: Use in a search string to take only the top X cards. **Config-only**: this is a reorder control, not a browser search term, and is ignored in the Browse bar.
+- **Recently seen**: `seen:7` (short: `s:7`). Matches words appearing in any of the last 7 *daily* occurrence dictionaries (in `user_files/_seen/<YYYY-MM-DD>/`). It's boolean ("seen at all"). "Today" honors Anki's rollover hour. The `_seen` folder is reserved. It is never a normal occurrence dict, so `occurrences:_seen` and `occurrences:all` can't reach it, and only `seen:N` does. See the README for folder setup.
+- **`limit=X`**: Use in a search string to take only the top X cards. It has no short form; `l` belongs to `length`. **Config-only**: this is a reorder control, not a browser search term, and is ignored in the Browse bar.
   - Example: `added:3 limit=20` (Only the top 20 most frequent recent cards).
 
 ---

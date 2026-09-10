@@ -5,6 +5,12 @@ concrete `nid:` clause before the query reaches the backend, at two idempotent c
 browser hook and the Collection methods. That makes the terms the reorderer understands work in
 the Browse bar and through the collection API and AnkiConnect.
 
+Each term also answers to its first letter (`o:`, `k:`, `s:`, `l`). Those chokepoints are
+process-wide, so the letters are claimed for every addon in the Anki process. They are safe
+because Anki reserves none of them (it does reserve the short keys `re:`, `nc:`, `sc:`, `w:`),
+and each alias keeps the long form's mandatory operator or digit argument, which keeps it off
+an ordinary field search like `o:foo`.
+
 Top-level imports stay free of `aqt` so this module loads under pytest. Anything touching the
 collection is imported lazily inside the resolvers and install().
 """
@@ -22,34 +28,38 @@ logger = logging.getLogger("priority_reorder.search")
 # Each pattern carries a standalone-token left lookbehind `(?<![^\s(-])` so it only
 # fires at the start of a token (after start / space / "(" / "-") and never inside a
 # larger token. A leading "-" is NOT consumed, so Anki's own negation wraps the
-# replacement group for free.
+# replacement group for free. That lookbehind is also what keeps the one-letter
+# aliases off Anki's own keys and off field searches: `sc:5`, `cds:5`, `deck:s:5`,
+# `on:foo>=1` and `nk:new>=1` all fail it.
+#
+# The mandatory operator keeps the `o:` alias off a plain field search like `o:foo`.
 OCC_RE = re.compile(
-    r"(?<![^\s(-])occurrences:(?P<dict>[^=<>!\s]+)(?P<op>>=|<=|!=|=|<|>)(?P<thresh>\d+)"
+    r"(?<![^\s(-])(?:occurrences|o):(?P<dict>[^=<>!\s]+)(?P<op>>=|<=|!=|=|<|>)(?P<thresh>\d+)"
 )
 # The mandatory operator right after `f` keeps this from firing inside `flag:` or `front:`,
-# and the trailing boundary keeps the threshold from running into the next token.
+# and the trailing boundary keeps the threshold from running into the next token. `f` is
+# already the one-letter form, so it has no long spelling to alternate with.
 FREQ_RE = re.compile(
     r"(?<![^\s(-])f(?P<op>>=|<=|!=|=|<|>)(?P<thresh>\d+)(?=\s|\)|$)"
 )
 # `length<op><n>` filters on the expression field's character count (Unicode code
 # points of the raw value). Same shape as FREQ_RE: the mandatory operator keeps it
-# off a real `length:` field search, the lookbehind off words like `wavelength`.
+# off a real `length:` field search, the lookbehind off words like `wavelength`. The `l`
+# alias wants the operator directly after the letter, so `limit=5` and `l:5` do not match.
 LENGTH_RE = re.compile(
-    r"(?<![^\s(-])length(?P<op>>=|<=|!=|=|<|>)(?P<thresh>\d+)(?=\s|\)|$)"
+    r"(?<![^\s(-])(?:length|l)(?P<op>>=|<=|!=|=|<|>)(?P<thresh>\d+)(?=\s|\)|$)"
 )
 # `kanji:new` and `kanji:new_reading` take an optional bracketed target `[T]`:
 # a kanji (resp. a reading of a kanji) counts as "new" until T learned words
-# contain it. Two things about this pattern are load-bearing:
+# contain it. The bracket guard must stay a *negative* lookbehind: a positive `(?<=new)`
+# is fixed-width and so could never admit a second, longer type name. `(?<!num)` means
+# "allowed after anything but num" and stays fixed-width.
 #
-#   - `new_reading` must precede `new` in the alternation. Python's `|` is leftmost-first,
-#     not longest-match, so with `new` first the token matches `new`, fails on the `_`, and
-#     (the lookbehind blocking a retry inside the token) does not match at all, passing
-#     silently through to Anki's backend as a no-op rather than an error.
-#   - the bracket guard must stay a *negative* lookbehind. A positive `(?<=new)` is
-#     fixed-width and so could never admit a second, longer type name. `(?<!num)` means
-#     "allowed after anything but num" and stays fixed-width.
+# Type names are listed longest-first for readability only. Ordering does not change any
+# match: a failed continuation backtracks into the group at the same start position and
+# tries the next name.
 KANJI_RE = re.compile(
-    r"(?<![^\s(-])kanji:(?P<type>new_reading|new|num)"
+    r"(?<![^\s(-])(?:kanji|k):(?P<type>new_reading|new|num)"
     r"(?:(?<!num)\[(?P<target>\d+)\])?"
     r"(?P<op>>=|<=|!=|=|<|>)(?P<thresh>\d+)"
 )
@@ -57,8 +67,9 @@ KANJI_RE = re.compile(
 # N is the number of trailing daily dicts, and a word matches if it appears in ANY of them. It is
 # boolean, with no count test. N<=0 matches nothing. The spec is a number rather than a name, so
 # it never composes with occurrences: there is no `occurrences:seen` path to the seen data.
+# The mandatory digits keep the `s:` alias off a field search like `s:foo`.
 SEEN_RE = re.compile(
-    r"(?<![^\s(-])seen:(?P<n>\d+)"
+    r"(?<![^\s(-])(?:seen|s):(?P<n>\d+)"
 )
 
 
@@ -214,8 +225,8 @@ def rewrite_query(query, *, occ_resolver=None, freq_resolver=None, kanji_resolve
     """
     if not query:
         return query
-    has_occ = "occurrences:" in query
-    has_kanji = "kanji:" in query
+    has_occ = bool(OCC_RE.search(query))
+    has_kanji = bool(KANJI_RE.search(query))
     has_freq = bool(FREQ_RE.search(query))
     has_seen = bool(SEEN_RE.search(query))
     has_length = bool(LENGTH_RE.search(query))

@@ -175,6 +175,20 @@ def test_custom_length_term_fast_path_filters_by_expression_length(fake_col):
     assert [c.card_id for c in dm.get_cards_from_search("deck:X -length>=3").cards] == [1, 2]
 
 
+def test_first_letter_aliases_ride_the_same_fast_path(fake_col):
+    # has_custom_term, _strip_custom_terms and parse_custom_terms each match the aliases
+    # separately. If any one of them missed, the query would either skip the fast path or
+    # strip to a base the others do not agree on.
+    fake_col(
+        find_results={"(deck:X) is:new": [1, 2, 3, 4]},
+        rows=[_row(1, 10, "", "", "1"), _row(2, 20, "手", "て", "1"),
+              _row(3, 30, "茶の間", "ちゃのま", "1"), _row(4, 40, "下駄箱", "げたばこ", "1")],
+    )
+    dm = DataManager(Config())
+    assert [c.card_id for c in dm.get_cards_from_search("deck:X l>=3").cards] == [3, 4]
+    assert [c.card_id for c in dm.get_cards_from_search("deck:X -l>=3").cards] == [1, 2]
+
+
 def test_filter_order_does_not_change_the_result(fake_col, monkeypatch):
     # The post-filter reorders terms cheapest-first, which is only sound because they form
     # a pure conjunction of independent predicates. Whatever order the query writes them

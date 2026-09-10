@@ -1,7 +1,7 @@
 """Color-coding for search-query terms shown in the summary window.
 
 A query token is keyed off its leading keyword (``kanji:new>=1`` -> ``kanji``,
-``f>=1`` -> ``f``, bare word -> the word). ``NO_COLOR_KEYS`` stay default,
+``f>=1`` -> ``f``, ``s:7`` -> ``seen``, bare word -> the word). ``NO_COLOR_KEYS`` stay default,
 ``KNOWN_KEYWORD_COLORS`` get a fixed hue, the rest hash into ``OVERFLOW_PALETTE``.
 Pure module (no ``aqt`` import) so it can be tested standalone.
 """
@@ -97,6 +97,14 @@ _OP_RE = re.compile(r"^([A-Za-z]+)(?:>=|<=|!=|=|<|>)\d+$")
 # bracket itself stays uncolored instead of taking the term's hue.
 _PARENS_RE = re.compile(r"^(-*\(+)?(.*?)(\)+)?$", re.DOTALL)
 
+# The addon's search terms each answer to their first letter too (see search.py). Both
+# spellings have to fold to one key, or the same term takes two hues depending on how it
+# was typed. Split by grammar, because the letters are not interchangeable across it:
+# `seen:`/`occurrences:`/`kanji:` take a colon, `length` an operator. Neither map touches
+# the bare-word fallthrough, where a lone `s` is a text search rather than `seen:`.
+_COLON_ALIASES = {"o": "occurrences", "k": "kanji", "s": "seen"}
+_OP_ALIASES = {"l": "length"}
+
 
 def _color_key(token: str) -> Optional[str]:
     """The lookup key for a token, or None if it isn't a colorable term."""
@@ -105,10 +113,12 @@ def _color_key(token: str) -> Optional[str]:
         return None
     m = _COLON_RE.match(t)
     if m:
-        return m.group(1).lower()
+        key = m.group(1).lower()
+        return _COLON_ALIASES.get(key, key)
     m = _OP_RE.match(t)
     if m:
-        return m.group(1).lower()
+        key = m.group(1).lower()
+        return _OP_ALIASES.get(key, key)
     return t.lower()
 
 

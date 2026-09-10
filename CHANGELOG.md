@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-09-09
+- Every custom search term now answers to its first letter: `o:` for `occurrences:`, `k:` for `kanji:`, `s:` for `seen:`, and `l` for `length`. `occurrences:Dict>5 kanji:new=1 seen:7 length>=3` can be written `o:Dict>5 k:new=1 s:7 l>=3`.
+  - Both spellings are the same term and can be mixed in one query. The long forms are unchanged, so existing configs keep working.
+  - Works everywhere the long forms do: config searches, the Browse bar, and AnkiConnect.
+  - `limit=` keeps its full name, because `l` belongs to `length`.
+  - If one of your note types has a field named `o`, `k`, `s` or `l`, use the long form for that term, since the short form shadows a search on that field.
+
 ## 2026-08-30
 - New `compound_matching` occurrence option. Credits a dictionary-form card with the counts of entries *built on its stem*, which no other option can see.
   - `奮う` picks up `奮い立つ`, `取る` picks up `取り消す`, `受ける` picks up `受け入れる`, `食べる` picks up `食べ物`, `間違う` picks up `間違いない`.

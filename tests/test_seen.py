@@ -84,10 +84,34 @@ def test_seen_mixed_with_occurrences_resolve_independently():
     assert out == "(nid:1) (nid:2)"
 
 
+def test_seen_alias_resolves():
+    calls = []
+    out = search.rewrite_query("s:2", seen_resolver=seen_recorder(calls))
+    assert out == "(nid:7,8)"
+    assert calls == [2]
+
+
+def test_seen_alias_short_circuits_on_zero_like_the_long_form():
+    calls = []
+    assert search.rewrite_query("s:0", seen_resolver=seen_recorder(calls)) == "nid:0"
+    assert calls == []
+
+
+def test_seen_alias_does_not_fire_inside_other_tokens():
+    # `sc:` and `cds:` are Anki's own keys; `is:new` and `deck:s:2` embed the letter;
+    # `s:foo` is an ordinary field search, which the mandatory digits leave alone.
+    calls = []
+    for query in ("sc:2", "cds:2", "is:new", "deck:s:2", "unseen:2", "s:foo"):
+        assert search.rewrite_query(query, seen_resolver=seen_recorder(calls)) == query
+    assert calls == []
+
+
 def test_has_custom_term_includes_seen():
     assert search.has_custom_term("seen:2")
     assert search.has_custom_term("deck:JP seen:7>=10")
+    assert search.has_custom_term("s:2")
     assert not search.has_custom_term("unseen:2")
+    assert not search.has_custom_term("sc:2")
 
 
 # strip helper

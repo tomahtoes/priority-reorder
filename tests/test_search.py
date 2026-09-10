@@ -304,9 +304,8 @@ def test_new_reading_negation_is_detected():
     ("kanji:num[2]>=1", []),          # a bracket on num is still not a term
 ])
 def test_existing_kanji_grammar_is_unchanged(query, expected):
-    """new_reading has to sort before new in the alternation (leftmost-first),
-    and the bracket guard had to flip from (?<=new) to (?<!num). Neither may
-    disturb what the original two types matched."""
+    """Adding new_reading to the alternation and flipping the bracket guard from
+    (?<=new) to (?<!num) may not disturb what the original two types matched."""
     assert search.parse_custom_terms(query) == expected
 
 
@@ -316,3 +315,94 @@ def test_new_reading_is_stripped_from_the_anki_query():
 
 def test_new_reading_counts_as_a_custom_term():
     assert search.has_custom_term("kanji:new_reading>=1")
+
+
+# first-letter aliases
+
+
+def seen_recorder(calls, ids=None):
+    def resolve(n):
+        calls.append(n)
+        return ids if ids is not None else [7, 8]
+    return resolve
+
+
+def _rewrite_all(query, calls):
+    """rewrite_query with every resolver recording into one shared list, so a long form
+    and its alias can be compared on output and on resolver arguments at the same time."""
+    return search.rewrite_query(
+        query,
+        occ_resolver=occ_recorder(calls),
+        freq_resolver=freq_recorder(calls),
+        kanji_resolver=kanji_recorder(calls),
+        seen_resolver=seen_recorder(calls),
+        length_resolver=length_recorder(calls),
+    )
+
+
+@pytest.mark.parametrize("long_form,alias", [
+    ("occurrences:MyDict>=5", "o:MyDict>=5"),
+    ("occurrences:[A,B,C]>10", "o:[A,B,C]>10"),
+    ("occurrences:all>5", "o:all>5"),
+    ("kanji:new>=1", "k:new>=1"),
+    ("kanji:new[3]>=1", "k:new[3]>=1"),
+    ("kanji:new_reading[3]>=2", "k:new_reading[3]>=2"),
+    ("kanji:num>=2", "k:num>=2"),
+    ("seen:7", "s:7"),
+    ("seen:0", "s:0"),
+    ("length>=3", "l>=3"),
+    ("-occurrences:E<1", "-o:E<1"),
+    ("(seen:5)", "(s:5)"),
+    ("-length=1", "-l=1"),
+    ("deck:JP occurrences:D>5 kanji:new>=1 f<2000 length>=2 seen:7 -tag:done",
+     "deck:JP o:D>5 k:new>=1 f<2000 l>=2 s:7 -tag:done"),
+])
+def test_alias_resolves_exactly_like_the_long_form(long_form, alias):
+    long_calls, alias_calls = [], []
+    assert _rewrite_all(alias, alias_calls) == _rewrite_all(long_form, long_calls)
+    assert alias_calls == long_calls
+
+
+@pytest.mark.parametrize("query", [
+    # Anki's own keys, including the short ones it already reserves.
+    "sc:5", "cds:5", "nc:foo", "re:x", "w:foo", "is:new", "flag:1", "prop:s>1", "added:3",
+    # A field search named after an alias letter, or after that letter plus more.
+    "o:foo", "s:foo", "k:foo", "l:5", "length:5", "on:foo>=1", "no:x>1", "nk:new>=1",
+    # The alias sitting inside a larger token.
+    "deck:s:5", "deck:o:X>5", "unseen:5", "wavelength>=3",
+    # limit= is a reorder control (see rules.py), never a length term.
+    "limit=5",
+])
+def test_alias_leaves_anki_syntax_and_field_searches_alone(query):
+    calls = []
+    assert _rewrite_all(query, calls) == query
+    assert calls == []
+
+
+def test_has_custom_term_accepts_aliases():
+    assert search.has_custom_term("o:X>5")
+    assert search.has_custom_term("k:num=2")
+    assert search.has_custom_term("s:2")
+    assert search.has_custom_term("deck:JP l=1")
+    assert not search.has_custom_term("l:5")
+    assert not search.has_custom_term("limit=5")
+    assert not search.has_custom_term("sc:5")
+
+
+def test_aliases_strip_to_the_standard_anki_part():
+    q = "deck:JP o:D>5 k:new>=1 f<2000 l>=2 s:7 -o:E<1"
+    assert search._strip_custom_terms(q).split() == ["deck:JP", "-"]
+
+
+def test_rewriting_an_alias_query_twice_changes_nothing():
+    # No pattern may fire inside the (nid:...) clause it just produced.
+    once = _rewrite_all("deck:JP s:7 o:D>5 k:new>=1 l>=2", [])
+    assert _rewrite_all(once, []) == once
+
+
+def test_candidate_restriction_recognizes_aliases():
+    assert search._candidate_restriction_allowed("deck:JP s:7 o:D>5", "deck:JP")
+    assert not search._candidate_restriction_allowed("deck:JP or s:7", "deck:JP or")
+    # Inside quotes the optimization has to bail; a quote directly before the alias is a
+    # different case, blocked earlier by the lookbehind.
+    assert not search._candidate_restriction_allowed('tag:"a s:7 b" deck:JP', "deck:JP")
