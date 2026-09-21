@@ -10,6 +10,8 @@ try:  # inside Anki: isolated package namespace
     from .search import (
         has_custom_term,
         parse_custom_terms,
+        rewrite_query,
+        candidate_base_query,
         _strip_custom_terms,
         _candidate_restriction_allowed,
     )
@@ -28,6 +30,8 @@ except ImportError:  # pytest / flat-import context
     from search import (
         has_custom_term,
         parse_custom_terms,
+        rewrite_query,
+        candidate_base_query,
         _strip_custom_terms,
         _candidate_restriction_allowed,
     )
@@ -47,9 +51,15 @@ class SearchResult(NamedTuple):
     raw_count: int
 
 # Ids are inlined via ids2str, so SQLite's bound-parameter limit never applies;
-# the only real bound is statement length (1 MB default), and 5000 ids x ~14
-# bytes is ~70 KB, so a 100k-card backlog is 20 round-trips instead of 112.
-_BULK_CHUNK_SIZE = 5000
+# the only real bound is statement length (1 MB default), and 2000 ids x ~14
+# bytes is ~28 KB, so a 100k-card backlog is 50 round-trips instead of 112.
+#
+# The size is capped at 2000 for a second reason: past roughly 2500 inlined ids
+# SQLite stops resolving `notes.id in (...)` through the primary key and scans
+# the whole table instead. notes is a rowid table with the field text stored
+# inline, so that scan reads every note's flds to return three short columns
+# (measured 80 ms at 3000 ids against 168 ms at 5000 on a 22k-note collection).
+_BULK_CHUNK_SIZE = 2000
 
 # Cross-run cache of parsed note data, nid -> (notes.mod, NoteData). Note fields
 # rarely change between reorders, so warm runs only fetch field text for notes
@@ -116,6 +126,8 @@ class DataManager:
         # against one reference date. See _seen_windows.
         self._seen_levels: Optional[List[int]] = None
         self._seen_window_map: Optional[Dict[int, "seen_manager.SeenWindow"]] = None
+        # Whether any configured search asks for kanji:new_reading. See _km.
+        self._needs_readings: Optional[bool] = None
         self._note_fp_checked = False  # cross-run cache validated once per run
         # Sub-stage wall-clock accumulators (ms), merged into the reorder timings
         # line. NOT disjoint stages: `load` accumulates across both the
@@ -191,9 +203,17 @@ class DataManager:
             try:
                 for start in range(0, len(missing), _BULK_CHUNK_SIZE):
                     chunk = missing[start:start + _BULK_CHUNK_SIZE]
+                    # cross join, not join: it is an ordinary inner join that also
+                    # forbids SQLite reordering the two tables. Left free, the planner
+                    # switches from the primary-key lookup to scanning notes once the
+                    # id list passes ~2500, which on a 22k-note collection took the
+                    # query from 22 ms to 7.2 seconds, because scanning notes reads
+                    # every row's inline field text to return two integers. Driving
+                    # from cards is right for every input this can get, since the id
+                    # list is capped by _BULK_CHUNK_SIZE.
                     links.extend(mw.col.db.all(
                         "select c.id, c.nid, n.mid, n.mod from cards c "
-                        f"join notes n on n.id = c.nid where c.id in {ids2str(chunk)}"
+                        f"cross join notes n on n.id = c.nid where c.id in {ids2str(chunk)}"
                     ))
             except Exception as e:
                 import traceback
@@ -269,6 +289,16 @@ class DataManager:
             if _candidate_restriction_allowed(raw, stripped):
                 return self._get_cards_filtered(raw, stripped)
 
+            # Second-best path: the query carries an OR or a grouped custom term, so the
+            # conjunctive post-filter above cannot represent it, but its standard conjuncts
+            # still bound the answer. Resolve the custom terms over those candidates and let
+            # Anki evaluate the boolean structure. See _get_cards_resolved.
+            base = candidate_base_query(raw)
+            if base:
+                result = self._get_cards_resolved(raw, base)
+                if result is not None:
+                    return result
+
         # Default path: no custom terms, or a disjunctive/grouped query whose custom
         # terms must be resolved by the patched find_cards (correctness over speed).
         # The user part is parenthesized because Anki binds AND tighter than OR:
@@ -330,6 +360,53 @@ class DataManager:
             self._add_ms(f"filter_{kind}", t0)
         return SearchResult(cards, raw_count)
 
+    def _get_cards_resolved(self, raw_query: str, base: str) -> Optional[SearchResult]:
+        """Resolve a non-conjunctive query's custom terms over the candidates its standard part
+        selects, then hand the resulting standard-only query to find_cards.
+
+        The path for queries the Python post-filter cannot take, `deck:X (seen:7 OR added:7)
+        kanji:new>=1` being the shape that motivated it. Those used to fall through to the
+        patched find_cards, which resolved every custom term against the WHOLE collection: on a
+        22k-note collection with six such searches that was ~9 s per reorder, recomputing
+        occurrence totals and seen lookups this manager had already computed for the
+        conjunctive searches (~50 ms once the per-run memos are reused).
+
+        ``base`` comes from ``search.candidate_base_query``, which carries the proof that its
+        matches contain the query's. Each term resolves through ``_term_predicate``, so every
+        per-run memo applies and a term repeated across searches (``seen:7`` appears in all six)
+        is evaluated once.
+
+        ``rewrite_query`` substitutes the ``nid:`` clauses and leaves a leading ``-`` alone, so
+        Anki's own negation wraps the clause and the predicates stay positive. Injecting
+        resolvers also stops it deriving candidates of its own (see ``_call_resolver``).
+
+        Returns None when the rewrite fails, leaving the caller on the full-scan path."""
+        candidates = self._cards_for_search(f"({base}) is:new")
+
+        def resolve(kind: str, args):
+            pred = self._term_predicate(kind, args)
+            t0 = time.perf_counter()
+            nids = {c.note_id for c in candidates if pred(c)}
+            self._add_ms(f"filter_{kind}", t0)
+            return nids
+
+        try:
+            rewritten = rewrite_query(
+                raw_query,
+                occ_resolver=lambda *args: resolve("occ", args),
+                kanji_resolver=lambda *args: resolve("kanji", args),
+                freq_resolver=lambda *args: resolve("freq", args),
+                seen_resolver=lambda *args: resolve("seen", args),
+                length_resolver=lambda *args: resolve("length", args),
+            )
+        except Exception as e:
+            import traceback
+            print(f"[priority-reorder] candidate rewrite failed for {raw_query!r}: {e}")
+            traceback.print_exc()
+            return None
+
+        return SearchResult(self._cards_for_search(f"({rewritten}) is:new"), len(candidates))
+
     def _term_predicate(self, kind: str, args):
         if kind == "freq":
             op, thresh = args
@@ -386,8 +463,8 @@ class DataManager:
             comparator = parse_comparator(op)
             km = self._km()
             if check_type == "new_reading":
-                # Before initialize(): the reading index is built during the scan,
-                # and enabling it afterwards would force a second one.
+                # Normally a no-op: _km already enabled reading mode from the config scan.
+                # This covers a predicate built for a search outside the configured ones.
                 km.enable_readings()
             t0 = time.perf_counter()
             km.initialize()  # once per predicate build, not per evaluated card
@@ -583,6 +660,41 @@ class DataManager:
             self._note_derived_cache[nid] = value
         return value
 
+    def _configured_queries(self) -> List[str]:
+        """Every search string in the config, priority and normal alike.
+
+        Two predicates need to know what the WHOLE config asks for before the first one is
+        built, so both scan this rather than accumulating as predicates are created."""
+        queries: List[str] = []
+        raw = self.config.priority_search
+        if isinstance(raw, str):
+            queries.append(raw)
+        elif raw:
+            queries.extend(q for q in raw if isinstance(q, str))
+        if isinstance(self.config.normal_search, str):
+            queries.append(self.config.normal_search)
+        return [q for q in queries if q]
+
+    def _reading_mode_configured(self) -> bool:
+        """Whether any configured search uses ``kanji:new_reading``.
+
+        Scanned from the config for the same reason as _seen_level_set: the answer is needed
+        before the first kanji predicate is built, and a search later in the list cannot be
+        allowed to change it retroactively."""
+        if self._needs_readings is None:
+            needs = False
+            for query in self._configured_queries():
+                try:
+                    terms = parse_custom_terms(query)
+                except Exception:  # a malformed search must not break the reorder
+                    continue
+                if any(kind == "kanji" and args[0] == "new_reading"
+                       for kind, args, _negated in terms):
+                    needs = True
+                    break
+            self._needs_readings = needs
+        return self._needs_readings
+
     def _seen_level_set(self, n: int) -> List[int]:
         """Every distinct positive ``seen:N`` in the configured searches, ascending.
 
@@ -590,19 +702,8 @@ class DataManager:
         short-circuit needs the largest level up front. The first search to carry a `seen:`
         term must already know whether a bigger window exists elsewhere in the config."""
         if self._seen_levels is None:
-            queries: List[str] = []
-            raw = self.config.priority_search
-            if isinstance(raw, str):
-                queries.append(raw)
-            elif raw:
-                queries.extend(q for q in raw if isinstance(q, str))
-            if isinstance(self.config.normal_search, str):
-                queries.append(self.config.normal_search)
-
             levels = set()
-            for query in queries:
-                if not query:
-                    continue
+            for query in self._configured_queries():
                 try:
                     for term_kind, term_args, _negated in parse_custom_terms(query):
                         if term_kind == "seen" and term_args[0] > 0:
@@ -638,5 +739,13 @@ class DataManager:
 
     def _km(self):
         if self._kanji_manager is None:
-            self._kanji_manager = get_kanji_manager(self.config)
+            km = get_kanji_manager(self.config)
+            # Reading slots are collected during the known-set scan, and turning them on
+            # afterwards throws that scan away and redoes it. A config mixing kanji:new with
+            # kanji:new_reading used to scan the learned collection twice for that reason
+            # (measured 505 ms discarded, then 762 ms kept), so the whole config decides the
+            # mode before the first predicate triggers a scan.
+            if self._reading_mode_configured():
+                km.enable_readings()
+            self._kanji_manager = km
         return self._kanji_manager

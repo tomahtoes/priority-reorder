@@ -166,9 +166,10 @@ def test_rewrite_negated_custom_term_strips_dangling_dash(fake_anki, monkeypatch
 
 
 @pytest.mark.parametrize("query", [
-    "occurrences:MyDict>5",              # bare custom term, no standard part
+    "occurrences:MyDict>5",              # bare custom term, nothing to restrict on
     "deck:A OR occurrences:MyDict>5",    # top-level disjunction
-    "(deck:A occurrences:MyDict>5)",     # custom term inside a group
+    "-(occurrences:MyDict>5)",           # negated group, never flattened
+    "(deck:A occurrences:MyDict>5",      # unbalanced paren
 ])
 def test_rewrite_unsafe_queries_fall_back_to_full_scan(fake_anki, monkeypatch, query):
     col = fake_anki(notes=[], find_notes_result=[1, 2, 3])
@@ -179,6 +180,38 @@ def test_rewrite_unsafe_queries_fall_back_to_full_scan(fake_anki, monkeypatch, q
 
     assert record == [None]                # full scan (no candidate restriction)
     assert col.find_notes_queries == []    # never narrowed the candidate set
+
+
+def test_rewrite_restricts_a_custom_term_nested_in_a_group(fake_anki, monkeypatch):
+    """A custom term inside a group still restricts, via the group's own standard conjuncts.
+
+    This used to fall back to a full collection scan, because the old check required every
+    custom token to sit at depth 0 and blanked tokens in place rather than dropping conjuncts.
+    The live shape it cost was `deck:X (seen:7 OR added:7) kanji:new>=1`, where the OR is
+    nested but the deck restriction is perfectly usable.
+    """
+    col = fake_anki(notes=[], find_notes_result=[7, 8])
+    record = []
+    monkeypatch.setattr(search, "resolve_occurrences", _record_occ(record))
+
+    search.rewrite_query("(deck:A occurrences:MyDict>5)")
+
+    assert record == [{7, 8}]
+    assert col.find_notes_queries == ["deck:A"]
+
+
+def test_rewrite_restricts_past_a_nested_or(fake_anki, monkeypatch):
+    # The OR sits inside a group, so it is one conjunct; deck:A and is:new still bound the
+    # answer. The nested group is kept whole rather than flattened, and the conjuncts around
+    # it survive, which is what the reorderer's own "(user query) is:new" wrapping needs.
+    col = fake_anki(notes=[], find_notes_result=[4])
+    record = []
+    monkeypatch.setattr(search, "resolve_occurrences", _record_occ(record))
+
+    search.rewrite_query("(deck:A (added:7 OR added:3) occurrences:MyDict>5) is:new")
+
+    assert record == [{4}]
+    assert col.find_notes_queries == ["deck:A (added:7 OR added:3) is:new"]
 
 
 def test_rewrite_grouped_conjunctive_query_still_restricts(fake_anki, monkeypatch):
@@ -227,6 +260,30 @@ def test_strip_custom_terms_leaves_standard_part():
 ])
 def test_candidate_restriction_allowed(query, stripped, allowed):
     assert search._candidate_restriction_allowed(query, stripped) is allowed
+
+
+@pytest.mark.parametrize("query,base", [
+    ("deck:X occurrences:D>5", "deck:X"),
+    ("deck:X -occurrences:D>5", "deck:X"),              # the stray '-' goes with its conjunct
+    ("(deck:A occurrences:D>5)", "deck:A"),             # plain group is flattened
+    ("(deck:A or deck:B) occurrences:D>5", "(deck:A or deck:B)"),   # OR group kept whole
+    ("(deck:A or deck:B) is:new seen:3", "(deck:A or deck:B) is:new"),
+    # The reorderer's own "(user query) is:new" wrapping must not collapse the user's conjuncts.
+    ("(deck:M (seen:7 OR added:7) kanji:new>=1) is:new", "deck:M is:new"),
+    ("-(seen:7 added:3) deck:X kanji:new>=1", "deck:X"),  # negated group dropped, not flattened
+    ('deck:"A (B)" f<10', 'deck:"A (B)"'),               # quoted parens are not structure
+    ('deck:"a or b" f<10', 'deck:"a or b"'),             # quoted or is not an operator
+    ("wordor f<10", "wordor"),
+    # No usable base -> full scan.
+    ("occurrences:D>5", None),
+    ("-occurrences:D>5", None),
+    ("deck:A or occurrences:D>5", None),                 # top-level OR breaks the superset
+    ("deck:A OR occurrences:D>5", None),
+    ("(deck:A occurrences:D>5", None),                   # unbalanced paren
+    ('deck:"A f<10', None),                              # unterminated quote
+])
+def test_candidate_base_query(query, base):
+    assert search.candidate_base_query(query) == base
 
 
 # parse_custom_terms (reorder post-filter parser)

@@ -43,6 +43,7 @@ class _FakeDB:
         self.link_calls = 0   # phase-1 linkage queries
         self.flds_calls = 0   # phase-2 field-text queries
         self.flds_ids = []    # nids requested by phase-2 queries
+        self.link_sql = []    # verbatim phase-1 SQL, for the join-order guard
 
     @staticmethod
     def _ids(sql):
@@ -54,6 +55,7 @@ class _FakeDB:
         ids = self._ids(sql)
         if "from cards c" in sql:
             self.link_calls += 1
+            self.link_sql.append(sql)
             return [
                 (cid, r[1], r[2], self.note_mods.get(r[1], 1))
                 for cid in ids
@@ -250,6 +252,156 @@ def test_plain_query_raw_count_equals_match_count(fake_col):
     assert res.raw_count == len(res.cards) == 1
 
 
+# non-conjunctive custom-term queries (candidate-restricted resolution)
+
+def _nid_sets(query):
+    """The nid clauses in a rewritten query, as sets, since the resolvers return sets."""
+    import re as _re
+    return [{int(x) for x in m.group(1).split(",")}
+            for m in _re.finditer(r"nid:([0-9,]+)", query)]
+
+
+def test_grouped_custom_term_resolves_over_the_candidate_set(fake_col):
+    """A query the conjunctive post-filter cannot take still resolves over its own candidates.
+
+    `length>=2` sits inside an OR group, so the Python post-filter path is unavailable, but
+    deck:A still bounds the answer. Before this path such queries went to the patched
+    find_cards, which resolved every term against the whole collection.
+    """
+    col = fake_col(
+        find_results={"(deck:A) is:new": [1, 2, 3]},
+        rows=[
+            _row(1, 10, "語", "ご", "500"),      # 1 char, freq 500
+            _row(2, 20, "学校", "がっこう", "50"),   # 2 chars, freq 50
+            _row(3, 30, "日本語", "にほんご", "900"),  # 3 chars, freq 900
+        ],
+    )
+    DataManager(Config()).get_cards_from_search("deck:A (length>=2 OR added:3) f>=100")
+
+    assert col.queries[0] == "(deck:A) is:new"     # candidates from the standard conjuncts
+    final = col.queries[-1]
+    assert "length" not in final and "f>=" not in final   # every custom token resolved away
+    assert _nid_sets(final) == [{20, 30}, {10, 30}]       # length>=2, then f>=100
+
+
+def test_candidate_query_is_shared_with_the_conjunctive_path(fake_col):
+    # Both paths ask for "(deck:A) is:new", so _search_cache serves the second one for free.
+    col = fake_col(
+        find_results={"(deck:A) is:new": [1]},
+        rows=[_row(1, 10, "語", "ご", "500")],
+    )
+    dm = DataManager(Config())
+    dm.get_cards_from_search("deck:A f>=100")
+    dm.get_cards_from_search("deck:A (length>=2 OR added:3) f>=100")
+    assert col.queries.count("(deck:A) is:new") == 1
+
+
+def test_raw_count_reports_the_candidate_total(fake_col):
+    # Mirrors _get_cards_filtered: raw_count is the standard part's match count, before any
+    # custom term narrowed it, which is what the summary window reports.
+    col = fake_col(
+        find_results={"(deck:A) is:new": [1, 2]},
+        rows=[_row(1, 10, "語", "ご", "500"), _row(2, 20, "学校", "が", "50")],
+    )
+    result = DataManager(Config()).get_cards_from_search("deck:A (length>=2 OR added:3) f>=100")
+    assert result.raw_count == 2
+
+
+def test_top_level_or_still_falls_back_to_find_cards(fake_col):
+    # No standard conjunct bounds a top-level disjunction, so the whole raw query goes to the
+    # patched find_cards exactly as before.
+    col = fake_col()
+    DataManager(Config()).get_cards_from_search("deck:A or f>=100")
+    assert col.queries == ["(deck:A or f>=100) is:new"]
+
+
+def test_bare_custom_term_still_falls_back_to_find_cards(fake_col):
+    col = fake_col()
+    DataManager(Config()).get_cards_from_search("f>=100")
+    assert col.queries == ["(f>=100) is:new"]
+
+
+def test_failed_rewrite_falls_back_to_find_cards(fake_col, monkeypatch):
+    # Bailing costs speed, never correctness: a broken rewrite must not lose the search.
+    col = fake_col(find_results={"(deck:A) is:new": []})
+
+    def boom(*a, **k):
+        raise RuntimeError("rewrite exploded")
+
+    monkeypatch.setattr(dmod, "rewrite_query", boom)
+    DataManager(Config()).get_cards_from_search("deck:A (length>=2 OR added:3) f>=100")
+    assert col.queries[-1] == "(deck:A (length>=2 OR added:3) f>=100) is:new"
+
+
+# kanji reading mode (whole-config scan)
+
+class _KMStub:
+    """Counts known-set scans, and mirrors the real manager's rule that turning reading mode
+    on discards whatever the previous scan built."""
+
+    def __init__(self):
+        self.reading_mode = False
+        self.initialized = False
+        self.scans = 0
+
+    def enable_readings(self):
+        if self.reading_mode:
+            return
+        self.reading_mode = True
+        self.initialized = False
+
+    def initialize(self):
+        if self.initialized:
+            return
+        self.scans += 1
+        self.initialized = True
+
+
+@pytest.fixture
+def km_stub(monkeypatch):
+    stub = _KMStub()
+    monkeypatch.setattr(dmod, "get_kanji_manager", lambda cfg: stub)
+    return stub
+
+
+def test_reading_mode_comes_from_the_config_so_the_known_set_is_scanned_once(fake_col, km_stub):
+    """A config mixing kanji:new with kanji:new_reading must scan the learned collection once.
+
+    Reading slots are collected during the scan, so enabling them afterwards throws that scan
+    away. Built in search order, kanji:new scanned without slots and the later
+    kanji:new_reading rebuilt from scratch (measured 505 ms discarded, then 762 ms kept). The
+    mode is therefore decided from the whole config before any predicate triggers a scan.
+    """
+    fake_col()
+    cfg = Config(priority_search=["deck:X kanji:new>=1", "deck:X kanji:new_reading>=1"])
+    dm = DataManager(cfg)
+    dm._term_predicate("kanji", ("new", 1, ">=", 1))
+    dm._term_predicate("kanji", ("new_reading", 1, ">=", 1))
+    assert km_stub.reading_mode
+    assert km_stub.scans == 1
+
+
+def test_reading_mode_stays_off_when_no_configured_search_asks(fake_col, km_stub):
+    # Users of kanji:new / kanji:num must keep paying nothing for the reading index.
+    fake_col()
+    dm = DataManager(Config(priority_search=["deck:X kanji:new>=1"]))
+    dm._term_predicate("kanji", ("new", 1, ">=", 1))
+    assert not km_stub.reading_mode
+
+
+def test_normal_search_also_decides_reading_mode(fake_col, km_stub):
+    # _configured_queries covers the normal search, not just the priority ones.
+    fake_col()
+    dm = DataManager(Config(normal_search="deck:X kanji:new_reading>=1"))
+    assert dm._reading_mode_configured()
+
+
+def test_malformed_search_does_not_break_the_reading_mode_scan(fake_col, km_stub):
+    fake_col()
+    dm = DataManager(Config(priority_search=["deck:X ((((", "deck:Y kanji:new_reading>=1"]))
+    assert dm._reading_mode_configured()
+
+
 # get_cards / bulk load batching
 
 def test_get_cards_bulk_loads_in_one_query(fake_col):
@@ -267,6 +419,28 @@ def test_get_cards_drops_vanished_ids(fake_col):
     col = fake_col(rows=[_row(1, 10, "語", "ご", "1")])
     out = DataManager(Config()).get_cards([1, 999])
     assert list(out) == [1]
+
+
+def test_bulk_load_forces_the_join_order(fake_col):
+    """The linkage query must pin cards as the outer table.
+
+    Left to choose, SQLite abandons the primary-key lookup once the inlined id list passes
+    roughly 2500 and scans notes instead, which costs it every row's inline field text to
+    return two integers (measured 22 ms against 7.2 s on a 22k-note collection). `cross join`
+    is an ordinary inner join that also forbids the reorder, so this is a correctness-neutral
+    way to keep the plan. Reverting it to a plain `join` reintroduces a multi-second stall.
+    """
+    col = fake_col(rows=[_row(i, i * 10, "語", "ご", "1") for i in range(1, 4)])
+    DataManager(Config()).get_cards([1, 2, 3])
+    assert col.db.link_sql
+    for sql in col.db.link_sql:
+        assert "cross join notes" in sql
+
+
+def test_bulk_chunk_size_stays_on_the_primary_key_plan(fake_col):
+    # Above ~2500 inlined ids SQLite switches `notes.id in (...)` from the primary key to a
+    # full table scan, so the chunk size has a ceiling as well as the statement-length one.
+    assert dmod._BULK_CHUNK_SIZE <= 2500
 
 
 def test_bulk_load_chunks_large_id_lists(fake_col):

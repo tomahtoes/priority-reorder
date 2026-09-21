@@ -17,6 +17,7 @@ collection is imported lazily inside the resolvers and install().
 
 import logging
 import re
+from typing import Optional
 
 try:  # inside Anki: isolated package namespace
     from .utils import parse_comparator
@@ -150,6 +151,124 @@ def _strip_custom_terms(query: str) -> str:
 _OR_TOKEN_RE = re.compile(r"(?i)(?<![^\s()])or(?![^\s()])")
 
 
+def _depth_states(query: str):
+    """``[(paren depth, inside quotes)]`` before each character, or None when the parens do not
+    balance or a quote is never closed. Backslash escapes the next character.
+
+    Shared by the two candidate-restriction predicates below, which need the same positional
+    view of the query and must agree about what counts as malformed."""
+    states = []
+    depth = 0
+    in_quotes = False
+    escaped = False
+    for ch in query:
+        states.append((depth, in_quotes))
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\":
+            escaped = True
+        elif ch == '"':
+            in_quotes = not in_quotes
+        elif not in_quotes:
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth < 0:
+                    return None
+    if depth != 0 or in_quotes:
+        return None
+    return states
+
+
+def _custom_term_spans(query: str):
+    """``[(start, end)]`` of every custom token in the query, in no particular order."""
+    spans = []
+    for regex in (OCC_RE, KANJI_RE, FREQ_RE, SEEN_RE, LENGTH_RE):
+        spans.extend(m.span() for m in regex.finditer(query))
+    return spans
+
+
+def _or_at_depth(query: str, states, lo: int, hi: int, depth: int) -> bool:
+    """Whether an OR operator sits at exactly ``depth`` within ``query[lo:hi]``."""
+    for m in _OR_TOKEN_RE.finditer(query, lo, hi):
+        if states[m.start()] == (depth, False):
+            return True
+    return False
+
+
+def _spans_at_depth(query: str, states, lo: int, hi: int, depth: int):
+    """``query[lo:hi]`` split on whitespace sitting at exactly ``depth``, outside quotes.
+
+    A parenthesized group is therefore one span however much whitespace it contains, and so is
+    a quoted value like ``deck:"my deck"``."""
+    spans = []
+    start = None
+    for i in range(lo, hi):
+        if query[i].isspace() and states[i] == (depth, False):
+            if start is not None:
+                spans.append((start, i))
+                start = None
+        elif start is None:
+            start = i
+    if start is not None:
+        spans.append((start, hi))
+    return spans
+
+
+def candidate_base_query(query: str) -> Optional[str]:
+    """The standard part of ``query`` whose matches are guaranteed to CONTAIN the whole query's,
+    or None when no such part can be derived.
+
+    Resolving a custom term over only those notes is then equivalent to a full scan:
+
+        Let the query be a top-level conjunction C1 AND ... AND Ck with no OR at depth 0, and
+        let K be the conjuncts holding no custom term. Then matches(query) is a subset of
+        matches(AND K), the base returned here. Replacing a custom term's resolution S with
+        S intersected with the base is match-preserving: a note inside the base sees the same
+        truth value for that term, and a note outside it already fails some conjunct in K,
+        which the substitution does not touch. That holds however deeply the term is nested,
+        and whether or not it is negated.
+
+    So whole conjuncts are DROPPED rather than the custom tokens blanked out in place. Blanking
+    turns ``(seen:7 OR added:7)`` into ``( OR added:7)``, which is malformed, and is narrower
+    rather than wider even read charitably, since it deletes a branch of the OR.
+
+    A non-negated parenthesized group carrying no OR of its own is flattened into the enclosing
+    conjunction. That is what lets the reorderer's own ``(user query) is:new`` wrapping still
+    contribute the user's deck and other conjuncts, instead of collapsing into one opaque term
+    that has to be dropped whole. A NEGATED group is never flattened: not (a and b) is not the
+    same as (not a) and (not b).
+
+    Returns None, meaning "fall back to a full scan", on a top-level OR (where the superset
+    argument fails), on unbalanced parens or an unterminated quote, and when every conjunct
+    carries a custom term so nothing is left to restrict on. Bailing costs speed, never
+    correctness."""
+    states = _depth_states(query)
+    if states is None:
+        return None
+    if _or_at_depth(query, states, 0, len(query), 0):
+        return None
+
+    custom = _custom_term_spans(query)
+    kept = []
+    work = [(0, len(query), 0)]
+    while work:
+        lo, hi, depth = work.pop()
+        for start, end in _spans_at_depth(query, states, lo, hi, depth):
+            if (query[start] == "(" and query[end - 1] == ")"
+                    and all(states[i][0] > depth for i in range(start + 1, end - 1))
+                    and not _or_at_depth(query, states, start + 1, end - 1, depth + 1)):
+                work.append((start + 1, end - 1, depth + 1))
+            elif not any(start <= cs < end for cs, _ce in custom):
+                kept.append((start, end))
+    if not kept:
+        return None
+    kept.sort()
+    return " ".join(query[start:end] for start, end in kept)
+
+
 def _candidate_restriction_allowed(query: str, stripped: str) -> bool:
     """True when resolving the custom terms over only the notes the standard part of the query
     matches is guaranteed to equal a full scan. That holds for a TOP-LEVEL conjunction
@@ -170,28 +289,8 @@ def _candidate_restriction_allowed(query: str, stripped: str) -> bool:
     if not stripped.replace("-", "").strip():
         return False
 
-    # (depth, in_quotes) before each character; backslash escapes the next char.
-    states = []
-    depth = 0
-    in_quotes = False
-    escaped = False
-    for ch in query:
-        states.append((depth, in_quotes))
-        if escaped:
-            escaped = False
-            continue
-        if ch == "\\":
-            escaped = True
-        elif ch == '"':
-            in_quotes = not in_quotes
-        elif not in_quotes:
-            if ch == "(":
-                depth += 1
-            elif ch == ")":
-                depth -= 1
-                if depth < 0:
-                    return False
-    if depth != 0 or in_quotes:
+    states = _depth_states(query)
+    if states is None:
         return False
 
     for regex in (OCC_RE, KANJI_RE, FREQ_RE, SEEN_RE, LENGTH_RE):
@@ -251,11 +350,11 @@ def rewrite_query(query, *, occ_resolver=None, freq_resolver=None, kanji_resolve
     if not injected:
         fn = find_notes if find_notes is not None else _default_find_notes()
         if fn is not None:
-            # Stripping removes seen: too, which the unpatched find_notes can't
-            # parse; a bare seen: query then strips to empty -> no restriction.
-            stripped = " ".join(_strip_custom_terms(query).split())
-            if _candidate_restriction_allowed(query, stripped):
-                base = " ".join(t for t in stripped.split() if t != "-")
+            # candidate_base_query drops whole conjuncts, so the custom tokens (including
+            # seen:, which the unpatched find_notes cannot parse) and any stray negation go
+            # with them. A query offering nothing to restrict on returns None -> full scan.
+            base = candidate_base_query(query)
+            if base:
                 try:
                     candidate_nids = set(fn(base))
                 except Exception:

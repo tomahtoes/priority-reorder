@@ -1,13 +1,15 @@
 # Changelog
 
-## 2026-09-09
+## 2026-09-21
+- Reorders are much faster. On a 22,700-note collection with 42 priority searches, a reorder went from about 15 seconds to under half a second, and the first one after starting Anki from about 18 seconds to about 3.
+  - The biggest gain is for searches that put a custom term inside parentheses or next to `OR`, like `deck:X (seen:7 OR added:7) kanji:new>=1`. Those used to check every note in your collection instead of only the cards being reordered.
+  - Collections large enough to reorder more than about 2,500 cards at once gain the most, since one of the database queries was reading the whole notes table every run.
+  - Nothing about matching changed. The same cards are selected, in the same order.
 - Every custom search term now answers to its first letter: `o:` for `occurrences:`, `k:` for `kanji:`, `s:` for `seen:`, and `l` for `length`. `occurrences:Dict>5 kanji:new=1 seen:7 length>=3` can be written `o:Dict>5 k:new=1 s:7 l>=3`.
   - Both spellings are the same term and can be mixed in one query. The long forms are unchanged, so existing configs keep working.
   - Works everywhere the long forms do: config searches, the Browse bar, and AnkiConnect.
   - `limit=` keeps its full name, because `l` belongs to `length`.
   - If one of your note types has a field named `o`, `k`, `s` or `l`, use the long form for that term, since the short form shadows a search on that field.
-
-## 2026-08-30
 - New `compound_matching` occurrence option. Credits a dictionary-form card with the counts of entries *built on its stem*, which no other option can see.
   - `奮う` picks up `奮い立つ`, `取る` picks up `取り消す`, `受ける` picks up `受け入れる`, `食べる` picks up `食べ物`, `間違う` picks up `間違いない`.
   - Both the written form and the reading must match, so `抱く`/だく takes `抱きしめる` while `抱く`/いだく does not.
