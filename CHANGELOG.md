@@ -16,6 +16,10 @@
   - Works on its own (it covers the plain 連用形 too), and counts the shared entry once when `stem_matching` is also on.
   - Deliberately generous: transitive pairs (`見回る`←`見回す`) and drifted idioms (`当たる`←`当たり前`) come along with the real compounds.
   - Applies to `occurrences:` and `seen:` alike.
+- `suffix_matching` now credits a verb card from entries ending in its negative form (未然形 + `ず`/`ぬ`), which most dictionaries list as their own entries.
+  - `にも拘わらず` credits `拘わる`, `相変わらず` credits `変わる`, `見ず知らず` and `見知らぬ` credit `知る`, `思わず` credits `思う`.
+  - The reading has to match as well, so `にも拘らず` (にもかかわらず) leaves a `拘る`/こだわる card alone.
+  - Applies to `occurrences:` and `seen:` alike.
 
 ## 2026-08-28
 - New `kanji:new_reading` search term. Prioritizes words that use a Kanji in a *reading* you haven't learned, not just a new Kanji, so `食べる` (た) still matches after you've learned `食事` (しょく).

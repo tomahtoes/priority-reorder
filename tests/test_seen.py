@@ -402,6 +402,12 @@ def test_seen_contains_matches_counting_presence_incl_homograph():
             ["奮い立つ", "freq", {"reading": "ふるいたつ", "frequency": {"value": 16}}],
             ["食べるもの", "freq", {"reading": "たべるもの", "frequency": {"value": 30}}],
             ["立ち止まる", "freq", {"reading": "たちどまる", "frequency": {"value": 109}}],
+            # negative-form tails: a phrase hit, the exact form the compound sweep also
+            # reaches, a same-written reading miss, and an entry starting with the card
+            ["にも拘わらず", "freq", {"reading": "にもかかわらず", "frequency": {"value": 13}}],
+            ["拘わらず", "freq", {"reading": "かかわらず", "frequency": {"value": 4}}],
+            ["にも拘らず", "freq", {"reading": "にもかかわらず", "frequency": {"value": 7}}],
+            ["変わる変わらず", "freq", {"reading": "かわるかわらず", "frequency": {"value": 2}}],
         ],
     ]
     cards = [("下駄", "げた"), ("角", "かど"), ("茶", "ちゃ"), ("下駄箱", "げたばこ"),
@@ -428,7 +434,10 @@ def test_seen_contains_matches_counting_presence_incl_homograph():
              # compound rule: a hit, the card-prefix concession, the variant overlap, and the
              # reverse direction, which stays uncredited like the stem rule's
              ("奮う", "ふるう"), ("食べる", "たべる"), ("立ち止る", "たちどまる"),
-             ("奮い立つ", "ふるいたつ")]
+             ("奮い立つ", "ふるいたつ"),
+             # negative-form tails: hits, a reading miss, and the card-prefix concession
+             ("拘わる", "かかわる"), ("拘る", "かかわる"), ("拘る", "こだわる"),
+             ("変わる", "かわる")]
     flagsets = [
         {},
         {"prefix_matching": True},
@@ -462,6 +471,8 @@ def test_seen_contains_matches_counting_presence_incl_homograph():
         # conceded rather than answered twice, and presence must still agree with the total.
         {"compound_matching": True, "stem_matching": True},
         {"compound_matching": True, "variant_matching": True},
+        # The negative-tail dedup guard concedes 拘わらず to the compound sweep.
+        {"compound_matching": True, "suffix_matching": True, "stem_matching": True},
         {"compound_matching": True, "stem_matching": True, "variant_matching": True,
          "prefix_matching": True, "suffix_matching": True, "combine_word_forms": True,
          "honorific_folding": True},

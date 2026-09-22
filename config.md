@@ -119,6 +119,7 @@ These flags all change how a card is credited with dictionary occurrences. They 
 - **Description**: The mirror of `matching.prefix_matching` at the **end** of a word (Japanese is head-final). Groups a head with its family: `学校` ← `小学校`/`中学校`, `出す` ← `思い出す`, `強い` ← `心強い`.
 - **Gate**: card must be **≥ 2 chars and contain a kanji** (real words like 学校/食べる/強い; excludes bare single kanji and pure kana like する/こと).
 - **Single kanji**: excluded from the bare rule; credited only via reading-validated **tail** particle phrases, so `母の日`/ははのひ credits `日`/ひ.
+- **Negative forms**: a verb card is also credited by entries ending in its 未然形 + `ず`/`ぬ`, on both the written form and the reading: `にも拘わらず` credits `拘わる`/かかわる, `思わず` credits `思う`. `ない` is not included. Counted once alongside `matching.compound_matching`.
 - **Default**: `false`
 
 ### `matching.stem_matching` (bool)

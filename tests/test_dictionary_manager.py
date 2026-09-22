@@ -1087,6 +1087,65 @@ def test_compound_view_is_not_built_when_the_flag_is_off():
     assert ix._stem_compound_keys is None
 
 
+# negative-form tails (suffix_matching over 未然形 + ず/ぬ)
+
+def test_negative_forms_cover_godan_and_both_readings_of_ru_verbs():
+    assert dm._negative_forms("思う", "おもう") == [("思わず", "おもわず"), ("思わぬ", "おもわぬ")]
+    assert dm._negative_forms("拘わる", "かかわる") == [
+        ("拘わず", "かかわず"), ("拘わぬ", "かかわぬ"),       # ichidan reading
+        ("拘わらず", "かかわらず"), ("拘わらぬ", "かかわらぬ"),  # godan reading
+    ]
+
+
+def test_negative_forms_reject_what_stem_candidates_reject():
+    assert dm._negative_forms("する", "する") == []           # expression == reading
+    assert dm._negative_forms("学校", "がっこう") == []       # kanji-final
+    assert dm._negative_forms("強い", "つよい") == []         # adjectives are not handled
+    assert dm._negative_forms("", "") == []
+
+
+def test_negative_suffix_credits_a_verb_from_a_phrase_ending_in_its_negative():
+    # The motivating case: no dict lists 拘わらず alone, only phrases ending in it.
+    ix = _stem_index([("にも拘わらず", "にもかかわらず", 10), ("それにも拘わらず", "それにもかかわらず", 2)])
+    assert ix.get_total("拘わる", "かかわる") == 0
+    assert ix.get_total("拘わる", "かかわる", suffix_matching=True) == 12
+
+
+def test_negative_suffix_credits_the_form_itself_and_the_nu_negative():
+    ix = _stem_index([("思わず", "おもわず", 5), ("思わぬ", "おもわぬ", 3), ("絶えず", "たえず", 2)])
+    assert ix.get_total("思う", "おもう", suffix_matching=True) == 8
+    assert ix.get_total("絶える", "たえる", suffix_matching=True) == 2   # ichidan
+
+
+def test_negative_suffix_requires_the_reading_tail():
+    # Same written tail, other reading: 拘る/こだわる must not take にも拘らず, nor 入る/はいる 水入らず.
+    ix = _stem_index([("にも拘らず", "にもかかわらず", 7), ("水入らず", "みずいらず", 2)])
+    assert ix.get_total("拘る", "こだわる", suffix_matching=True) == 0
+    assert ix.get_total("拘る", "かかわる", suffix_matching=True) == 7
+    assert ix.get_total("入る", "はいる", suffix_matching=True) == 0
+    assert ix.get_total("入る", "いる", suffix_matching=True) == 2
+
+
+def test_negative_suffix_skips_entries_starting_with_the_card():
+    ix = _stem_index([("変わる変わらず", "かわるかわらず", 4)])
+    assert ix.get_total("変わる", "かわる", suffix_matching=True) == 0
+    assert ix.get_total("変わる", "かわる", suffix_matching=True, prefix_matching=True) == 4
+
+
+def test_negative_suffix_concedes_the_compound_sweep():
+    # 拘わらず sits inside the ichidan sweep 拘わ/かかわ, so with both rules on it counts once.
+    ix = _stem_index([("拘わらず", "かかわらず", 6)])
+    assert ix.get_total("拘わる", "かかわる", suffix_matching=True) == 6
+    assert ix.get_total("拘わる", "かかわる", compound_matching=True) == 6
+    assert ix.get_total("拘わる", "かかわる", suffix_matching=True, compound_matching=True) == 6
+
+
+def test_negative_suffix_is_gated_like_suffix_total():
+    ix = _stem_index([("見ず知らず", "みずしらず", 3), ("しらず", "しらず", 9)])
+    assert ix.get_total("知る", "しる", suffix_matching=True) == 3
+    assert ix.get_total("しる", "しる", suffix_matching=True) == 0   # kana card
+
+
 # CombinedOccurrenceIndex memo eviction
 
 def test_combined_index_evicts_oldest_when_cap_reached(monkeypatch):
@@ -1145,6 +1204,8 @@ def test_combined_index_memo_resets_when_query_flags_change(monkeypatch):
 #                                           DIFFERENT dict from the card form the probe uses
 #   それ (kana, expr == reading)          -> the stem distinctness gate: a それる card must not
 #                                           reach it, or the pair probe validates nothing
+#   にも拘わらず / 拘わらず / にも拘らず     -> negative-form tails: a phrase hit, the exact form
+#                                           the compound sweep also reaches, a reading miss
 _EQUIV_DICTS = {
     "A": [
         ["茶", "freq", {"reading": "ちゃ", "value": 10}],
@@ -1165,6 +1226,7 @@ _EQUIV_DICTS = {
         ["戒め", "freq", {"reading": "いましめ", "value": 4}],      # ichidan stem of 戒める
         ["それ", "freq", {"reading": "それ", "value": 99}],         # kana: stem gate must exclude
         ["奮い立つ", "freq", {"reading": "ふるいたつ", "value": 16}],  # compound on 奮う's stem
+        ["にも拘わらず", "freq", {"reading": "にもかかわらず", "value": 13}],
     ],
     "B": [
         ["茶", "freq", {"reading": "さ", "value": 3}],           # same expr, other reading
@@ -1179,6 +1241,7 @@ _EQUIV_DICTS = {
         ["いましめ", "freq", {"reading": "いましめ", "value": 50,
                               "displayValue": "50㋕"}],             # kana stem: combine_word_forms
         ["奮うこと", "freq", {"reading": "ふるうこと", "value": 2}],   # compound must concede this
+        ["拘わらず", "freq", {"reading": "かかわらず", "value": 4}],   # compound sweep reaches it too
     ],
     "C": [
         ["ぎりぎり", "freq", {"reading": "ぎりぎり", "value": 8, "displayValue": "8㋕"}],
@@ -1189,6 +1252,7 @@ _EQUIV_DICTS = {
         ["遊び", "freq", {"reading": "あそび", "value": 7}],        # godan stem of 遊ぶ
         # The exact stem, in a different dict from the compound above.
         ["奮い", "freq", {"reading": "ふるい", "value": 3}],
+        ["にも拘らず", "freq", {"reading": "にもかかわらず", "value": 7}],  # 拘る/こだわる must miss
     ],
     "D": [
         ["茶", "freq", {"value": 33}],                           # no reading at all
@@ -1212,6 +1276,7 @@ _EQUIV_PROBES = [
     ("それる", "それる"), ("のる", "のる"),                # kana cards: distinctness / length gates
     ("奮う", "ふるう"), ("奮い", "ふるい"),                # compound: forward hit, and no reverse
     ("立ち止る", "たちどまる"),                            # compound / variant dedup
+    ("拘わる", "かかわる"), ("拘る", "かかわる"), ("拘る", "こだわる"),  # negative tails
     ("存在しない", "そんざいしない"), ("", ""),            # absent everywhere, empty
 ]
 
