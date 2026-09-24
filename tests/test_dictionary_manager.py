@@ -653,6 +653,32 @@ def test_variant_superset_spelling_credits_every_component_form():
     assert idx.get_total("輝めく", "きらめく", variant_matching=True) == 0
 
 
+def test_variant_credits_forms_differing_only_in_glyph():
+    # 燈/灯 and 搔/掻 are KANJIDIC2 variant glyphs, so the skeletons fold to one kanji and nest.
+    idx = OccurrenceIndex()
+    idx.add("灯す", "ともす", 8)
+    idx.add("搔く", "かく", 12)
+    assert idx.get_total("燈す", "ともす") == 0
+    assert idx.get_total("燈す", "ともす", variant_matching=True) == 8
+    assert idx.get_total("掻く", "かく", variant_matching=True) == 12
+
+
+def test_variant_glyph_fold_still_requires_the_reading():
+    idx = OccurrenceIndex()
+    idx.add("灯す", "ひす", 8)
+    assert idx.get_total("燈す", "ともす", variant_matching=True) == 0
+
+
+def test_glyph_fold_degrades_to_nothing_without_the_table(monkeypatch):
+    monkeypatch.setattr(dm, "_VARIANTS_FILE", "no_such_table.txt")
+    monkeypatch.setattr(dm, "_glyph_canon_map", None)
+    assert dm._kanji_skeleton("燈す") == "燈"
+    idx = OccurrenceIndex()
+    idx.add("灯す", "ともす", 8)
+    assert idx.get_total("燈す", "ともす", variant_matching=True) == 0
+    monkeypatch.setattr(dm, "_glyph_canon_map", None)  # reload the real table afterwards
+
+
 def test_variant_never_credits_kana_only_spelling():
     # The measured part: a kana entry has an empty kanji skeleton, so it never participates,
     # that credit remains combine_word_forms' job.
@@ -862,6 +888,18 @@ def test_stem_sums_every_adjective_nominalizer_present():
     # さ/み/げ are probed together, so an adjective with more than one derived noun takes all.
     ix = _stem_index([("強さ", "つよさ", 11), ("強み", "つよみ", 3), ("強げ", "つよげ", 1)])
     assert ix.get_total("強い", "つよい", stem_matching=True) == 15
+
+
+def test_stem_credits_the_adjective_renyoukei():
+    # く is the adjective's own 連用形, which dictionaries list as an adverb (早く, 多く).
+    assert ("早く", "はやく") in dm._stem_candidates("早い", "はやい")
+    ix = _stem_index([("早く", "はやく", 8), ("早く", "さく", 50)])
+    assert ix.get_total("早い", "はやい", stem_matching=True) == 8
+
+
+def test_compound_sweeps_the_adjective_renyoukei():
+    ix = _stem_index([("少なくとも", "すくなくとも", 17), ("少なくない", "すくなくない", 2)])
+    assert ix.get_total("少ない", "すくない", compound_matching=True) == 19
 
 
 def test_stem_lets_the_reading_arbitrate_the_conjugation_class():
@@ -1085,9 +1123,64 @@ def test_compound_view_is_not_built_when_the_flag_is_off():
     ix.get_total("奮う", "ふるう", prefix_matching=True, suffix_matching=True,
                  variant_matching=True, stem_matching=True)
     assert ix._stem_compound_keys is None
+    assert ix._stem_tail_keys is None
 
 
-# negative-form tails (suffix_matching over 未然形 + ず/ぬ)
+# tail compounds (compound_matching over entries ENDING in the stem)
+
+def test_tail_compound_credits_a_verb_from_a_compound_ending_in_its_stem():
+    ix = _stem_index([("時間稼ぎ", "じかんかせぎ", 14), ("荒稼ぎ", "あらかせぎ", 2)])
+    assert ix.get_total("稼ぐ", "かせぐ") == 0
+    assert ix.get_total("稼ぐ", "かせぐ", compound_matching=True) == 16
+
+
+def test_tail_compound_allows_rendaku_on_the_stem():
+    ix = _stem_index([("手触り", "てざわり", 16), ("言葉責め", "ことばぜめ", 8)])
+    assert ix.get_total("触る", "さわる", compound_matching=True) == 16
+    assert ix.get_total("責める", "せめる", compound_matching=True) == 8
+
+
+def test_tail_compound_voices_only_a_kanji_written_first_kana():
+    # くっ付き is written with its く, so ぐっつき cannot be the same stem.
+    ix = _stem_index([("ベタくっ付き", "べたぐっつき", 5)])
+    assert ix.get_total("くっ付く", "くっつく", compound_matching=True) == 0
+
+
+def test_tail_compound_requires_the_reading_to_match_the_stem():
+    ix = _stem_index([("時間稼ぎ", "じかんかせき", 14)])
+    assert ix.get_total("稼ぐ", "かせぐ", compound_matching=True) == 0
+
+
+def test_tail_compound_needs_something_before_the_stem():
+    # The bare stem is stem_total's (or the prefix sweep's), not a tail compound.
+    ix = _stem_index([("稼ぎ", "かせぎ", 9)])
+    assert ix.stem_tail_compound_total("稼ぐ", "かせぐ") == 0
+
+
+def test_tail_compound_leaves_entries_the_prefix_sweep_owns():
+    # 泣き泣き both starts and ends with 泣き. The prefix sweep credits it, the tail rule must not.
+    ix = _stem_index([("泣き泣き", "なきなき", 3)])
+    assert ix.stem_tail_compound_total("泣く", "なく") == 0
+    assert ix.get_total("泣く", "なく", compound_matching=True) == 3
+
+
+def test_tail_compound_leaves_entries_starting_with_the_card_to_prefix_matching():
+    ix = _stem_index([("取るに足りない取り", "とるにたりないとり", 4)])
+    assert ix.stem_tail_compound_total("取る", "とる") == 0
+
+
+def test_tail_compound_reaches_adjective_forms():
+    ix = _stem_index([("注意深く", "ちゅういぶかく", 12), ("力強さ", "ちからづよさ", 3)])
+    assert ix.get_total("深い", "ふかい", compound_matching=True) == 12
+    assert ix.get_total("強い", "つよい", compound_matching=True) == 3
+
+
+def test_tail_compound_ignores_kana_keyed_entries():
+    ix = _stem_index([("ときかせぎ", "ときかせぎ", 40)])
+    assert ix.get_total("稼ぐ", "かせぐ", compound_matching=True) == 0
+
+
+# conjugated-form tails (suffix_matching over 未然形 + ず/ぬ, and the て-form)
 
 def test_negative_forms_cover_godan_and_both_readings_of_ru_verbs():
     assert dm._negative_forms("思う", "おもう") == [("思わず", "おもわず"), ("思わぬ", "おもわぬ")]
@@ -1146,6 +1239,44 @@ def test_negative_suffix_is_gated_like_suffix_total():
     assert ix.get_total("しる", "しる", suffix_matching=True) == 0   # kana card
 
 
+def test_te_forms_cover_onbin_and_both_readings_of_ru_verbs():
+    assert dm._te_forms("急ぐ", "いそぐ") == [("急いで", "いそいで")]
+    assert dm._te_forms("沿う", "そう") == [("沿って", "そって")]
+    assert dm._te_forms("及ぶ", "およぶ") == [("及んで", "およんで")]
+    assert dm._te_forms("除く", "のぞく") == [("除いて", "のぞいて")]
+    assert dm._te_forms("増す", "ます") == [("増して", "まして")]
+    assert dm._te_forms("限る", "かぎる") == [("限て", "かぎて"), ("限って", "かぎって")]
+    assert dm._te_forms("行く", "いく") == [("行いて", "いいて"), ("行って", "いって")]
+
+
+def test_te_forms_reject_what_negative_forms_reject():
+    assert dm._te_forms("する", "する") == []
+    assert dm._te_forms("学校", "がっこう") == []
+    assert dm._te_forms("強い", "つよい") == []
+
+
+def test_te_suffix_credits_a_verb_from_phrases_ending_in_its_te_form():
+    ix = _stem_index([("急いで", "いそいで", 87), ("に沿って", "にそって", 21),
+                      ("この期に及んで", "このごにおよんで", 21), ("行って", "いって", 4)])
+    assert ix.get_total("急ぐ", "いそぐ") == 0
+    assert ix.get_total("急ぐ", "いそぐ", suffix_matching=True) == 87
+    assert ix.get_total("沿う", "そう", suffix_matching=True) == 21
+    assert ix.get_total("及ぶ", "およぶ", suffix_matching=True) == 21
+    assert ix.get_total("行く", "いく", suffix_matching=True) == 4
+
+
+def test_te_suffix_requires_the_reading_tail():
+    ix = _stem_index([("に沿って", "にぞって", 21)])
+    assert ix.get_total("沿う", "そう", suffix_matching=True) == 0
+
+
+def test_te_suffix_concedes_ichidan_forms_to_the_compound_sweep():
+    # 改めて starts with the ichidan stem 改め, so with compound matching on it counts once.
+    ix = _stem_index([("改めて", "あらためて", 30)])
+    assert ix.get_total("改める", "あらためる", suffix_matching=True) == 30
+    assert ix.get_total("改める", "あらためる", suffix_matching=True, compound_matching=True) == 30
+
+
 # CombinedOccurrenceIndex memo eviction
 
 def test_combined_index_evicts_oldest_when_cap_reached(monkeypatch):
@@ -1197,6 +1328,7 @@ def test_combined_index_memo_resets_when_query_flags_change(monkeypatch):
 #                                           so per-dict honorific maps must be summed, never
 #                                           rebuilt from the merged vocabulary
 #   煌く / 煌めく / 煌燦めく split         -> variant grouping by identical reading
+#   灯す                                  -> the glyph-variant fold (probed as 燈す)
 #   手を貸す / 母の日                     -> the single-kanji head/tail phrase carve-outs
 #   屯する / 察する                       -> the single-kanji suru carve-out (plain + sokuon)
 #   ㋕-marked entry                       -> re-keyed under its reading (combine_word_forms)
@@ -1206,6 +1338,11 @@ def test_combined_index_memo_resets_when_query_flags_change(monkeypatch):
 #                                           reach it, or the pair probe validates nothing
 #   にも拘わらず / 拘わらず / にも拘らず     -> negative-form tails: a phrase hit, the exact form
 #                                           the compound sweep also reaches, a reading miss
+#   早く / 早くも                         -> the adjective 連用形, exact and as a compound
+#   時間稼ぎ / 手触り / 泣き泣き           -> tail compounds: plain, rendaku, and one the prefix
+#                                           sweep owns
+#   に沿って / 改めて                     -> て-form tails: a phrase hit, and an ichidan form the
+#                                           compound sweep also reaches
 _EQUIV_DICTS = {
     "A": [
         ["茶", "freq", {"reading": "ちゃ", "value": 10}],
@@ -1253,13 +1390,21 @@ _EQUIV_DICTS = {
         # The exact stem, in a different dict from the compound above.
         ["奮い", "freq", {"reading": "ふるい", "value": 3}],
         ["にも拘らず", "freq", {"reading": "にもかかわらず", "value": 7}],  # 拘る/こだわる must miss
+        ["早く", "freq", {"reading": "はやく", "value": 6}],        # adjective 連用形 of 早い
+        ["時間稼ぎ", "freq", {"reading": "じかんかせぎ", "value": 14}],  # tail compound on 稼ぎ
+        ["に沿って", "freq", {"reading": "にそって", "value": 21}],      # て-form tail
     ],
     "D": [
         ["茶", "freq", {"value": 33}],                           # no reading at all
         ["手", "freq", {"reading": "て", "value": 1}],
         ["煌燦めく", "freq", {"reading": "きらめく", "value": 2}],
+        ["灯す", "freq", {"reading": "ともす", "value": 8}],       # glyph variant of 燈す
         # Okurigana variant of the 立ち止る probe: compound and variant must not both credit it.
         ["立ち止まる", "freq", {"reading": "たちどまる", "value": 109}],
+        ["早くも", "freq", {"reading": "はやくも", "value": 3}],      # compound on 早く
+        ["手触り", "freq", {"reading": "てざわり", "value": 16}],     # tail compound, rendaku
+        ["泣き泣き", "freq", {"reading": "なきなき", "value": 3}],    # prefix sweep owns it
+        ["改めて", "freq", {"reading": "あらためて", "value": 30}],   # ichidan て-form, in the sweep
     ],
 }
 
@@ -1267,12 +1412,16 @@ _EQUIV_PROBES = [
     ("茶", "ちゃ"), ("茶", "さ"), ("茶", "ばんちゃ"),    # hit, other dict's reading, unknown
     ("お茶", "おちゃ"), ("金", "かね"), ("茶碗", "ちゃわん"),
     ("煌めく", "きらめく"), ("煌く", "きらめく"), ("煌燦めく", "きらめく"),
+    ("燈す", "ともす"),                                    # glyph-variant fold
     ("手", "て"), ("日", "ひ"), ("学校", "がっこう"), ("中学校", "ちゅうがっこう"),
     ("屯", "たむろ"), ("屯", "とん"), ("察", "さつ"),      # suru carve-out: hit, reading miss, sokuon
     ("ぎりぎり", "ぎりぎり"), ("ギリギリ", "ギリギリ"),
     ("かず", "かず"), ("おかず", "おかず"),                # cross-dict honorific fold gate
     ("戒める", "いましめる"), ("戒め", "いましめ"),        # stem: forward hit, and no reverse
     ("遊ぶ", "あそぶ"), ("強い", "つよい"), ("痛い", "いたい"),  # godan, adjective, adjective miss
+    ("早い", "はやい"),                                    # adjective 連用形, exact and compound
+    ("稼ぐ", "かせぐ"), ("触る", "さわる"), ("泣く", "なく"),  # tail compounds
+    ("沿う", "そう"), ("改める", "あらためる"),                # て-form tails
     ("それる", "それる"), ("のる", "のる"),                # kana cards: distinctness / length gates
     ("奮う", "ふるう"), ("奮い", "ふるい"),                # compound: forward hit, and no reverse
     ("立ち止る", "たちどまる"),                            # compound / variant dedup

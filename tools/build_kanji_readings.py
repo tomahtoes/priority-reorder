@@ -1,4 +1,4 @@
-"""Generate kanji_readings.txt from KANJIDIC2.
+"""Generate kanji_readings.txt and kanji_variants.txt from KANJIDIC2.
 
 KANJIDIC2 is the property of the Electronic Dictionary Research and Development
 Group (EDRDG) and is used under the Creative Commons Attribution-ShareAlike 4.0
@@ -13,6 +13,8 @@ Usage:
     python tools/build_kanji_readings.py               # download + build
     python tools/build_kanji_readings.py --readable    # also emit a decoded copy
     python tools/build_kanji_readings.py --nanori      # include name readings
+
+Both files come from the one download, so regenerating either regenerates both.
 """
 
 import argparse
@@ -33,6 +35,30 @@ from utils import to_hiragana  # noqa: E402
 
 KANJIDIC_URL = "http://www.edrdg.org/kanjidic/kanjidic2.xml.gz"
 DEFAULT_OUT = os.path.join(ROOT, "kanji_readings.txt")
+DEFAULT_VARIANTS_OUT = os.path.join(ROOT, "kanji_variants.txt")
+
+# The <variant> types that name another character by a code this file also assigns in
+# <cp_value>. The rest (nelson_c, deroo, s_h, ...) are dictionary index numbers, which do not
+# resolve to a character.
+VARIANT_CODE_TYPES = ("jis208", "jis212", "jis213", "ucs")
+
+VARIANTS_HEADER = [
+    "# kanji_variants.txt: groups of kanji KANJIDIC2 marks as variants of each other.",
+    "#",
+    "# Source: KANJIDIC2, Copyright (C) Electronic Dictionary Research and",
+    "# Development Group (EDRDG). Used under CC BY-SA 4.0.",
+    "# https://www.edrdg.org/wiki/index.php/KANJIDIC_Project",
+    "#",
+    "# THIS FILE IS A MODIFIED EXTRACT, not KANJIDIC2 itself. Changes made:",
+    "# only <variant> links of type %s kept, resolved to" % "/".join(VARIANT_CODE_TYPES),
+    "# characters through <cp_value>, and joined into groups (a variant of a",
+    "# variant shares the group). This file is likewise CC BY-SA 4.0.",
+    "# Regenerate with tools/build_kanji_readings.py.",
+    "#",
+    "# Format, one group per line, no separator: the glyphs of the group, the",
+    "# first one being the form every other one folds to (a jouyou kanji when",
+    "# the group has one, then the most frequent).",
+]
 
 HEADER = [
     "# kanji_readings.txt: per-kanji readings derived from KANJIDIC2.",
@@ -125,6 +151,51 @@ def parse(xml_text, include_nanori=False):
     return out, bad
 
 
+def parse_variants(xml_text):
+    """The variant groups, each a list of glyphs led by its canonical form.
+
+    A union-find over the resolvable <variant> links, so 劍/剣/劔 end up in one group whichever
+    of them names which. Groups measured at most six glyphs, so chaining stays local."""
+    code_to_char = {}
+    links = []
+    rank = {}
+    for _, el in ET.iterparse(io.StringIO(xml_text), events=("end",)):
+        if el.tag != "character":
+            continue
+        literal = el.findtext("literal")
+        for cp in el.iter("cp_value"):
+            code_to_char[(cp.get("cp_type"), cp.text)] = literal
+        for v in el.iter("variant"):
+            if v.get("var_type") in VARIANT_CODE_TYPES:
+                links.append((literal, (v.get("var_type"), v.text)))
+        grade = el.findtext("misc/grade")
+        freq = el.findtext("misc/freq")
+        jouyou = grade is not None and int(grade) <= 8
+        rank[literal] = (not jouyou, int(freq) if freq else 10 ** 6, literal)
+        el.clear()
+
+    parent = {}
+
+    def find(ch):
+        parent.setdefault(ch, ch)
+        while parent[ch] != ch:
+            parent[ch] = parent[parent[ch]]
+            ch = parent[ch]
+        return ch
+
+    for literal, code in links:
+        other = code_to_char.get(code)
+        if other and other != literal:
+            parent[find(literal)] = find(other)
+
+    groups = {}
+    for ch in parent:
+        groups.setdefault(find(ch), []).append(ch)
+    out = [sorted(g, key=lambda ch: rank.get(ch, (True, 10 ** 6, ch)))
+           for g in groups.values() if len(g) > 1]
+    return sorted(out, key=lambda g: g[0])
+
+
 def render(table):
     """One line per kanji: the kanji, then its distinct reading stems.
 
@@ -145,6 +216,7 @@ def main():
     ap.add_argument("--out", default=DEFAULT_OUT)
     ap.add_argument("--nanori", action="store_true", help="include name readings")
     ap.add_argument("--readable", action="store_true", help="also write a decoded copy")
+    ap.add_argument("--variants-out", default=DEFAULT_VARIANTS_OUT)
     args = ap.parse_args()
 
     xml_text = fetch(args.kanjidic)
@@ -176,6 +248,14 @@ def main():
     )
     if bad:
         sys.stderr.write("WARNING: skipped readings containing %r\n" % sorted(bad))
+
+    groups = parse_variants(xml_text)
+    with open(args.variants_out, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(VARIANTS_HEADER + ["".join(g) for g in groups]) + "\n")
+    sys.stderr.write(
+        "variant groups      : %d (%d glyphs, largest %d)\n"
+        % (len(groups), sum(len(g) for g in groups), max((len(g) for g in groups), default=0))
+    )
 
 
 if __name__ == "__main__":

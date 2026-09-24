@@ -14,6 +14,10 @@ import pytest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# Files added since the newest built release, each one deliberate. Once a release ships them
+# they sit in its zip too, so a stale entry here is harmless.
+ADDED_SINCE_LAST_RELEASE = {"kanji_variants.txt"}
+
 
 def _build_release():
     path = os.path.join(ROOT, ".ankiaddon", "build_release.py")
@@ -63,6 +67,7 @@ def test_shipped_set_matches_the_last_release():
     with zipfile.ZipFile(os.path.join(ROOT, ".ankiaddon", newest)) as zf:
         previous = sorted(zf.namelist())
     current = sorted(p.name for p in _build_release().collect_files())
+    previous = sorted(set(previous) | (ADDED_SINCE_LAST_RELEASE & set(current)))
     assert current == previous, (
         "the packaged file set changed against %s: added %s, removed %s"
         % (newest, sorted(set(current) - set(previous)), sorted(set(previous) - set(current)))

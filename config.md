@@ -104,6 +104,7 @@ These flags all change how a card is credited with dictionary occurrences. They 
 ### `matching.variant_matching` (bool)
 - **Description**: Credits a card with the counts of dict entries that are another **written form** of the same word, i.e. a different okurigana or kanji spelling. Prefix/suffix matching cannot reach these: `煌く` is neither a prefix nor a suffix of `煌めく`.
 - **Rule**: an entry counts when its reading is *identical* to the card's **and** the two forms' kanji nest (every kanji of one appears in the other), with at least one kanji on each side. Requiring the kanji to nest rather than merely overlap keeps same-reading homophones apart, so `科学` is not credited by `化学`.
+- **Glyph variants**: kanji KANJIDIC2 lists as variants of each other count as one kanji here, so `燈す` is credited by `灯す` and `掻く` by `搔く`.
 - **Kana**: kana-only entries have no kanji to share and never match here; enable `matching.combine_word_forms` too if you want those credited. Entries carrying no reading never match either.
 - **Default**: `false`
 
@@ -120,10 +121,11 @@ These flags all change how a card is credited with dictionary occurrences. They 
 - **Gate**: card must be **≥ 2 chars and contain a kanji** (real words like 学校/食べる/強い; excludes bare single kanji and pure kana like する/こと).
 - **Single kanji**: excluded from the bare rule; credited only via reading-validated **tail** particle phrases, so `母の日`/ははのひ credits `日`/ひ.
 - **Negative forms**: a verb card is also credited by entries ending in its 未然形 + `ず`/`ぬ`, on both the written form and the reading: `にも拘わらず` credits `拘わる`/かかわる, `思わず` credits `思う`. `ない` is not included. Counted once alongside `matching.compound_matching`.
+- **て-forms**: likewise for entries ending in its て-form: `急いで` credits `急ぐ`, `に沿って` credits `沿う`, `この期に及んで` credits `及ぶ`.
 - **Default**: `false`
 
 ### `matching.stem_matching` (bool)
-- **Description**: Credits a dictionary-form card with the counts of its **conjugated noun form**: the 連用形 (masu-stem) for verbs, and the `さ`/`み`/`げ` nominalizations for い-adjectives. Card `戒める` picks up `戒め`, `遊ぶ` picks up `遊び`, `強い` picks up `強さ`/`強み`/`強げ`.
+- **Description**: Credits a dictionary-form card with the counts of its **conjugated noun form**: the 連用形 (masu-stem) for verbs, and for い-adjectives the `く` form plus the `さ`/`み`/`げ` nominalizations. Card `戒める` picks up `戒め`, `遊ぶ` picks up `遊び`, `早い` picks up `早く`, `強い` picks up `強さ`/`強み`/`強げ`.
 - **Rule**: the card's final kana is edited and the result must match a dict entry on **both** expression and reading. Ichidan verbs drop `る` (`戒める`→`戒め`), godan verbs shift う-row to い-row (`待つ`→`待ち`, `話す`→`話し`). The conjugation class is not looked up. Both candidates are tried and the reading decides, so the wrong one simply finds nothing.
 - **Direction**: forward only. A `戒め` card is **not** credited by a `戒める` entry, because a rare derived form would inherit the count of a far commoner base word and jump the queue (`無げ` would absorb `無い`'s). Turn on `matching.prefix_matching` if you want that direction.
 - **Gates**: the expression and reading must end in the *same* kana (that is what makes the tail okurigana), they must differ from each other (a kana-only card has nothing to validate against, so `それる` cannot absorb `それ`), and the derived form must be ≥ 2 chars (so `見る`→`見` and `神る`→`神` are both skipped).
@@ -131,8 +133,9 @@ These flags all change how a card is credited with dictionary occurrences. They 
 - **Default**: `false`
 
 ### `matching.compound_matching` (bool)
-- **Description**: Credits a dictionary-form card with the counts of entries that **compound on its stem**, which is where most verb vocabulary lives. Card `奮う` picks up `奮い立つ`, `取る` picks up `取り消す`/`取り扱い`, `受ける` picks up `受け入れる`, `食べる` picks up `食べ物`, `間違う` picks up `間違いない`.
+- **Description**: Credits a dictionary-form card with the counts of entries that **compound on its stem**, which is where most verb vocabulary lives. Card `奮う` picks up `奮い立つ`, `取る` picks up `取り消す`/`取り扱い`, `受ける` picks up `受け入れる`, `食べる` picks up `食べ物`, `間違う` picks up `間違いない`, `少ない` picks up `少なくとも`.
 - **Rule**: same stem candidates as `matching.stem_matching`, but taken as a prefix rather than an exact match. The entry must start with the stem on **both** sides, so `抱く`/だく takes `抱きしめる`/だきしめる while `抱く`/いだく takes nothing.
+- **Compounds ending in the stem**: also credits entries that end with the stem, on both sides. Card `稼ぐ` picks up `時間稼ぎ`, `止まる` picks up `行き止まり`, `休む` picks up `夏休み`. The reading may voice the stem's first sound (`手触り`/てざわり credits `触る`/さわる).
 - **Standalone**: covers the exact stem itself as well, so this option alone is enough (`取る` gets both `取り` and `取り消す`). With `matching.stem_matching` on too, the exact stem is counted once, not twice.
 - **Overlap**: entries that start with the card as written (`食べる`←`食べるもの`) belong to `matching.prefix_matching` and are only credited when *that* option is on, so the two never double-count.
 - **Looseness**: the credit is deliberately generous. Transitive pairs cross over (`見回る`←`見回す`), idioms ride along (`当たる`←`当たり前`), and a rare base can inherit a big count (`生く`/いく, seen twice in the author's dicts, takes `生きる`'s compounds). Across 12 dictionaries it moved 942 of 9,877 eligible entries, a median of +9 counts.

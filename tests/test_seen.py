@@ -312,6 +312,16 @@ def test_seen_window_compound_matching():
     assert not window.contains("奮う", "ふんう", compound_matching=True)
 
 
+def test_seen_window_tail_compound_matching():
+    # Boolean mirror of stem_tail_compound_total: 手触り (rendaku てざわり) marks a 触る card as
+    # seen, and a reading that fits neither form does not.
+    raw = [[["手触り", "freq", {"reading": "てざわり", "frequency": {"value": 16}}]]]
+    window = _build_window(raw, compound_matching=True)
+    assert not window.contains("触る", "さわる")
+    assert window.contains("触る", "さわる", compound_matching=True)
+    assert not window.contains("触る", "ふれる", compound_matching=True)
+
+
 def test_seen_compound_concedes_card_prefixes_like_the_counting_side():
     # The counting rule hands entries beginning with the card expression to prefix_total
     # unconditionally, so with prefix_matching off nothing credits them and presence must be
@@ -371,6 +381,7 @@ def test_seen_contains_matches_counting_presence_incl_homograph():
             ["煌く", "freq", {"reading": "きらめく", "frequency": {"value": 11}}],
             ["気持ち", "freq", {"reading": "きもち", "frequency": {"value": 12}}],
             ["化学", "freq", {"reading": "かがく", "frequency": {"value": 13}}],
+            ["灯す", "freq", {"reading": "ともす", "frequency": {"value": 8}}],  # glyph variant
         ],
         [
             ["下駄箱", "freq", {"reading": "げたばこ", "frequency": {"value": 6}}],
@@ -408,6 +419,19 @@ def test_seen_contains_matches_counting_presence_incl_homograph():
             ["拘わらず", "freq", {"reading": "かかわらず", "frequency": {"value": 4}}],
             ["にも拘らず", "freq", {"reading": "にもかかわらず", "frequency": {"value": 7}}],
             ["変わる変わらず", "freq", {"reading": "かわるかわらず", "frequency": {"value": 2}}],
+            # the adjective 連用形: exact (早く) and as a compound (少なくとも)
+            ["早く", "freq", {"reading": "はやく", "frequency": {"value": 6}}],
+            ["少なくとも", "freq", {"reading": "すくなくとも", "frequency": {"value": 5}}],
+            # tail compounds: plain, rendaku, one the prefix sweep owns, and one that starts
+            # with the card and so belongs to prefix matching
+            ["時間稼ぎ", "freq", {"reading": "じかんかせぎ", "frequency": {"value": 14}}],
+            ["手触り", "freq", {"reading": "てざわり", "frequency": {"value": 16}}],
+            ["泣き泣き", "freq", {"reading": "なきなき", "frequency": {"value": 3}}],
+            ["取るに足りない取り", "freq", {"reading": "とるにたりないとり",
+                                          "frequency": {"value": 4}}],
+            # て-form tails: a phrase hit and an ichidan form the compound sweep reaches
+            ["に沿って", "freq", {"reading": "にそって", "frequency": {"value": 21}}],
+            ["改めて", "freq", {"reading": "あらためて", "frequency": {"value": 30}}],
         ],
     ]
     cards = [("下駄", "げた"), ("角", "かど"), ("茶", "ちゃ"), ("下駄箱", "げたばこ"),
@@ -425,7 +449,7 @@ def test_seen_contains_matches_counting_presence_incl_homograph():
              # variant rule: credited (煌めく←煌く), not credited (燦めく, no shared kanji),
              # kana-only card, the prefix-overlap dedup case, and the homophone guard
              ("煌めく", "きらめく"), ("燦めく", "きらめく"), ("きらめく", "きらめく"),
-             ("気持", "きもち"), ("科学", "かがく"),
+             ("気持", "きもち"), ("科学", "かがく"), ("燈す", "ともす"),
              # stem rule: forward hits (ichidan/godan/adjective), the reverse direction which
              # must stay uncredited, a miss, and the two gated kana shapes
              ("戒める", "いましめる"), ("遊ぶ", "あそぶ"), ("強い", "つよい"),
@@ -437,7 +461,13 @@ def test_seen_contains_matches_counting_presence_incl_homograph():
              ("奮い立つ", "ふるいたつ"),
              # negative-form tails: hits, a reading miss, and the card-prefix concession
              ("拘わる", "かかわる"), ("拘る", "かかわる"), ("拘る", "こだわる"),
-             ("変わる", "かわる")]
+             ("変わる", "かわる"),
+             # adjective 連用形: exact and compound hits
+             ("早い", "はやい"), ("少ない", "すくない"),
+             # tail compounds
+             ("稼ぐ", "かせぐ"), ("触る", "さわる"), ("泣く", "なく"), ("取る", "とる"),
+             # て-form tails
+             ("沿う", "そう"), ("改める", "あらためる")]
     flagsets = [
         {},
         {"prefix_matching": True},

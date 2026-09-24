@@ -84,14 +84,14 @@ class SeenWindow:
     """Window-wide *presence* of words across the resolved daily seen dicts, as unions over the
     window:
 
-      ``exprs``                  every effective expression seen
-      ``honorific_stripped``     stripped forms, for honorific folding
-      ``phrase_entries``         particle-phrase entries with a kanji head
-      ``suffix_phrase_entries``  particle-phrase entries with a kanji tail
-      ``suru_entries``           'X<する|じる|ずる>' entries
-      ``variant_entries``        every kanji-bearing entry
-      ``stem_entries``           every entry whose reading differs from its written form
-      ``negative_entries``       entries ending in ず/ぬ
+      ``exprs``                    every effective expression seen
+      ``honorific_stripped``       stripped forms, for honorific folding
+      ``phrase_entries``           particle-phrase entries with a kanji head
+      ``suffix_phrase_entries``    particle-phrase entries with a kanji tail
+      ``suru_entries``             'X<する|じる|ずる>' entries
+      ``variant_entries``          every kanji-bearing entry
+      ``stem_entries``             every entry whose reading differs from its written form
+      ``conjugated_tail_entries``  entries ending in ず/ぬ/て/で
 
     Every set after ``honorific_stripped`` holds ``(expression, reading)`` pairs so a reading can be compared at query time.
 
@@ -107,7 +107,7 @@ class SeenWindow:
         suru_entries: Set[Tuple[str, str]],
         variant_entries: Set[Tuple[str, str]],
         stem_entries: Set[Tuple[str, str]],
-        negative_entries: Set[Tuple[str, str]],
+        conjugated_tail_entries: Set[Tuple[str, str]],
     ) -> None:
         self.exprs = exprs
         self.honorific_stripped = honorific_stripped
@@ -116,7 +116,7 @@ class SeenWindow:
         self.suru_entries = suru_entries
         self.variant_entries = variant_entries
         self.stem_entries = stem_entries
-        self.negative_entries = negative_entries
+        self.conjugated_tail_entries = conjugated_tail_entries
         # Lazy views, each built by its own _*_present method on the first query that needs it
         # and shaped like the matching OccurrenceIndex._ensure_* index.
         self._sorted_exprs: Optional[List[str]] = None
@@ -132,8 +132,11 @@ class SeenWindow:
         # Compound matching sweeps those same pairs by prefix, so it sorts them.
         self._sorted_stem_entries: Optional[List[Tuple[str, str]]] = None
         self._sorted_stem_exprs: List[str] = []
-        self._sorted_negative_entries: Optional[List[Tuple[str, str]]] = None
-        self._sorted_negative_revs: List[str] = []
+        self._sorted_conjugated_entries: Optional[List[Tuple[str, str]]] = None
+        self._sorted_conjugated_revs: List[str] = []
+        # stem_entries again, sorted by reversed expression for the tail compound sweep.
+        self._stem_tail_entries: Optional[List[Tuple[str, str]]] = None
+        self._stem_tail_revs: List[str] = []
 
     def _prefix_present(self, expression: str) -> bool:
         """True if some *strictly longer* term has ``expression`` as a prefix. Same binary-search
@@ -167,25 +170,25 @@ class SeenWindow:
             lo += 1  # exclude the exact match (credited by base membership)
         return lo < hi
 
-    def _negative_suffix_present(self, expression: str, reading: str) -> bool:
-        """True if some entry ends in the card's 未然形 + ず/ぬ on both sides (にも拘わらず finds
-        拘わる). The presence analogue of ``OccurrenceIndex.negative_suffix_total``.
+    def _conjugated_suffix_present(self, expression: str, reading: str) -> bool:
+        """True if some entry ends in one of the card's conjugated forms on both sides (にも拘わらず
+        finds 拘わる, に沿って finds 沿う). The presence analogue of ``OccurrenceIndex.conjugated_suffix_total``.
 
         Mirrors the skip of entries starting with the card, which nothing else credits when
         prefix matching is off. Drops the compound dedup guard, as ``_variant_present`` drops
         its own: whatever it skips, ``_stem_compound_present`` already answers True for."""
         if not dm._suffix_eligible(expression):
             return False
-        forms = dm._negative_forms(expression, reading)
+        forms = dm._conjugated_tail_forms(expression, reading)
         if not forms:
             return False
-        if self._sorted_negative_entries is None:
+        if self._sorted_conjugated_entries is None:
             rows = sorted((expr[::-1], (expr, entry_reading))
-                          for expr, entry_reading in self.negative_entries)
-            self._sorted_negative_entries = [key for _rev, key in rows]
-            self._sorted_negative_revs = [rev for rev, _key in rows]
-        entries = self._sorted_negative_entries
-        revs = self._sorted_negative_revs
+                          for expr, entry_reading in self.conjugated_tail_entries)
+            self._sorted_conjugated_entries = [key for _rev, key in rows]
+            self._sorted_conjugated_revs = [rev for rev, _key in rows]
+        entries = self._sorted_conjugated_entries
+        revs = self._sorted_conjugated_revs
         for form_expr, form_reading in forms:
             rev = form_expr[::-1]
             lo = bisect.bisect_left(revs, rev)
@@ -280,7 +283,7 @@ class SeenWindow:
         self, expression: str, reading: str, combine_word_forms: bool = False
     ) -> bool:
         """True if the card's 連用形 or its さ/み/げ nominalization is present (戒める finds 戒め,
-        遊ぶ finds 遊び, 強い finds 強さ).
+        遊ぶ finds 遊び, 強い finds 強さ, 早い finds 早く).
 
         Must mirror BOTH of the counting side's terms, which is what the cross-module drift guard
         pins: the ``(expression, reading)`` pair in ``stem_entries``, and under
@@ -404,7 +407,7 @@ class SeenWindow:
                 return True
             if self._suffix_phrase_present(expression, reading):
                 return True
-            if self._negative_suffix_present(expression, reading):
+            if self._conjugated_suffix_present(expression, reading):
                 return True
         if variant_matching and self._variant_present(expression, reading, card_kanji):
             return True
@@ -414,10 +417,51 @@ class SeenWindow:
             expression, reading, card_kanji, stem_matching, variant_matching
         ):
             return True
+        if compound_matching and self._stem_tail_compound_present(expression, reading):
+            return True
         if honorific_folding:
             if expression in self.honorific_stripped:
                 return True
             if combine_word_forms and reading_is_distinct and reading in self.honorific_stripped:
+                return True
+        return False
+
+    def _stem_tail_compound_present(self, expression: str, reading: str) -> bool:
+        """True if some entry ends in the card's stem (稼ぐ finds 時間稼ぎ, 触る finds 手触り). The
+        presence analogue of ``OccurrenceIndex.stem_tail_compound_total``, with every gate
+        mirrored: the rendaku-tolerant reading tail, the strictly-longer entry, the skip of
+        entries starting with the card, and the skip of entries the prefix sweep owns. Presence
+        makes the last one redundant whenever ``_stem_compound_present`` answers True, but it
+        is kept so the two sides stay identical.
+
+        Reads ``stem_entries``, whose ``reading != effective`` build gate matches the counting
+        side's skip of (kana, kana) pairs."""
+        candidates = dm._stem_candidates(expression, reading)
+        if not candidates:
+            return False
+        if self._stem_tail_entries is None:
+            rows = sorted((expr[::-1], (expr, entry_reading))
+                          for expr, entry_reading in self.stem_entries)
+            self._stem_tail_entries = [key for _rev, key in rows]
+            self._stem_tail_revs = [rev for rev, _key in rows]
+        entries = self._stem_tail_entries
+        revs = self._stem_tail_revs
+        for cand_expr, cand_reading in candidates:
+            rev = cand_expr[::-1]
+            tails = (dm._rendaku_forms(cand_reading) if is_kanji(cand_expr[0])
+                     else (cand_reading,))
+            lo = bisect.bisect_left(revs, rev)
+            hi = bisect.bisect_left(revs, rev + chr(0x10FFFF))
+            for position in range(lo, hi):
+                entry_expr, entry_reading = entries[position]
+                if len(entry_expr) == len(cand_expr) or entry_expr.startswith(expression):
+                    continue
+                if not any(len(entry_reading) > len(tail) and entry_reading.endswith(tail)
+                           for tail in tails):
+                    continue
+                if any(entry_expr.startswith(stem_expr) and entry_reading.startswith(stem_reading)
+                       for stem_expr, stem_reading in candidates):
+                    continue
                 return True
         return False
 
@@ -434,8 +478,9 @@ def build_seen_day(
     normalization), but records presence rather than accumulating counts. Base presence reduces
     to the expression set, so there is no ``(expr, reading)`` map.
 
-    ``phrase_entries``, ``suffix_phrase_entries``, ``suru_entries`` and ``negative_entries`` are each a sliver of any
-    dict, so they are retained unconditionally. ``variant_entries`` (every kanji-bearing entry)
+    ``phrase_entries``, ``suffix_phrase_entries``, ``suru_entries`` and
+    ``conjugated_tail_entries`` are each a sliver of any dict, so they are retained
+    unconditionally. ``variant_entries`` (every kanji-bearing entry)
     and ``stem_entries`` (every entry whose reading differs from its written form) are most of a
     dict, so they are gated on their flags. ``stem_entries`` serves both ``stem_matching`` and
     ``compound_matching``, so either flag collects it. Retaining ``variant_entries``
@@ -446,7 +491,7 @@ def build_seen_day(
     suru_entries: Set[Tuple[str, str]] = set()
     variant_entries: Set[Tuple[str, str]] = set()
     stem_entries: Set[Tuple[str, str]] = set()
-    negative_entries: Set[Tuple[str, str]] = set()
+    conjugated_tail_entries: Set[Tuple[str, str]] = set()
     for entry in data:
         if not isinstance(entry, list) or len(entry) < 3:
             continue
@@ -491,8 +536,8 @@ def build_seen_day(
                 suffix_phrase_entries.add((effective, reading))
             if dm._is_suru_entry(effective, reading):
                 suru_entries.add((effective, reading))
-            if dm._is_negative_entry(effective, reading):
-                negative_entries.add((effective, reading))
+            if dm._is_conjugated_tail_entry(effective, reading):
+                conjugated_tail_entries.add((effective, reading))
             if variant_matching and dm._is_variant_entry(effective, reading):
                 variant_entries.add((effective, reading))
             # Gate mirrors what _stem_candidates can ever probe for. A candidate always carries a
@@ -512,7 +557,7 @@ def build_seen_day(
             if dm._honorific_fold_allowed(stripped, exprs):
                 honorific_stripped.add(stripped)
     return (exprs, honorific_stripped, phrase_entries, suffix_phrase_entries, suru_entries,
-            variant_entries, stem_entries, negative_entries)
+            variant_entries, stem_entries, conjugated_tail_entries)
 
 
 # How many presence sets build_seen_day returns, and how many BUILD-time flags key the caches
@@ -581,7 +626,7 @@ def _seen_day_for(folder, mtime, normalize_kana, honorific_folding, variant_matc
 
 def _merge_seen_days(days) -> "SeenWindow":
     """Union the per-day ``(exprs, honorific_stripped, phrase_entries, suffix_phrase_entries,
-    suru_entries, variant_entries, stem_entries, negative_entries)`` sets into one ``SeenWindow``. Presence is idempotent across days, so a plain
+    suru_entries, variant_entries, stem_entries, conjugated_tail_entries)`` sets into one ``SeenWindow``. Presence is idempotent across days, so a plain
     union replaces the old additive count merge (and the per-day separation it needed for the
     non-additive reading-mismatch fallback)."""
     exprs: Set[str] = set()
@@ -591,7 +636,7 @@ def _merge_seen_days(days) -> "SeenWindow":
     surus: Set[Tuple[str, str]] = set()
     variants: Set[Tuple[str, str]] = set()
     stems: Set[Tuple[str, str]] = set()
-    negatives: Set[Tuple[str, str]] = set()
+    conjugated: Set[Tuple[str, str]] = set()
     for de, dh, dp, dsp, dsu, dv, dst, dn in days:
         exprs |= de
         honorific |= dh
@@ -600,8 +645,8 @@ def _merge_seen_days(days) -> "SeenWindow":
         surus |= dsu
         variants |= dv
         stems |= dst
-        negatives |= dn
-    return SeenWindow(exprs, honorific, phrases, suffix_phrases, surus, variants, stems, negatives)
+        conjugated |= dn
+    return SeenWindow(exprs, honorific, phrases, suffix_phrases, surus, variants, stems, conjugated)
 
 
 # Merged-window cache: (per-day (folder, mtime) + build flags) -> SeenWindow. Keyed on mtimes so

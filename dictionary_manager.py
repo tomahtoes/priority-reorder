@@ -28,11 +28,32 @@ _SURU_SUFFIXES = ("する", "じる", "ずる")
 _U_TO_I = {"う": "い", "く": "き", "ぐ": "ぎ", "す": "し", "つ": "ち",
            "ぬ": "に", "ぶ": "び", "む": "み", "る": "り"}
 _ADJ_NOMINALIZERS = ("さ", "み", "げ")
+# The い-adjective 連用形 (早い -> 早く), a stem candidate beside the nominalizers.
+_ADJ_RENYOU = "く"
 # う段 -> あ段, the godan 未然形 shift (拘わる -> 拘わら), which the negative suffixes attach to.
 _U_TO_A = {"う": "わ", "く": "か", "ぐ": "が", "す": "さ", "つ": "た",
            "ぬ": "な", "ぶ": "ば", "む": "ま", "る": "ら"}
 # ない is left out: つまらない, くだらない and 分からない would inflate their base verbs.
 _NEGATIVE_SUFFIXES = ("ず", "ぬ")
+# The godan て-form sound changes (急ぐ -> 急いで, 沿う -> 沿って). Ichidan just adds て.
+_TE_ONBIN = {"う": "って", "つ": "って", "る": "って", "む": "んで", "ぶ": "んで", "ぬ": "んで",
+             "く": "いて", "ぐ": "いで", "す": "して"}
+# Every tail a _conjugated_tail_forms form can end in.
+_CONJUGATED_TAILS = _NEGATIVE_SUFFIXES + ("て", "で")
+# Rendaku: the voiced forms a compound's second element can take on its first kana
+# (触り -> 手触り/てざわり). ち and つ have two voiced spellings each.
+_RENDAKU = {
+    "か": "が", "き": "ぎ", "く": "ぐ", "け": "げ", "こ": "ご",
+    "さ": "ざ", "し": "じ", "す": "ず", "せ": "ぜ", "そ": "ぞ",
+    "た": "だ", "ち": "ぢじ", "つ": "づず", "て": "で", "と": "ど",
+    "は": "ば", "ひ": "び", "ふ": "ぶ", "へ": "べ", "ほ": "ぼ",
+}
+
+def _rendaku_forms(reading: str) -> Tuple[str, ...]:
+    """``reading`` plus each form with its first kana voiced (さわり -> ざわり)."""
+    if not reading:
+        return (reading,)
+    return (reading,) + tuple(v + reading[1:] for v in _RENDAKU.get(reading[0], ""))
 
 def _is_phrase_entry(expression: str, reading: Optional[str]) -> bool:
     """Structural test for the single-kanji phrase rule: kanji head, whitelisted particle
@@ -92,8 +113,9 @@ def _suru_reading_matches(card_reading: str, entry_reading: str, suffix: str) ->
 
 def _stem_candidates(expression: str, reading: str) -> List[Tuple[str, str]]:
     """The (expression, reading) pairs a dictionary-form card should also be credited for: its
-    連用形 (戒める -> 戒め, 遊ぶ -> 遊び) and, for い-adjectives, its さ/み/げ nominalizations
-    (強い -> 強さ, 痛い -> 痛み). Forward only. The card is the base form, the entry the derived one.
+    連用形 (戒める -> 戒め, 遊ぶ -> 遊び, 早い -> 早く) and, for い-adjectives, its さ/み/げ
+    nominalizations (強い -> 強さ, 痛い -> 痛み). Forward only. The card is the base form, the entry
+    the derived one.
 
     The conjugation class is unknowable without a dictionary, so a る-final card yields BOTH the
     ichidan (drop る) and godan (る -> り) candidates and lets the exact (expression, reading)
@@ -129,7 +151,7 @@ def _stem_candidates(expression: str, reading: str) -> List[Tuple[str, str]]:
         i = _U_TO_I[tail]
         out.append((expression[:-1] + i, reading[:-1] + i))  # godan
     elif tail == "い":
-        for suffix in _ADJ_NOMINALIZERS:
+        for suffix in _ADJ_NOMINALIZERS + (_ADJ_RENYOU,):
             out.append((expression[:-1] + suffix, reading[:-1] + suffix))
     return [pair for pair in out if len(pair[0]) >= _MIN_STEM_LENGTH]
 
@@ -139,7 +161,7 @@ def _negative_forms(expression: str, reading: str) -> List[Tuple[str, str]]:
 
     Same gates as _stem_candidates: ``expression == reading`` rejected, the okurigana invariant,
     and a う段 tail. A る-final card yields both the ichidan (drop る) and godan (る -> ら) forms,
-    left for the reading check in negative_suffix_total to arbitrate.
+    left for the reading check in conjugated_suffix_total to arbitrate.
 
     No _MIN_STEM_LENGTH floor. The suffix makes every form at least two characters (見る -> 見ず),
     and the bare-kanji blowups that floor exists for cannot happen once a suffix is attached.
@@ -158,24 +180,83 @@ def _negative_forms(expression: str, reading: str) -> List[Tuple[str, str]]:
     return [(stem_expr + suffix, stem_reading + suffix)
             for stem_expr, stem_reading in stems for suffix in _NEGATIVE_SUFFIXES]
 
-def _is_negative_entry(expression: str, reading: Optional[str]) -> bool:
-    """Structural test for the negative-form tail rule: a reading to validate against, a written
-    form ending in ず/ぬ, and ``expression != reading``, which drops the (kana, kana) pairs
+def _te_forms(expression: str, reading: str) -> List[Tuple[str, str]]:
+    """The (expression, reading) pairs of a verb card's て-form (急ぐ -> 急いで, 沿う -> 沿って,
+    極める -> 極めて), which dictionaries list for the adverbs and set phrases built on it.
+
+    Same gates as _negative_forms. A る-final card yields both the ichidan (drop る, add て) and
+    godan (る -> って) forms. A く-final card read いく/ゆく also yields って, for 行く's irregular
+    行って. する, 来る, and う-verbs keeping their う (問う -> 問うて) are not handled."""
+    if not expression or not reading or expression == reading:
+        return []
+    tail = expression[-1]
+    if tail != reading[-1] or tail not in _TE_ONBIN:
+        return []
+    out: List[Tuple[str, str]] = []
+    if tail == "る":
+        out.append((expression[:-1] + "て", reading[:-1] + "て"))  # ichidan
+    endings = [_TE_ONBIN[tail]]
+    if tail == "く" and reading.endswith(("いく", "ゆく")):
+        endings.append("って")
+    for ending in endings:
+        out.append((expression[:-1] + ending, reading[:-1] + ending))
+    return out
+
+def _conjugated_tail_forms(expression: str, reading: str) -> List[Tuple[str, str]]:
+    """Every conjugated form conjugated_suffix_total looks for at the end of an entry."""
+    return _negative_forms(expression, reading) + _te_forms(expression, reading)
+
+def _is_conjugated_tail_entry(expression: str, reading: Optional[str]) -> bool:
+    """Structural test for the conjugated-form tail rule: a reading to validate against, a written
+    form ending in ず/ぬ/て/で, and ``expression != reading``, which drops the (kana, kana) pairs
     _build_index_from_raw makes of '㋕' entries. Those can never end in a kanji-bearing form."""
     return (
         bool(reading)
-        and expression.endswith(_NEGATIVE_SUFFIXES)
+        and expression.endswith(_CONJUGATED_TAILS)
         and expression != reading
     )
+
+_VARIANTS_FILE = "kanji_variants.txt"
+_glyph_canon_map: Optional[Dict[str, str]] = None
+
+def _glyph_canon() -> Dict[str, str]:
+    """kanji -> the canonical glyph of its KANJIDIC2 variant group (燈 -> 灯, 醬 -> 醤), from
+    kanji_variants.txt. Read on first use, never at import. A missing or unreadable file
+    degrades to no folding rather than breaking the reorder."""
+    global _glyph_canon_map
+    if _glyph_canon_map is not None:
+        return _glyph_canon_map
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), _VARIANTS_FILE)
+    canon: Dict[str, str] = {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.rstrip("\n")
+                if not line or line[0] == "#":
+                    continue
+                for ch in line[1:]:
+                    canon[ch] = line[0]
+    except OSError as e:
+        print("[priority-reorder] kanji variant table unavailable: %s" % e)
+    _glyph_canon_map = canon
+    return canon
 
 def _kanji_skeleton(expression: str) -> str:
     """The deduplicated kanji of a written form, in first-appearance order (煌燦めく -> 煌燦,
     人々 -> 人 since 々 is not a kanji). Empty for kana-only forms, which is what gates those
-    out of variant matching."""
+    out of variant matching.
+
+    Each kanji is folded to its glyph-variant group's canonical form first (燈す -> 灯), so a
+    card and an entry that differ only in glyph (燈す/灯す, 掻く/搔く) nest. Every skeleton
+    consumer, counting and seen alike, goes through here, so the fold cannot apply on one side
+    and not the other."""
+    canon = _glyph_canon()
     out: List[str] = []
     for ch in expression:
-        if is_kanji(ch) and ch not in out:
-            out.append(ch)
+        if is_kanji(ch):
+            ch = canon.get(ch, ch)
+            if ch not in out:
+                out.append(ch)
     return "".join(out)
 
 def _variant_kanji_compatible(card_kanji: str, entry_kanji: str) -> bool:
@@ -245,8 +326,11 @@ class OccurrenceIndex:
         self._stem_compound_exprs: List[str] = []
         # The ず/ぬ-final (expression, reading) keys sorted by reversed expression, with those
         # reversed expressions alongside for the bisect.
-        self._negative_keys: Optional[List[Tuple[str, str]]] = None
-        self._negative_revs: List[str] = []
+        self._conjugated_keys: Optional[List[Tuple[str, str]]] = None
+        self._conjugated_revs: List[str] = []
+        # Every (expression, reading) key whose two sides differ, sorted by reversed expression.
+        self._stem_tail_keys: Optional[List[Tuple[str, str]]] = None
+        self._stem_tail_revs: List[str] = []
 
     def add(self, expression: str, reading: Optional[str], count: int) -> None:
         if reading:
@@ -318,35 +402,38 @@ class OccurrenceIndex:
             lo += 1  # exclude the exact match (counted separately by get)
         return self._suffix_cumsum[hi] - self._suffix_cumsum[lo]
 
-    def _ensure_negative_index(self) -> None:
-        """Sort the ず/ぬ-final pair keys by reversed expression. _is_negative_entry keeps this to a
-        sliver of the dict, so unlike the suffix index it can carry readings."""
-        if self._negative_keys is not None:
+    def _ensure_conjugated_index(self) -> None:
+        """Sort the ず/ぬ/て/で-final pair keys by reversed expression. _is_conjugated_tail_entry keeps
+        this to a sliver of the dict, so unlike the suffix index it can carry readings."""
+        if self._conjugated_keys is not None:
             return
         rows = sorted(
             (expr[::-1], (expr, reading))
             for expr, reading in self.expr_reading_to_count
-            if _is_negative_entry(expr, reading)
+            if _is_conjugated_tail_entry(expr, reading)
         )
-        self._negative_keys = [key for _rev, key in rows]
-        self._negative_revs = [rev for rev, _key in rows]
+        self._conjugated_keys = [key for _rev, key in rows]
+        self._conjugated_revs = [rev for rev, _key in rows]
 
-    def negative_suffix_total(
+    def conjugated_suffix_total(
         self,
         expression: str,
         reading: str,
         *,
         compound_matching: bool = False,
     ) -> int:
-        """Sum the counts of entries ending in the card's 未然形 + ず/ぬ, on both sides: にも拘わらず
-        credits 拘わる, 相変わらず credits 変わる, 見知らぬ credits 知る. The negative-form half of
-        suffix matching. suffix_total cannot see these, because the card's own final kana is gone.
+        """Sum the counts of entries ending in one of the card's conjugated forms (see
+        _conjugated_tail_forms), on both sides. The 未然形 + ず/ぬ: にも拘わらず credits 拘わる,
+        相変わらず credits 変わる, 見知らぬ credits 知る. The て-form: に沿って credits 沿う, この期に
+        及んで credits 及ぶ. The conjugated-form half of suffix matching. suffix_total cannot see
+        these, because the card's own final kana is gone.
 
         The reading tail is required, unlike suffix_total's written-only match. The forms are
         derived, and the derivation is where the false positives live: 水入らず (みずいらず) must
         not credit 入る/はいる, nor にも拘らず (にもかかわらず) 拘る/こだわる.
 
-        The form itself is included (思わず credits 思う), since get credits nothing for it.
+        The form itself is included (思わず credits 思う, 急いで credits 急ぐ), since get credits
+        nothing for it.
 
         Gated like suffix_total (see _suffix_eligible), plus two skips:
 
@@ -354,22 +441,25 @@ class OccurrenceIndex:
             prefix_total, as in stem_compound_total.
           * ``compound_matching`` is a DEDUP GUARD. An entry starting with one of the card's
             _stem_candidates on both sides was already credited by stem_compound_total. For a
-            る-final card that is the form itself: 拘わらず sits in the 拘わ/かかわ sweep.
+            る-final card that is the form itself: 拘わらず sits in the 拘わ/かかわ sweep, and an
+            ichidan て-form (改めて) in the 改め/あらため one.
 
-        Nothing else overlaps. suffix_total's entries end in the card's う段 kana, not ず/ぬ.
-        variant_total needs the card's exact reading, and stem_total's candidates never end in
-        ず/ぬ. honorific_to_count is keyed on the bare card, and the single-kanji carve-outs are
-        gated out with it.
+        Nothing else overlaps. suffix_total's entries end in the card's う段 kana, not
+        ず/ぬ/て/で. variant_total needs the card's exact reading. stem_total probes a candidate
+        exactly and stem_tail_compound_total wants entries ending in one, and no candidate is a
+        conjugated form: an ichidan stem can end in て (捨て), but its form then ends in てて.
+        honorific_to_count is keyed on the bare card, and the single-kanji carve-outs are gated
+        out with it.
 
-        Reads only expr_reading_to_count, so sum_d negative_suffix_total_d == the merged total."""
+        Reads only expr_reading_to_count, so sum_d conjugated_suffix_total_d == the merged total."""
         if not _suffix_eligible(expression):
             return 0
-        forms = _negative_forms(expression, reading)
+        forms = _conjugated_tail_forms(expression, reading)
         if not forms:
             return 0
-        self._ensure_negative_index()
-        keys = self._negative_keys
-        revs = self._negative_revs
+        self._ensure_conjugated_index()
+        keys = self._conjugated_keys
+        revs = self._conjugated_revs
         pair_counts = self.expr_reading_to_count
         compound_stems = _stem_candidates(expression, reading) if compound_matching else ()
         credited = set()
@@ -549,7 +639,8 @@ class OccurrenceIndex:
         combine_word_forms: bool = False,
     ) -> int:
         """Sum the counts of the card's 連用形 and さ/み/げ forms, bridging a dictionary-form card
-        to the derived noun an occurrence dict lists separately (戒める takes 戒め, 強い takes 強さ).
+        to the derived form an occurrence dict lists separately (戒める takes 戒め, 強い takes 強さ,
+        早い takes 早く).
         See _stem_candidates for the candidates and its two gates.
 
         Forward only. The reverse (a 連用形 card taking its dictionary form) was measured and
@@ -644,8 +735,8 @@ class OccurrenceIndex:
         already-swept candidate is skipped: for a る-final card the godan range (食べり/たべり)
         nests inside the ichidan one (食べ/たべ), so its matches would be counted twice. The check
         has to be dynamic rather than 'sweep the ichidan one', because _MIN_STEM_LENGTH can drop
-        the ichidan candidate (見る -> 見) and leave the godan sweep to run alone. The three
-        adjective candidates are pairwise disjoint.
+        the ichidan candidate (見る -> 見) and leave the godan sweep to run alone. The four
+        adjective candidates (さ/み/げ/く) are pairwise disjoint.
 
         Nothing else double-counts. suffix_total would need an entry both beginning with the stem
         and ending with the whole base form; honorific_to_count sums 'お|ご|御 + expression'
@@ -690,6 +781,79 @@ class OccurrenceIndex:
                 total += pair_counts[key]
         return total
 
+    def _ensure_stem_tail_index(self) -> None:
+        """Sort the pair keys by reversed expression, skipping the (kana, kana) pairs '㋕' entries
+        are re-keyed as, which stem_compound_total throws out for the same reason."""
+        if self._stem_tail_keys is not None:
+            return
+        rows = sorted(
+            (expr[::-1], (expr, reading))
+            for expr, reading in self.expr_reading_to_count
+            if expr != reading
+        )
+        self._stem_tail_keys = [key for _rev, key in rows]
+        self._stem_tail_revs = [rev for rev, _key in rows]
+
+    def stem_tail_compound_total(self, expression: str, reading: str) -> int:
+        """Sum the counts of entries that END in the card's stem: the tail mirror of
+        stem_compound_total, so 稼ぐ takes 時間稼ぎ, 止まる takes 行き止まり and 惑う takes 戸惑い.
+        Japanese compounds put the head last, and a 連用形 head neither starts nor ends with the
+        card, so no other rule sees these.
+
+        Both sides must match, the reading allowing rendaku on the stem's first kana when that
+        kana is written as a kanji: 手触り reads てざわり, not てさわり. The entry must be strictly
+        longer than the stem on both sides.
+
+        Two skips:
+
+          * Entries starting with the card expression. They belong to prefix_total, as in
+            stem_compound_total.
+          * Entries starting with one of the card's stem candidates on both sides. Those are
+            stem_compound_total's, which always runs beside this rule (both sit under
+            compound_matching).
+
+        Nothing else overlaps. suffix_total's entries end in the whole base form, and a stem never
+        does: it drops or replaces the final kana. variant_total needs the card's exact reading,
+        which no entry ending in a stem reading can carry. stem_total probes the stem exactly, and
+        this rule wants strictly longer entries. honorific_to_count keys the stripped form (お願い
+        credits 願い), not the verb.
+
+        A per-card ``credited`` set guards the candidates against each other, though none is
+        known to be a suffix of another. Reads only expr_reading_to_count, so
+        sum_d stem_tail_compound_total_d == the merged total."""
+        candidates = _stem_candidates(expression, reading)
+        if not candidates:
+            return 0
+        self._ensure_stem_tail_index()
+        keys = self._stem_tail_keys
+        revs = self._stem_tail_revs
+        pair_counts = self.expr_reading_to_count
+        credited = set()
+        total = 0
+        for cand_expr, cand_reading in candidates:
+            rev = cand_expr[::-1]
+            # A kana-initial stem shows its first kana in writing, so only a kanji can voice.
+            tails = _rendaku_forms(cand_reading) if is_kanji(cand_expr[0]) else (cand_reading,)
+            # Same U+10FFFF sentinel as prefix_total.
+            lo = bisect.bisect_left(revs, rev)
+            hi = bisect.bisect_left(revs, rev + chr(0x10FFFF))
+            for position in range(lo, hi):
+                key = keys[position]
+                if key in credited:
+                    continue
+                entry_expr, entry_reading = key
+                if len(entry_expr) == len(cand_expr) or entry_expr.startswith(expression):
+                    continue
+                if not any(len(entry_reading) > len(tail) and entry_reading.endswith(tail)
+                           for tail in tails):
+                    continue
+                if any(entry_expr.startswith(stem_expr) and entry_reading.startswith(stem_reading)
+                       for stem_expr, stem_reading in candidates):
+                    continue
+                credited.add(key)
+                total += pair_counts[key]
+        return total
+
     def get(self, expression: str, reading: str) -> int:
         if (expression, reading) in self.expr_reading_to_count:
             return self.expr_reading_to_count[(expression, reading)]
@@ -729,7 +893,7 @@ class OccurrenceIndex:
             # Single-kanji cards, gated out of the bare path, return only via the tail phrase
             # carve-out.
             total += self.single_kanji_suffix_phrase_total(expression, reading)
-            total += self.negative_suffix_total(
+            total += self.conjugated_suffix_total(
                 expression, reading, compound_matching=compound_matching
             )
         if variant_matching:
@@ -761,6 +925,7 @@ class OccurrenceIndex:
                 stem_matching=stem_matching,
                 variant_matching=variant_matching,
             )
+            total += self.stem_tail_compound_total(expression, reading)
         if honorific_folding:
             # honorific_to_count credits the bare form from an 'お/ご/御 + form' entry, which is a
             # strict written suffix of that entry. So when the expression is suffix-eligible,

@@ -1,25 +1,12 @@
 # Changelog
 
-## 2026-09-21
-- Reorders are much faster. On a 22,700-note collection with 42 priority searches, a reorder went from about 15 seconds to under half a second, and the first one after starting Anki from about 18 seconds to about 3.
-  - The biggest gain is for searches that put a custom term inside parentheses or next to `OR`, like `deck:X (seen:7 OR added:7) kanji:new>=1`. Those used to check every note in your collection instead of only the cards being reordered.
-  - Collections large enough to reorder more than about 2,500 cards at once gain the most, since one of the database queries was reading the whole notes table every run.
-  - Nothing about matching changed. The same cards are selected, in the same order.
-- Every custom search term now answers to its first letter: `o:` for `occurrences:`, `k:` for `kanji:`, `s:` for `seen:`, and `l` for `length`. `occurrences:Dict>5 kanji:new=1 seen:7 length>=3` can be written `o:Dict>5 k:new=1 s:7 l>=3`.
-  - Both spellings are the same term and can be mixed in one query. The long forms are unchanged, so existing configs keep working.
-  - Works everywhere the long forms do: config searches, the Browse bar, and AnkiConnect.
-  - `limit=` keeps its full name, because `l` belongs to `length`.
-  - If one of your note types has a field named `o`, `k`, `s` or `l`, use the long form for that term, since the short form shadows a search on that field.
-- New `compound_matching` occurrence option. Credits a dictionary-form card with the counts of entries *built on its stem*, which no other option can see.
-  - `奮う` picks up `奮い立つ`, `取る` picks up `取り消す`, `受ける` picks up `受け入れる`, `食べる` picks up `食べ物`, `間違う` picks up `間違いない`.
-  - Both the written form and the reading must match, so `抱く`/だく takes `抱きしめる` while `抱く`/いだく does not.
-  - Works on its own (it covers the plain 連用形 too), and counts the shared entry once when `stem_matching` is also on.
-  - Deliberately generous: transitive pairs (`見回る`←`見回す`) and drifted idioms (`当たる`←`当たり前`) come along with the real compounds.
-  - Applies to `occurrences:` and `seen:` alike.
-- `suffix_matching` now credits a verb card from entries ending in its negative form (未然形 + `ず`/`ぬ`), which most dictionaries list as their own entries.
-  - `にも拘わらず` credits `拘わる`, `相変わらず` credits `変わる`, `見ず知らず` and `見知らぬ` credit `知る`, `思わず` credits `思う`.
-  - The reading has to match as well, so `にも拘らず` (にもかかわらず) leaves a `拘る`/こだわる card alone.
-  - Applies to `occurrences:` and `seen:` alike.
+## 2026-09-23
+- Much faster reorders: about 15s down to under 0.5s on a 22,700-note collection, most of all for searches that put a custom term next to `OR` or inside parentheses.
+- Short aliases for the custom terms: `o:`, `k:`, `s:` and `l` for `occurrences:`, `kanji:`, `seen:` and `length`. Use the long form if a note type has a field with one of those names.
+- New `compound_matching` option: credits a verb with the compounds built on its stem, at either end (`取る` ← `取り消す`, `稼ぐ` ← `時間稼ぎ`).
+- `suffix_matching` now credits verbs from entries ending in their negative or て-form (`拘わる` ← `にも拘わらず`, `急ぐ` ← `急いで`).
+- `stem_matching` now credits い-adjectives from their `く` form (`早い` ← `早く`).
+- `variant_matching` now treats variant glyphs of a kanji as the same kanji (`燈す`/`灯す`, `掻く`/`搔く`).
 
 ## 2026-08-28
 - New `kanji:new_reading` search term. Prioritizes words that use a Kanji in a *reading* you haven't learned, not just a new Kanji, so `食べる` (た) still matches after you've learned `食事` (しょく).
