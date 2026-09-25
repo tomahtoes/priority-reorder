@@ -45,7 +45,10 @@ else:
         """Run the reordering operation in the background"""
         if mw.col is None:
             return
-        operation = CollectionOp(parent=mw, op=run_reorder).failure(
+        trigger = "manual" if manual else "sync"
+        operation = CollectionOp(
+            parent=mw, op=lambda col: run_reorder(col, trigger=trigger)
+        ).failure(
             lambda err: showInfo(f"Error during reordering: {err}")
         )
 
@@ -65,7 +68,7 @@ else:
         if mw.col is None:
             return
         try:
-            run_reorder()
+            run_reorder(trigger="close")
         except Exception as e:
             print(f"[priority-reorder] Reorder on close failed: {e}")
 

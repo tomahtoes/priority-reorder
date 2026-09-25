@@ -47,9 +47,11 @@ _SORT_VALUE = operator.attrgetter("data.sort_field_value")
 _CARD_ID = operator.attrgetter("card_id")
 
 class PriorityReorderer:
-    def __init__(self, config: Config) -> None:
+    def __init__(self, config: Config, trigger: str = "manual") -> None:
         self.config = config
         self.data_manager = DataManager(config)
+        self.trigger = trigger
+        self._promoted_count = 0
 
     def reorder(self) -> OpChangesWithCount:
         timings: Dict[str, float] = {}
@@ -263,6 +265,7 @@ class PriorityReorderer:
             new_normal, promoted = final_normal, []
         else:
             new_normal, promoted = split_by_threshold(final_normal, prioritization)
+        self._promoted_count = len(promoted)
         if promoted:
             final_priority.append(promoted)
 
@@ -290,6 +293,8 @@ class PriorityReorderer:
 
             for i, bucket in enumerate(buckets):
                 eligible = [c for c in bucket if c.card_id not in seen]
+                if i < len(summaries):
+                    summaries[i].overlap_count += len(bucket) - len(eligible)
                 sorted_bucket = self._sort_cards(eligible)
 
                 limit = defs[i][1] if i < len(defs) else None
@@ -487,6 +492,8 @@ class PriorityReorderer:
                 total_normal=len(final_normal_list),
                 total_repositioned=getattr(result, "count", 0) or 0,
                 timings_ms=dict(timings or {}),
+                promoted_count=self._promoted_count,
+                trigger=self.trigger,
             )
         except Exception as e:
             import traceback
@@ -501,7 +508,7 @@ class PriorityReorderer:
             print(f"[priority-reorder] Failed to store in-memory report: {e}")
             traceback.print_exc()
 
-def run_reorder(col=None) -> OpChangesWithCount:
+def run_reorder(col=None, trigger: str = "manual") -> OpChangesWithCount:
     if mw.col is None:
         return OpChangesWithCount(count=0)
-    return PriorityReorderer(get_config()).reorder()
+    return PriorityReorderer(get_config(), trigger=trigger).reorder()

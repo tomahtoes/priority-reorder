@@ -16,7 +16,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Files added since the newest built release, each one deliberate. Once a release ships them
 # they sit in its zip too, so a stale entry here is harmless.
-ADDED_SINCE_LAST_RELEASE = {"kanji_variants.txt"}
+ADDED_SINCE_LAST_RELEASE = {"kanji_variants.txt", "summary_html.py"}
 
 
 def _build_release():

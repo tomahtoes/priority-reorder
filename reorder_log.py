@@ -20,6 +20,9 @@ class PrioritySearchSummary:
     kept_note_ids: List[int] = field(default_factory=list)
     discarded_note_ids: List[int] = field(default_factory=list)
     cutoff_note_ids: List[int] = field(default_factory=list)
+    # Sequential mode: matches already placed by an earlier search, so this one never
+    # considered them. matched = cutoff_dropped + overlap + limit/global discards + kept.
+    overlap_count: int = 0
     final_start_index: Optional[int] = None
 
 
@@ -33,6 +36,10 @@ class ReorderReport:
     total_priority_kept: int = 0
     total_normal: int = 0
     total_repositioned: int = 0
+    # Normal cards lifted into their own tier by normal_prioritization.
+    promoted_count: int = 0
+    # What started the reorder: "manual", "sync" or "close".
+    trigger: str = "manual"
     # Per-stage wall-clock durations of the reorder run, in milliseconds.
     timings_ms: Dict[str, float] = field(default_factory=dict)
 
@@ -42,22 +49,30 @@ def now_timestamp() -> str:
 
 
 _last_report: Optional[ReorderReport] = None
+# The report before _last_report, which the summary window diffs kept counts against.
+_previous_report: Optional[ReorderReport] = None
 
 
 def set_last_report(report: ReorderReport) -> None:
-    global _last_report
+    global _last_report, _previous_report
+    _previous_report = _last_report
     _last_report = report
 
 
 def clear_last_report() -> None:
     """Drop the stored report (used on profile switch, since note ids from one profile
     must not be shown or opened in another)."""
-    global _last_report
+    global _last_report, _previous_report
     _last_report = None
+    _previous_report = None
 
 
 def get_last_report() -> Optional[ReorderReport]:
     return _last_report
+
+
+def get_previous_report() -> Optional[ReorderReport]:
+    return _previous_report
 
 
 _TIMINGS_LOG_MAX_LINES = 200

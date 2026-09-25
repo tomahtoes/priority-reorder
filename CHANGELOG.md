@@ -1,7 +1,8 @@
 # Changelog
 
-## 2026-09-23
-- Much faster reorders: about 15s down to under 0.5s on a 22,700-note collection, most of all for searches that put a custom term next to `OR` or inside parentheses.
+## 2026-09-25
+- Redesigned the summary window: a queue overview, and a per-search breakdown of where each search's matches went.
+- Improved speed of reorders for some queries.
 - Short aliases for the custom terms: `o:`, `k:`, `s:` and `l` for `occurrences:`, `kanji:`, `seen:` and `length`. Use the long form if a note type has a field with one of those names.
 - New `compound_matching` option: credits a verb with the compounds built on its stem, at either end (`取る` ← `取り消す`, `稼ぐ` ← `時間稼ぎ`).
 - `suffix_matching` now credits verbs from entries ending in their negative or て-form (`拘わる` ← `にも拘わらず`, `急ぐ` ← `急いで`).

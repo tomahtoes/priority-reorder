@@ -243,6 +243,34 @@ def test_sequential_dedup_card_counts_only_in_earliest_bucket():
     assert st[1].kept_note_ids == [6]       # bucket 1 only credits the new card
 
 
+def test_overlap_counts_matches_claimed_by_an_earlier_search():
+    r = reorderer(priority_search_mode="sequential")
+    st = summaries(2)
+    shared = card(5, 1)
+    defs = [("q0", None), ("q1", None)]
+    buckets = [[shared], [shared, card(6, 2)]]
+
+    r._finalize_priority_queue(defs, buckets, st)
+
+    assert st[0].overlap_count == 0
+    assert st[1].overlap_count == 1
+
+
+def test_limit_discards_are_not_overlap_for_a_later_search():
+    # limit=0 keeps nothing, so its matches stay available: a later search that keeps
+    # them has no overlap to report.
+    r = reorderer(priority_search_mode="sequential")
+    st = summaries(2)
+    c = card(5, 1)
+    defs = [("q0", 0), ("q1", None)]
+    buckets = [[c], [c]]
+
+    r._finalize_priority_queue(defs, buckets, st)
+
+    assert (st[0].limit_discarded, st[0].kept_count) == (1, 0)
+    assert (st[1].overlap_count, st[1].kept_count) == (0, 1)
+
+
 def test_global_priority_limit_clips_queue_into_overflow():
     r = reorderer(priority_search_mode="sequential", priority_limit=2)
     st = summaries(1)
@@ -588,3 +616,29 @@ def test_reorder_writes_timings_log_only_when_flag_enabled(monkeypatch):
     r2.reorder()
     assert len(written) == 1
     assert "total" in written[0][1]
+
+
+def test_report_carries_trigger_and_promoted_count(monkeypatch):
+    import reorderer as rmod
+    from data_manager import SearchResult
+    from reorder_log import get_last_report
+
+    monkeypatch.setattr(rmod.mw, "col", _col(_FakeSched(), []), raising=False)
+
+    r = PriorityReorderer(Config(priority_search="deck:X", normal_prioritization=100),
+                          trigger="sync")
+    matched, low_normal = card(1, 1), card(2, 50)
+
+    class _FakeDM:
+        def get_cards_from_search(self, query):
+            return SearchResult([matched] if query == "deck:X" else [matched, low_normal], 1)
+
+        def get_cards(self, card_ids):
+            return {c.card_id: c for c in (matched, low_normal) if c.card_id in card_ids}
+
+    r.data_manager = _FakeDM()
+    r.reorder()
+
+    report = get_last_report()
+    assert report.trigger == "sync"
+    assert report.promoted_count == 1

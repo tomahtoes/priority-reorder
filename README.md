@@ -97,11 +97,11 @@ Both queues are sorted internally by your `sort_field`. If a card matches more t
 > All of the addon's actions live under the **Tools** -> **Priority Reorder** submenu: **Reorder Cards** (``Ctrl+Alt+` ``), **Show Summary**, and **Update Jiten Occurrence Dictionaries**.
 
 ## Summary Window
-Open **Tools** -> **Priority Reorder** -> **Show Summary** to see what each of your priority searches did in the latest reorder of the current session (if you haven't reordered yet, just press **Run reorder now** or sync).
+Open **Tools** -> **Priority Reorder** -> **Show Summary** to see what each of your priority searches did in the latest reorder of the current session (if you haven't reordered yet, just press **Run reorder** or sync).
 
-You get one collapsible card per `priority_search` showing how many cards it **matched** vs. **kept** vs. **discarded**, with buttons to open the kept/discarded notes in the Browser. **Edit config** and **Run reorder now** sit at the top so you can tweak and re-check live. Everything is labeled in the window itself.
+The top of the window shows how many cards were prioritized, when the reorder ran, and a bar of how the prioritized cards split between your searches. Below it, each `priority_search` is one row with its **kept** and **matched** counts, its place in the queue, and a thin bar showing where its matches went: kept, taken by an earlier search, over its `limit=`, or below `priority_cutoff`. Click a row for the numbers and buttons to open its kept, over-limit or cut-off notes in the Browser. **Edit config** and **Run reorder** sit at the top so you can tweak and re-check live.
 
-> In `"mix"` mode, per-search kept/discarded numbers aren't meaningful (all searches are pooled before sorting), so each card shows only its **matched** count.
+> In `"mix"` mode, per-search kept numbers aren't meaningful (all searches are pooled before sorting), so each row shows only its **matched** count.
 
 ## Features Guide
 The addon supports several custom filters that you can mix in with standard Anki searches:
