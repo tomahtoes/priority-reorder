@@ -68,6 +68,15 @@ class KanjiManager:
         # Wall-clock ms of the last initialize() that actually rebuilt or synced;
         # None when the call was a no-op. Read by the reorder timings.
         self.last_scan_ms: Optional[float] = None
+        # Bumped whenever the counters change, so callers memoizing per-note counts across
+        # reorders know when theirs went stale. last_delta is (generation it was bumped from,
+        # kanji whose count may have moved, reading slots whose count may have moved) when the
+        # change came from an incremental sync, None after a rebuild, which invalidates
+        # everything.
+        self.generation = 0
+        self.last_delta: Optional[Tuple[int, frozenset, frozenset]] = None
+        # Collects touched kanji/slots during _sync_known_notes; None outside a sync.
+        self._touched: Optional[Tuple[set, set]] = None
 
     def _field_names(self) -> Tuple[str, str]:
         sc = self.config.search_config
@@ -122,6 +131,8 @@ class KanjiManager:
         t0 = time.perf_counter()
         try:
             if self.initialized and self._note_kanji:
+                touched = (set(), set())
+                self._touched = touched
                 try:
                     self._sync_known_notes()
                 except Exception as e:
@@ -129,6 +140,16 @@ class KanjiManager:
                     print(f"[priority-reorder] incremental kanji sync failed: {e}")
                     traceback.print_exc()
                     self._rebuild_all()
+                else:
+                    # A review moves card mtimes (and so the signature) without re-crediting
+                    # any note. That leaves the counters as they were, and every memoized
+                    # count downstream stays valid.
+                    if touched[0] or touched[1]:
+                        self.last_delta = (self.generation, frozenset(touched[0]),
+                                           frozenset(touched[1]))
+                        self.generation += 1
+                finally:
+                    self._touched = None
             else:
                 self._rebuild_all()
         except Exception as e:
@@ -198,7 +219,11 @@ class KanjiManager:
         snapshot."""
         expr_idx, read_idx = idx
         old = self._note_kanji.pop(nid, None)
+        touched = self._touched
         if old is not None:
+            if touched is not None:
+                touched[0].update(old[1])
+                touched[1].update(old[2])
             self.known_kanji_counts.subtract(old[1])
             if old[2]:
                 self.known_reading_counts.subtract(old[2])
@@ -218,9 +243,14 @@ class KanjiManager:
                 self.known_reading_counts.update(slots)
                 self._reading_total += len(slots)
                 self._reading_unresolved += unresolved_count(slots)
+        if touched is not None:
+            touched[0].update(kanji)
+            touched[1].update(slots)
         self._note_kanji[nid] = (nmod, kanji, slots)
 
     def _rebuild_all(self) -> None:
+        self.generation += 1
+        self.last_delta = None
         self.known_kanji_counts.clear()
         self.known_reading_counts.clear()
         self._note_kanji.clear()
@@ -271,8 +301,12 @@ class KanjiManager:
             f"group by n.id"
         ))
 
+        touched = self._touched
         for nid in [nid for nid in self._note_kanji if nid not in current]:
             _, kanji, slots = self._note_kanji.pop(nid)
+            if touched is not None:
+                touched[0].update(kanji)
+                touched[1].update(slots)
             self.known_kanji_counts.subtract(kanji)
             if slots:
                 self.known_reading_counts.subtract(slots)

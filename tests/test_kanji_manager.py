@@ -190,6 +190,70 @@ def test_incremental_sync_failure_falls_back_to_full_rescan(fake_col, monkeypatc
     assert km.known_kanji_counts == Counter({"彫": 1, "刻": 1, "語": 1})
 
 
+# generation / last_delta: what data_manager's cross-run kanji memos key on
+
+def test_rebuild_bumps_generation_without_a_delta(fake_col):
+    fake_col(notes=[(1, 1, "語\x1f")])
+    km = KanjiManager(Config())
+    assert km.generation == 0
+    km.initialize()
+    assert km.generation == 1
+    assert km.last_delta is None  # a rebuild invalidates everything
+
+
+def test_sync_delta_names_the_kanji_of_graduated_and_departed_notes(fake_col):
+    col = fake_col(notes=[(1, 1, "彫刻\x1fちょうこく"), (2, 1, "刻\x1fこく")])
+    km = KanjiManager(Config())
+    km.initialize()
+
+    col.mod = 2
+    col.db.sig = (2, 200)
+    col.db.notes = [(1, 1, "彫刻\x1fちょうこく"), (3, 1, "語彙\x1fごい")]
+    km.initialize()
+    assert km.generation == 2
+    # Note 2 left (刻), note 3 graduated (語彙). Note 1 is untouched, so 彫 is not named.
+    assert km.last_delta == (1, frozenset("刻語彙"), frozenset())
+
+
+def test_sync_delta_covers_an_edited_notes_old_and_new_kanji(fake_col):
+    col = fake_col(notes=[(1, 1, "彫刻\x1fちょうこく")])
+    km = KanjiManager(Config())
+    km.initialize()
+
+    col.mod = 2
+    col.db.sig = (2, 200)
+    col.db.notes = [(1, 2, "語彙\x1fごい")]
+    km.initialize()
+    assert km.last_delta == (1, frozenset("彫刻語彙"), frozenset())
+
+
+def test_review_only_signature_change_keeps_the_generation(fake_col):
+    # Reviews move card mtimes (the signature) without re-crediting any note, so every
+    # memoized count downstream is still right.
+    col = fake_col(notes=[(1, 1, "語\x1f")])
+    km = KanjiManager(Config())
+    km.initialize()
+
+    col.mod = 2
+    col.db.sig = (1, 150)
+    km.initialize()
+    assert col.db.member_calls == 1
+    assert km.generation == 1
+
+
+def test_failed_sync_falls_back_to_a_rebuild_generation(fake_col, monkeypatch):
+    col = fake_col(notes=[(1, 1, "彫刻\x1fちょうこく")])
+    km = KanjiManager(Config())
+    km.initialize()
+
+    col.mod = 2
+    col.db.sig = (2, 200)
+    monkeypatch.setattr(km, "_sync_known_notes", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+    km.initialize()
+    assert km.generation == 2
+    assert km.last_delta is None
+
+
 def test_last_scan_ms_set_on_rebuild_and_none_on_noop(fake_col):
     col = fake_col(notes=[(1, 1, "語\x1f")])
     km = KanjiManager(Config())
@@ -359,6 +423,8 @@ def test_incremental_sync_keeps_reading_counts_correct(monkeypatch):
     km.initialize()
     assert km.known_reading_counts == Counter()
     assert km.unresolved_reading_rate() is None
+    assert km.last_delta == (km.generation - 1, frozenset("食事"),
+                             frozenset(kr.reading_slots("食事", "しょくじ")))
 
 
 def test_singleton_resets_when_the_reading_field_is_renamed(monkeypatch):

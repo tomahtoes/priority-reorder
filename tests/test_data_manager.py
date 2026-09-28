@@ -911,8 +911,8 @@ def test_new_reading_gets_its_own_count_cache_bucket(fake_col, monkeypatch):
     dm = DataManager(Config())
     dm.get_cards_from_search("deck:X kanji:new>=1")
     dm.get_cards_from_search("deck:X kanji:new_reading>=1")
-    assert ("new", 1) in dm._kanji_count_cache
-    assert ("new_reading", 1) in dm._kanji_count_cache
+    assert ("kanji", "new", 1) in dmod._term_memos
+    assert ("kanji", "new_reading", 1) in dmod._term_memos
 
 
 def test_unresolved_counters_are_per_note_not_per_comparison(fake_col, monkeypatch):
@@ -943,3 +943,255 @@ def test_reading_diagnostics_are_empty_when_the_term_never_ran(fake_col):
     dm = DataManager(Config())
     dm.get_cards_from_search("deck:X")
     assert dm.reading_diagnostics() == {}
+
+
+# cross-run term memos
+#
+# Each reorder builds a fresh DataManager, so these pin that the per-note term values carry
+# over between runs and are dropped exactly when something they depend on moves.
+
+_TWO_NOTES = [_row(1, 10, "語", "ご", "100"), _row(2, 20, "彙", "い", "100")]
+
+
+def _occ_counter(calls, index):
+    def fake_occurrence_counter(dict_names, **kwargs):
+        def count(expression, reading, card_kanji=None):
+            calls.append(expression)
+            return 7
+        count.index = index
+        return count
+    return fake_occurrence_counter
+
+
+def _occ_run(fake_col, cfg=None, rows=_TWO_NOTES, note_mods=None):
+    col = fake_col(find_results={"(deck:X) is:new": [1, 2]}, rows=rows)
+    col.db.note_mods.update(note_mods or {})
+    return DataManager(cfg or Config()).get_cards_from_search("deck:X occurrences:D>5")
+
+
+def test_occ_counts_carry_over_to_the_next_run(fake_col, monkeypatch):
+    calls = []
+    # One index object across both runs, as the lru-cached real one would be.
+    monkeypatch.setattr(dmod, "occurrence_counter", _occ_counter(calls, object()))
+    _occ_run(fake_col)
+    result = _occ_run(fake_col)
+    assert calls == ["語", "彙"]  # the second run computed nothing
+    assert [c.card_id for c in result.cards] == [1, 2]
+
+
+def test_edited_note_is_recounted_alone(fake_col, monkeypatch):
+    calls = []
+    monkeypatch.setattr(dmod, "occurrence_counter", _occ_counter(calls, object()))
+    _occ_run(fake_col)
+    edited = [_row(1, 10, "新", "しん", "100"), _row(2, 20, "彙", "い", "100")]
+    _occ_run(fake_col, rows=edited, note_mods={10: 2})
+    assert calls == ["語", "彙", "新"]
+
+
+def test_replaced_occurrence_index_recounts_everything(fake_col, monkeypatch):
+    # A dictionary update clears the lru caches, so the next counter binds a new index.
+    calls = []
+    monkeypatch.setattr(dmod, "occurrence_counter", _occ_counter(calls, object()))
+    _occ_run(fake_col)
+    monkeypatch.setattr(dmod, "occurrence_counter", _occ_counter(calls, object()))
+    _occ_run(fake_col)
+    assert calls == ["語", "彙", "語", "彙"]
+
+
+def test_flipped_matching_flag_recounts_everything(fake_col, monkeypatch):
+    calls = []
+    monkeypatch.setattr(dmod, "occurrence_counter", _occ_counter(calls, object()))
+    _occ_run(fake_col)
+    _occ_run(fake_col, cfg=Config(prefix_matching=True))
+    assert calls == ["語", "彙", "語", "彙"]
+
+
+def test_counter_without_an_index_memoizes_for_one_run_only(fake_col, monkeypatch):
+    calls = []
+
+    def fake_occurrence_counter(dict_names, **kwargs):
+        return lambda expression, reading, card_kanji=None: calls.append(expression) or 7
+
+    monkeypatch.setattr(dmod, "occurrence_counter", fake_occurrence_counter)
+    _occ_run(fake_col)
+    _occ_run(fake_col)
+    assert calls == ["語", "彙", "語", "彙"]
+
+
+def test_clear_note_cache_drops_the_term_memos(fake_col, monkeypatch):
+    monkeypatch.setattr(dmod, "occurrence_counter", _occ_counter([], object()))
+    _occ_run(fake_col)
+    assert dmod._term_memos
+    dmod.clear_note_cache()
+    assert not dmod._term_memos
+
+
+def _seen_run(fake_col, monkeypatch, window):
+    fake_col(find_results={"(deck:X) is:new": [1, 2]}, rows=_TWO_NOTES)
+    monkeypatch.setattr(dmod.seen_manager, "get_seen_window",
+                        lambda n, k, h, v, s, c, today=None: window)
+    return DataManager(Config()).get_cards_from_search("deck:X seen:3")
+
+
+def test_seen_answers_carry_over_while_the_window_is_unchanged(fake_col, monkeypatch):
+    window = _FakeWindow(present={"語"})
+    _seen_run(fake_col, monkeypatch, window)
+    result = _seen_run(fake_col, monkeypatch, window)
+    assert len(window.calls) == 2  # both notes probed once, in the first run
+    assert [c.card_id for c in result.cards] == [1]
+
+
+def test_rewritten_seen_window_reprobes_every_note(fake_col, monkeypatch):
+    # seen_manager hands back a new window object when a day's file is rewritten.
+    _seen_run(fake_col, monkeypatch, _FakeWindow(present={"語"}))
+    newer = _FakeWindow(present={"語", "彙"})
+    result = _seen_run(fake_col, monkeypatch, newer)
+    assert len(newer.calls) == 2
+    assert [c.card_id for c in result.cards] == [1, 2]
+
+
+class _GenKM:
+    """A KanjiManager with the generation handshake, so kanji memos outlive a run."""
+
+    def __init__(self, unknown):
+        self.unknown = set(unknown)
+        self.generation = 1
+        self.last_delta = None
+        self.calls = []
+
+    def initialize(self):
+        pass
+
+    def get_unknown_kanji_count(self, text, target=1):
+        self.calls.append(text)
+        return sum(ch in self.unknown for ch in text)
+
+
+def _kanji_run(fake_col, rows):
+    fake_col(find_results={"(deck:X) is:new": [r[0] for r in rows]}, rows=rows)
+    result = DataManager(Config()).get_cards_from_search("deck:X kanji:new>=1")
+    return [c.card_id for c in result.cards]
+
+
+def test_kanji_delta_recounts_only_notes_sharing_a_changed_kanji(fake_col, monkeypatch):
+    rows = [_row(1, 10, "語", "ご", "100"), _row(2, 20, "彙", "い", "100"),
+            _row(3, 30, "語彙", "ごい", "100")]
+    km = _GenKM(unknown="語彙")
+    monkeypatch.setattr(dmod, "get_kanji_manager", lambda cfg: km)
+    assert _kanji_run(fake_col, rows) == [1, 2, 3]
+
+    # A note teaching 語 graduated in one incremental sync.
+    km.unknown.discard("語")
+    km.last_delta = (1, frozenset("語"), frozenset())
+    km.generation = 2
+    km.calls.clear()
+    assert _kanji_run(fake_col, rows) == [2, 3]
+    assert sorted(km.calls) == ["語", "語彙"]  # 彙 alone was kept
+
+    # A rebuild carries no delta, so everything is recounted.
+    km.last_delta = None
+    km.generation = 3
+    km.calls.clear()
+    assert _kanji_run(fake_col, rows) == [2, 3]
+    assert sorted(km.calls) == ["彙", "語", "語彙"]
+
+
+def test_kanji_generation_gap_recounts_everything(fake_col, monkeypatch):
+    # The delta only describes one step. Two syncs since the memo was filled cannot be
+    # replayed from it.
+    rows = [_row(1, 10, "語", "ご", "100"), _row(2, 20, "彙", "い", "100")]
+    km = _GenKM(unknown="語彙")
+    monkeypatch.setattr(dmod, "get_kanji_manager", lambda cfg: km)
+    _kanji_run(fake_col, rows)
+    km.last_delta = (2, frozenset("語"), frozenset())
+    km.generation = 3
+    km.calls.clear()
+    _kanji_run(fake_col, rows)
+    assert sorted(km.calls) == ["彙", "語"]
+
+
+def test_new_reading_delta_recounts_only_notes_sharing_a_changed_slot(fake_col, monkeypatch):
+    import kanji_readings as kr
+    rows = [_row(1, 10, "食事", "しょくじ", "100"), _row(2, 20, "火傷", "やけど", "100")]
+    km = _ReadingKM()
+    km.generation = 1
+    km.last_delta = None
+    monkeypatch.setattr(dmod, "get_kanji_manager", lambda cfg: km)
+
+    def run():
+        fake_col(find_results={"(deck:X) is:new": [1, 2]}, rows=rows)
+        dm = DataManager(Config())
+        cards = dm.get_cards_from_search("deck:X kanji:new_reading>=1").cards
+        return [c.card_id for c in cards], dm._nr_total
+
+    assert run() == ([1, 2], 4)
+    learned = kr.reading_slots("食事", "しょくじ")
+    km.known_reading_counts.update(learned)
+    km.last_delta = (1, frozenset("食事"), frozenset(learned))
+    km.generation = 2
+    assert run() == ([2], 2)  # only 食事's two slots were re-evaluated
+
+
+# in-run filter sharing
+
+def _counting_predicates(monkeypatch):
+    """Wrap every term predicate so a test can count per-card evaluations by kind."""
+    evaluated = []
+    original = DataManager._term_predicate
+
+    def counting(self, kind, args):
+        pred = original(self, kind, args)
+
+        def wrapped(card):
+            evaluated.append(kind)
+            return pred(card)
+        return wrapped
+
+    monkeypatch.setattr(DataManager, "_term_predicate", counting)
+    return evaluated
+
+
+def test_searches_share_their_leading_filter_passes(fake_col, monkeypatch):
+    fake_col(
+        find_results={"(deck:X) is:new": [1, 2, 3]},
+        rows=[_row(1, 10, "a", "r", "10"), _row(2, 20, "b", "r", "50"),
+              _row(3, 30, "c", "r", "500")],
+    )
+    evaluated = _counting_predicates(monkeypatch)
+    dm = DataManager(Config())
+    first = dm.get_cards_from_search("deck:X f<100 length>=1")
+    # Same terms, other order: the canonical order makes this an exact memo hit.
+    second = dm.get_cards_from_search("deck:X length>=1 f<100")
+    assert [c.card_id for c in first.cards] == [1, 2] == [c.card_id for c in second.cards]
+    assert evaluated.count("length") == 3
+    assert evaluated.count("freq") == 3
+
+
+def test_shared_prefix_then_diverging_terms(fake_col, monkeypatch):
+    fake_col(
+        find_results={"(deck:X) is:new": [1, 2, 3]},
+        rows=[_row(1, 10, "a", "r", "10"), _row(2, 20, "bb", "r", "50"),
+              _row(3, 30, "c", "r", "500")],
+    )
+    evaluated = _counting_predicates(monkeypatch)
+    dm = DataManager(Config())
+    assert [c.card_id for c in dm.get_cards_from_search("deck:X length=1 f<100").cards] == [1]
+    assert [c.card_id for c in dm.get_cards_from_search("deck:X length=1 f<20").cards] == [1]
+    # length=1 runs over the deck once. Each freq pass sees only its two survivors.
+    assert evaluated.count("length") == 3
+    assert evaluated.count("freq") == 4
+
+
+def test_grouped_searches_resolve_a_shared_term_once(fake_col, monkeypatch):
+    fake_col(
+        find_results={"(deck:X) is:new": [1, 2]},
+        rows=[_row(1, 10, "語", "ご", "100"), _row(2, 20, "彙", "い", "100")],
+    )
+    monkeypatch.setattr(dmod.seen_manager, "get_seen_window",
+                        lambda n, k, h, v, s, c, today=None: _FakeWindow(present={"語"}))
+    evaluated = _counting_predicates(monkeypatch)
+    dm = DataManager(Config())
+    dm.get_cards_from_search("deck:X (seen:3 OR added:7) f<200")
+    dm.get_cards_from_search("deck:X (seen:3 OR added:7) f<50")
+    assert evaluated.count("seen") == 2  # once per candidate, not once per search
+    assert evaluated.count("freq") == 4  # different thresholds, resolved separately

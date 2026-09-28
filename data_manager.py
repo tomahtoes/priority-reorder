@@ -69,12 +69,53 @@ _BULK_CHUNK_SIZE = 2000
 _note_data_cache: Dict[int, Tuple[int, NoteData]] = {}
 _note_data_cache_fp = None
 
-# Relative per-card cost of each custom term, used to order the post-filter passes in
-# _get_cards_filtered. `freq`/`length` read an already-loaded attribute; `kanji` walks the
-# expression against a counter; `seen` is set membership plus a binary search; `occ` sums
-# the dictionary rules. Measured on a 120k-entry dictionary at 0.07 / 0.10 / 4.9 / 10.4
-# microseconds per card for freq / length / seen / occ with every matching flag on.
-_TERM_COST = {"length": 0, "freq": 1, "kanji": 2, "seen": 3, "occ": 4}
+# Cross-run per-note results of the custom terms: key -> nid -> value, where the key names
+# the term (("occ", dicts), ("kanji", type, target), ("seen", level), "derived"). Each key
+# carries a stamp of whatever else the values depend on (the occurrence index object, the
+# seen windows, the kanji generation, the matching flags), and a changed stamp empties that
+# key. A note whose mod moved is dropped from every key by _bulk_load, so the per-card probe
+# stays a single dict lookup. Carrying these across reorders took the warm search pass from
+# ~460 to ~215 ms on a 5.8k-card deck with 39 searches.
+_term_memos: Dict[object, Dict[int, object]] = {}
+_term_stamps: Dict[object, object] = {}
+
+# Order of the post-filter passes in _get_cards_filtered. `freq`/`length` read a loaded
+# attribute and go first (0.07 / 0.10 microseconds per card). Past those, the cross-run memos
+# make every term about one dict probe on a warm run, so selectivity decides rather than cost
+# (seen 4.9, occ 10.4 microseconds per card cold on a 120k-entry dictionary). A seen window or an
+# occurrence threshold cuts a deck far harder than kanji:new, and kanji last beat both
+# alternatives on a 5.8k-card deck with 39 searches: 144 ms warm against 148 (kanji before occ)
+# and 162 (kanji first), and no slower cold. The cold seen cost is order-independent anyway,
+# since one top-level contains() per note settles every seen level.
+_TERM_COST = {"length": 0, "freq": 1, "seen": 2, "occ": 3, "kanji": 4}
+
+
+def clear_term_memos() -> None:
+    """Drop the cross-run per-note term results. Used by clear_note_cache, the benchmark's
+    --fresh-memos, and tests."""
+    _term_memos.clear()
+    _term_stamps.clear()
+
+
+def _term_memo(key, stamp) -> Dict[int, object]:
+    """The nid -> value memo for ``key``, emptied first if ``stamp`` moved since it was filled."""
+    memo = _term_memos.get(key)
+    if memo is None:
+        memo = _term_memos[key] = {}
+        _term_stamps[key] = stamp
+    elif _term_stamps.get(key) != stamp:
+        memo.clear()
+        _term_stamps[key] = stamp
+    return memo
+
+
+def _forget_notes(nids) -> None:
+    """Drop edited notes from every term memo. Their NoteData was just rebuilt, so their
+    expression or reading may have changed."""
+    for memo in _term_memos.values():
+        if memo:
+            for nid in nids:
+                memo.pop(nid, None)
 
 
 def clear_note_cache() -> None:
@@ -85,6 +126,7 @@ def clear_note_cache() -> None:
     global _note_data_cache_fp
     _note_data_cache.clear()
     _note_data_cache_fp = None
+    clear_term_memos()
     kanji_readings.clear_cache()
 
 
@@ -111,16 +153,15 @@ class DataManager:
         # Per-run caches shared across every search in a single reorder: the same
         # standard query / custom predicate recurs across many priority searches.
         self._search_cache: Dict[str, List[Card]] = {}                # find_cards by query
-        # Nested one level so the per-card probe is an int-keyed lookup: the outer key is
-        # fixed when the predicate is built, so hoisting it there keeps the inner loop from
-        # allocating and hashing a tuple per card.
-        self._occ_count_cache: Dict[Tuple[str, ...], Dict[int, int]] = {}   # dicts -> nid -> count
-        self._kanji_count_cache: Dict[Tuple[str, int], Dict[int, int]] = {}  # (type, target) -> nid -> count
-        self._seen_contains_cache: Dict[int, Dict[int, bool]] = {}           # n -> nid -> contained
-        # nid -> (folded expression, folded reading, kanji skeleton). Kana folding and skeleton
-        # derivation are per-note constants, but every predicate and every seen window used to
-        # redo them; a card checked by `occurrences:` plus seen:1/7/30 paid four folds.
-        self._note_derived_cache: Dict[int, Tuple[str, str, Optional[str]]] = {}
+        # (final search, terms applied so far) -> the cards surviving them. Searches over one
+        # deck share their leading terms once _get_cards_filtered sorts them canonically.
+        self._filter_memo: Dict[Tuple, List[Card]] = {}
+        # (base query, kind, args) -> nids, for _get_cards_resolved. The grouped searches
+        # repeat terms like seen:7 against the same candidates.
+        self._resolve_memo: Dict[Tuple, set] = {}
+        # Per-note term values live in the module-level _term_memos; this is the
+        # "derived" one, bound on first use (see _note_derived).
+        self._note_derived_cache: Optional[Dict[int, Tuple[str, str, Optional[str]]]] = None
         self._kanji_manager = None  # lazy
         # Distinct `seen:N` levels across the whole config, and their windows resolved together
         # against one reference date. See _seen_windows.
@@ -134,11 +175,12 @@ class DataManager:
         # find_matches and load_cards top-level stages, and `kanji_scan` is the
         # rescan slice of `kanji_init`.
         self.stage_ms: Dict[str, float] = {}
-        # Reading slots resolved / left unexplained across the cards this run
-        # actually evaluated, counted once per note (on a cache miss), not once
-        # per comparison. Surfaced as the new_reading diagnostic: a misconfigured
-        # reading field wildcards everything, which turns kanji:new_reading into
-        # "matches every card" without raising anything.
+        # Reading slots resolved / left unexplained across the notes this run
+        # evaluated, counted once per note on a memo miss. The memo outlives the
+        # run, so a warm reorder counts only notes that are new or edited.
+        # Surfaced as the new_reading diagnostic: a misconfigured reading field
+        # wildcards everything, which turns kanji:new_reading into "matches every
+        # card" without raising anything.
         self._nr_total = 0
         self._nr_unresolved = 0
 
@@ -184,6 +226,7 @@ class DataManager:
         )
         if fp != _note_data_cache_fp:
             _note_data_cache.clear()
+            clear_term_memos()
             _note_data_cache_fp = fp
 
     def _bulk_load(self, card_ids: List[int]) -> None:
@@ -239,6 +282,7 @@ class DataManager:
                     traceback.print_exc()
                     return
 
+                _forget_notes(stale)
                 for nid, mid, nmod, flds in rows:
                     expr_i, read_i, sort_i = self._resolve_field_indices(mid)
                     fields = flds.split("\x1f")
@@ -337,27 +381,43 @@ class DataManager:
 
     def _get_cards_filtered(self, raw_query: str, stripped: str) -> SearchResult:
         base = " ".join(t for t in stripped.split() if t != "-")  # drop stray '-' from negation
-        cards = self._cards_for_search(f"({base}) is:new" if base else "is:new")
+        final_search = f"({base}) is:new" if base else "is:new"
+        cards = self._cards_for_search(final_search)
         raw_count = len(cards)
 
         # The terms are a pure conjunction of independent predicates, so any evaluation
         # order yields the same set in the same order, but parse_custom_terms emits by
-        # kind, which happens to be close to most-expensive-first. Cheapest first shrinks
-        # the list before the dictionary and seen lookups run over it (measured ~150x
-        # between an `f` comparison and an all-flags `occurrences:` lookup), and it can
-        # never cost more work overall: the per-note memos are shared across every search,
-        # so any note whose expensive value is still needed computes it exactly once.
-        for kind, args, negated in sorted(parse_custom_terms(raw_query),
-                                          key=lambda t: _TERM_COST.get(t[0], 9)):
+        # kind, which happens to be close to most-expensive-first. _TERM_COST order shrinks
+        # the list before the dictionary lookups run over it (measured ~150x between an `f`
+        # comparison and an all-flags `occurrences:` lookup), and it can never cost more work
+        # overall: the per-note memos are shared across every search, so any note whose
+        # expensive value is still needed computes it exactly once.
+        #
+        # Ties break on the term itself, so every search applies its terms in one canonical
+        # order and searches over the same deck share their leading passes through
+        # _filter_memo instead of refiltering the whole deck for `seen:7` each time.
+        terms = sorted(parse_custom_terms(raw_query),
+                       key=lambda t: (_TERM_COST.get(t[0], 9), t[0], t[1], t[2]))
+        memo_key: Tuple = (final_search,)
+        for term in terms:
             # Before _term_predicate, not after: building the kanji and seen predicates
             # scans the collection / stats and parses the daily dicts, which an empty
             # candidate list must never pay for.
             if not cards:
                 break
+            memo_key += (term,)
+            hit = self._filter_memo.get(memo_key)
+            if hit is not None:
+                cards = hit
+                continue
+            kind, args, negated = term
             pred = self._term_predicate(kind, args)
             t0 = time.perf_counter()
             cards = [c for c in cards if (not pred(c)) == negated]
             self._add_ms(f"filter_{kind}", t0)
+            self._filter_memo[memo_key] = cards
+        # A memoized list may be returned to several searches, so callers treat it as
+        # read-only, like _cards_for_search's.
         return SearchResult(cards, raw_count)
 
     def _get_cards_resolved(self, raw_query: str, base: str) -> Optional[SearchResult]:
@@ -384,10 +444,15 @@ class DataManager:
         candidates = self._cards_for_search(f"({base}) is:new")
 
         def resolve(kind: str, args):
+            key = (base, kind, args)
+            nids = self._resolve_memo.get(key)
+            if nids is not None:
+                return nids
             pred = self._term_predicate(kind, args)
             t0 = time.perf_counter()
             nids = {c.note_id for c in candidates if pred(c)}
             self._add_ms(f"filter_{kind}", t0)
+            self._resolve_memo[key] = nids
             return nids
 
         try:
@@ -440,7 +505,13 @@ class DataManager:
                 honorific_folding=cfg.honorific_folding,
                 prefolded=True,
             )
-            cache = self._occ_count_cache.setdefault(tuple(dict_names), {})
+            # Fakes without .index fall back to this manager, i.e. a memo for this run only.
+            cache = _term_memo(("occ", tuple(dict_names)), (
+                getattr(count_occurrences, "index", self),
+                cfg.kana_normalization, cfg.combine_word_forms, cfg.prefix_matching,
+                cfg.suffix_matching, cfg.variant_matching, cfg.stem_matching,
+                cfg.compound_matching, cfg.honorific_folding,
+            ))
             derived = self._note_derived
 
             def occ_pred(c: Card) -> bool:
@@ -473,7 +544,7 @@ class DataManager:
             scan_ms = getattr(km, "last_scan_ms", None)
             if scan_ms:
                 self.stage_ms["kanji_scan"] = self.stage_ms.get("kanji_scan", 0.0) + scan_ms
-            cache = self._kanji_count_cache.setdefault((check_type, target), {})
+            cache = self._kanji_memo(km, check_type, target)
 
             if check_type == "new_reading":
                 # Raw fields, not _note_derived: that helper's kana folding is
@@ -537,13 +608,16 @@ class DataManager:
             self._add_ms("seen_win", t0)
             levels = self._seen_levels
             top = levels[-1]
-            # Memoized per level, then per note id. The flags are fixed for the run, so they
-            # stay out of the key (mirrors _occ_count_cache). If today's seen file is rewritten
-            # mid-run, a later predicate build can see a newer window while the memo keeps the
-            # earlier answers, which is accepted like every other per-run cache here.
-            by_level = {
-                level: self._seen_contains_cache.setdefault(level, {}) for level in levels
-            }
+            # Memoized per level, then per note id, across reorders. Every level shares one
+            # stamp: all the windows plus the query-time flags. Windows are cached objects that
+            # seen_manager replaces when a day's file changes, so a rewrite of today's seen
+            # dict or a rollover drops every level together, which the monotone fill below
+            # relies on. Within a run the windows are resolved once (_seen_windows), so a
+            # rewrite mid-run is only picked up by the next reorder.
+            stamp = (tuple(windows[level] for level in levels), normalize_kana,
+                     combine_word_forms, prefix_matching, suffix_matching, variant_matching,
+                     stem_matching, compound_matching, honorific_folding)
+            by_level = {level: _term_memo(("seen", level), stamp) for level in levels}
             own = by_level[n]
             top_cache = by_level[top]
             derived = self._note_derived
@@ -608,6 +682,43 @@ class DataManager:
 
         return lambda c: False
 
+    def _kanji_memo(self, km, check_type: str, target: int) -> Dict[int, object]:
+        """The cross-run count memo for one kanji term, brought up to date with the known set.
+
+        kanji:num depends on the expression alone. kanji:new and kanji:new_reading depend on the
+        known-set counters, stamped by ``km.generation``. When the counters moved by exactly one
+        incremental sync, only the notes sharing a kanji (or a reading slot) with the notes that
+        sync re-credited are dropped, which after a study session is a small slice of the deck.
+        Any other gap, and every rebuild, drops the whole memo."""
+        key = ("kanji", check_type, target)
+        if check_type == "num":
+            return _term_memo(key, None)
+        # getattr: tests inject bare fakes. Without a generation the memo lasts one run.
+        generation = getattr(km, "generation", None)
+        if generation is None:
+            return _term_memo(key, self)
+        memo = _term_memos.get(key)
+        delta = getattr(km, "last_delta", None)
+        if (memo and delta is not None and _term_stamps.get(key) == delta[0]
+                and generation == delta[0] + 1):
+            _, changed_kanji, changed_slots = delta
+            stale = []
+            for nid in memo:
+                entry = _note_data_cache.get(nid)
+                if entry is None:
+                    stale.append(nid)
+                    continue
+                data = entry[1]
+                if check_type == "new_reading":
+                    if not changed_slots.isdisjoint(reading_slots(data.expression, data.reading)):
+                        stale.append(nid)
+                elif not changed_kanji.isdisjoint(data.expression):
+                    stale.append(nid)
+            for nid in stale:
+                del memo[nid]
+            _term_stamps[key] = generation
+        return _term_memo(key, generation)
+
     def reading_diagnostics(self) -> Dict[str, str]:
         """One-line summaries of how much of the collection the reading table
         could explain, for the reorder timings line and the summary window.
@@ -640,15 +751,19 @@ class DataManager:
         return out
 
     def _note_derived(self, card: Card) -> Tuple[str, str, Optional[str]]:
-        """``(expression, reading, kanji skeleton)`` for a note, computed once per run.
+        """``(expression, reading, kanji skeleton)`` for a note, computed once per note edit.
 
-        Kana folding and skeleton derivation depend only on the note and on run-fixed config,
+        Kana folding and skeleton derivation depend only on the note and on two config flags,
         yet both the occurrence path and every seen window used to redo them per card. The
         skeleton is derived from the FOLDED expression, which is what both consumers expect
         (``to_hiragana`` leaves CJK ideographs untouched, so the two agree either way), and is
         left None when variant matching is off, since nothing reads it then."""
+        cache = self._note_derived_cache
+        if cache is None:
+            cache = self._note_derived_cache = _term_memo(
+                "derived", (self.config.kana_normalization, self.config.variant_matching))
         nid = card.note_id
-        value = self._note_derived_cache.get(nid)
+        value = cache.get(nid)
         if value is None:
             expression = card.data.expression
             reading = card.data.reading
@@ -657,7 +772,7 @@ class DataManager:
                 reading = to_hiragana(reading)
             skeleton = _kanji_skeleton(expression) if self.config.variant_matching else None
             value = (expression, reading, skeleton)
-            self._note_derived_cache[nid] = value
+            cache[nid] = value
         return value
 
     def _configured_queries(self) -> List[str]:

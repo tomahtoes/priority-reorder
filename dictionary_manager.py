@@ -1275,7 +1275,11 @@ def occurrence_counter(
 
     ``prefolded`` says the caller already kana-folded both strings, making the fold here a
     pure re-allocation. ``card_kanji`` is a precomputed ``_kanji_skeleton``. Both are for
-    callers evaluating one note against several predicates, and neither changes the result."""
+    callers evaluating one note against several predicates, and neither changes the result.
+
+    The returned function carries the index it reads as ``count.index``. Callers memoizing
+    counts across reorders use its identity to notice a dictionary update, which replaces the
+    index object (see updater.clear_caches)."""
     fold = normalize_kana and not prefolded
 
     if len(dict_names) == 1:
@@ -1298,6 +1302,7 @@ def occurrence_counter(
                 card_kanji=card_kanji,
             )
 
+        count.index = index
         return count
 
     combined = get_combined_occurrence_index(
@@ -1320,6 +1325,7 @@ def occurrence_counter(
             compound_matching=compound_matching,
         )
 
+    count.index = combined
     return count
 
 

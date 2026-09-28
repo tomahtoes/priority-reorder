@@ -21,10 +21,15 @@ learned collection. Later runs pay none of that and show the per-reorder floor. 
 bumped between runs, because a real reorder repositions cards, which is what invalidates
 search.py's resolution memos.
 
+Nothing changes between runs here, so the later runs find every cross-run per-note term memo
+still valid, which is the best case. `--fresh-memos` drops those memos before each run instead,
+the worst case: a reorder after a dictionary update, or after every note in the deck changed.
+
 Usage:
     python tools/bench_reorder.py                       # default profile, 3 runs
     python tools/bench_reorder.py --profile Ryan
     python tools/bench_reorder.py --runs 5 --sql
+    python tools/bench_reorder.py --fresh-memos
     python tools/bench_reorder.py --collection path/to/collection.anki2 --addon path/to/addon
 """
 
@@ -206,6 +211,8 @@ def main() -> None:
     parser.add_argument("--addon", help="addon dir holding meta.json (default: the installed copy)")
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--sql", action="store_true", help="also print each run's queries, slowest first")
+    parser.add_argument("--fresh-memos", action="store_true",
+                        help="drop the cross-run per-note term memos before each run")
     args = parser.parse_args()
 
     base = anki_base()
@@ -251,6 +258,8 @@ def main() -> None:
     for run in range(1, args.runs + 1):
         mw.col.mod += 1  # a real reorder repositions cards, which invalidates the nid memos
         mw.col.db.reset()
+        if args.fresh_memos:
+            data_manager.clear_term_memos()
         manager = data_manager.DataManager(config)
         t0 = time.perf_counter()
         matched = 0
