@@ -21,6 +21,7 @@ Headings below give each option's full path, e.g. `matching.prefix_matching` mea
 - **Options**:
     - `"sequential"`: Processes each search in order. Cards matching the first search appear first, followed by the second, and so on.
     - `"mix"`: Combines all cards from all priority searches into one big group before sorting.
+    - `"cycle"`: Like `"sequential"`, but the searches take turns until all of them run out. On each turn a search places its next `limit=` cards, then the next search goes. A search without `limit=` places everything on its first turn. Example: `["deck:A limit=10", "deck:B", "deck:C limit=5"]` places A's top 10, all of B, C's top 5, then A's next 10, C's next 5, and so on. With no `limit=` in any search this is the same as `"sequential"`.
 - **Default**: `"sequential"`
 
 ### `normal_search` (string)
@@ -179,6 +180,7 @@ write the long form in a search you plan to share.
 - **Recently seen**: `seen:7` (short: `s:7`). Matches words appearing in any of the last 7 *daily* occurrence dictionaries (in `user_files/_seen/<YYYY-MM-DD>/`). It's boolean ("seen at all"). "Today" honors Anki's rollover hour. The `_seen` folder is reserved. It is never a normal occurrence dict, so `occurrences:_seen` and `occurrences:all` can't reach it, and only `seen:N` does. See the README for folder setup.
 - **`limit=X`**: Use in a search string to take only the top X cards. It has no short form; `l` belongs to `length`. **Config-only**: this is a reorder control, not a browser search term, and is ignored in the Browse bar.
   - Example: `added:3 limit=20` (Only the top 20 most frequent recent cards).
+  - In `"cycle"` mode it is the number of cards per turn instead, and cards past it wait for the search's next turn rather than being dropped.
 
 ---
 

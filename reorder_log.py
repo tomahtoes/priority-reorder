@@ -24,6 +24,28 @@ class PrioritySearchSummary:
     # considered them. matched = cutoff_dropped + overlap + limit/global discards + kept.
     overlap_count: int = 0
     final_start_index: Optional[int] = None
+    # Cycle mode only. A search with turns > 1 has its first first_turn_count cards in
+    # one block from final_start_index, and the rest between later_start and last_index,
+    # interleaved with the other searches still taking turns.
+    turns: int = 0
+    first_turn_count: int = 0
+    later_start: Optional[int] = None
+    last_index: Optional[int] = None
+
+
+@dataclass
+class QueueSegment:
+    """One stretch of the priority queue, in queue order.
+
+    kind is "search" (one search's cards placed together), "promoted" (the
+    normal_prioritization tier) or "cycle" (cycle mode: everything placed after the
+    first pass, where the searches take turns). A cycle segment has no single search;
+    `cycled` counts its cards per search index instead."""
+    kind: str
+    start: int
+    count: int = 0
+    search: Optional[int] = None
+    cycled: Dict[int, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -42,6 +64,8 @@ class ReorderReport:
     trigger: str = "manual"
     # Per-stage wall-clock durations of the reorder run, in milliseconds.
     timings_ms: Dict[str, float] = field(default_factory=dict)
+    # Layout of the priority queue for the summary's queue bar. Empty in mix mode.
+    queue_segments: List[QueueSegment] = field(default_factory=list)
 
 
 def now_timestamp() -> str:

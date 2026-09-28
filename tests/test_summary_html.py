@@ -1,6 +1,6 @@
 """Tests for the summary window's page markup (summary_html), built headless."""
 
-from reorder_log import PrioritySearchSummary, ReorderReport
+from reorder_log import PrioritySearchSummary, QueueSegment, ReorderReport
 from summary_html import render_summary, shared_prefix
 
 
@@ -105,6 +105,61 @@ def test_queue_positions_are_one_based_ranges():
     page = render_summary(r)
     assert '<td class="pos">1–3</td>' in page
     assert '<td class="pos">4</td>' in page
+
+
+def test_cycle_mode_shows_spread_for_searches_that_took_several_turns():
+    spread = entry(0, "q0 limit=2", kept=5, matched=5, limit=2, start=0)
+    spread.turns, spread.first_turn_count, spread.later_start, spread.last_index = 3, 2, 5, 8
+    single = entry(1, "q1", kept=3, matched=3, start=2)
+    single.turns, single.first_turn_count, single.last_index = 1, 3, 4
+    page = render_summary(report([spread, single], mode="cycle"))
+    assert "Cycle mode: searches take turns" in page
+    assert "<th>Queue</th>" in page
+    # The gap between the first turn and the later ones is not claimed.
+    assert ('<td class="pos" title="First turn 1–2, then 2 more turns, last card at 9">'
+            "1–2, 6–9 ↻</td>") in page
+    assert '<td class="pos">3–5</td>' in page
+    assert "over limit" not in page
+
+
+def _cycled(start, first_turn, later_start, last, kept):
+    e = entry(0, "q0 limit=2", kept=kept, matched=kept, limit=2, start=start)
+    e.turns, e.first_turn_count, e.later_start, e.last_index = 2, first_turn, later_start, last
+    return render_summary(report([e], mode="cycle"))
+
+
+def test_cycle_range_merges_when_later_turns_follow_the_first_directly():
+    # Later turns start right after the first turn but share the stretch with others.
+    assert "1–9 ↻</td>" in _cycled(start=0, first_turn=2, later_start=2, last=8, kept=5)
+
+
+def test_cycle_range_is_plain_when_the_search_ended_up_in_one_block():
+    # The only search still taking turns: its cards are contiguous after all.
+    assert '<td class="pos" title="First turn 1–2, then 1 more turn, last card at 5">1–5</td>' in (
+        _cycled(start=0, first_turn=2, later_start=2, last=4, kept=5))
+
+
+def test_cycle_segment_draws_a_striped_stretch_after_the_first_pass():
+    r = report([entry(0, "q0 limit=2", kept=5, matched=5, limit=2),
+                entry(1, "q1 limit=1", kept=2, matched=2, limit=1)], mode="cycle",
+               queue_segments=[
+                   QueueSegment(kind="search", start=0, count=2, search=0),
+                   QueueSegment(kind="search", start=2, count=1, search=1),
+                   QueueSegment(kind="cycle", start=3, count=4, cycled={0: 3, 1: 1}),
+               ])
+    page = render_summary(r)
+    assert page.count('class="seg"') == 2
+    assert 'class="seg cyc" style="flex:4" data-row="0"' in page
+    assert "Searches taking turns, positions 4–7" in page
+    assert "[1] 3 cards" in page and "[2] 1 cards" in page
+    assert ">1·2</div>" in page
+    assert "taking turns</span>" in page
+
+
+def test_cycle_mode_without_limits_renders_like_sequential():
+    entries = lambda: [entry(0, "q0", kept=3, matched=3, start=0),
+                       entry(1, "q1", kept=1, matched=1, start=3)]
+    assert render_summary(report(entries(), mode="cycle")) == render_summary(report(entries()))
 
 
 def test_skipped_reorder_says_so():

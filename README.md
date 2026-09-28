@@ -103,6 +103,8 @@ The top of the window shows how many cards were prioritized, when the reorder ra
 
 > In `"mix"` mode, per-search kept numbers aren't meaningful (all searches are pooled before sorting), so each row shows only its **matched** count.
 
+> In `"cycle"` mode a search that takes more than one turn is spread through the queue. Its row shows two ranges, such as `1–5, 2981–3400 ↻`: the block its first turn placed, then the stretch where its later turns alternate with the other searches still taking turns. Hover it for how many turns followed. The bar shows each search's first turn in place, then a striped stretch for the turns after it. Hover it to see which searches are in it and how many cards each placed.
+
 ## Features Guide
 The addon supports several custom filters that you can mix in with standard Anki searches:
 - **`f<10000`**: Filter by the value in your frequency sort field.

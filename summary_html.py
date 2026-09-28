@@ -12,10 +12,10 @@ from datetime import datetime
 from typing import Dict, Iterable, List, Optional, Set
 
 try:
-    from .reorder_log import PrioritySearchSummary, ReorderReport
+    from .reorder_log import PrioritySearchSummary, QueueSegment, ReorderReport
     from .search_colors import colorize_query_html
 except ImportError:  # pytest / flat-import context
-    from reorder_log import PrioritySearchSummary, ReorderReport
+    from reorder_log import PrioritySearchSummary, QueueSegment, ReorderReport
     from search_colors import colorize_query_html
 
 # Same tokenizer as search_colors: quoted blocks stay one token.
@@ -92,8 +92,41 @@ def _queue_range(entry: PrioritySearchSummary) -> str:
     if entry.final_start_index is None or entry.kept_count <= 0:
         return ""
     first = entry.final_start_index + 1
+    if entry.turns > 1 and entry.later_start is not None and entry.last_index is not None:
+        return _cycle_range(entry)
     last = entry.final_start_index + entry.kept_count
     return str(first) if first == last else f"{first}–{last}"
+
+
+def _span(first: int, last: int) -> str:
+    return str(first) if first == last else f"{first}–{last}"
+
+
+def _cycle_range(entry: PrioritySearchSummary) -> str:
+    """The first-turn block, then the stretch its later turns share with the other
+    searches still taking turns. A search that ended up in one solid block anyway
+    reads as a plain range."""
+    first = entry.final_start_index + 1
+    last = entry.last_index + 1
+    if last - first + 1 == entry.kept_count:
+        return _span(first, last)
+    first_end = entry.final_start_index + entry.first_turn_count
+    later = entry.later_start + 1
+    if later == first_end + 1:
+        return f"{_span(first, last)} ↻"
+    return f"{_span(first, first_end)}, {_span(later, last)} ↻"
+
+
+def _cycle_tip(entry: PrioritySearchSummary) -> str:
+    """Hover text for a search whose cards are spread over several turns."""
+    if entry.turns <= 1 or entry.final_start_index is None or entry.last_index is None:
+        return ""
+    first = entry.final_start_index + 1
+    first_end = entry.final_start_index + entry.first_turn_count
+    block = str(first) if first == first_end else f"{first}–{first_end}"
+    more = entry.turns - 1
+    return (f"First turn {block}, then {more} more turn{'s' if more != 1 else ''}, "
+            f"last card at {entry.last_index + 1}")
 
 
 def _previous_kept(report: ReorderReport, previous: Optional[ReorderReport]) -> Dict[str, int]:
@@ -113,7 +146,12 @@ class _Flags:
         self.is_mix = report.mode == "mix"
         self.cutoff = report.priority_cutoff is not None
         self.global_limit = report.global_priority_limit is not None
-        self.any_limit = self.global_limit or any(e.limit is not None for e in entries)
+        # A cycle config without any limit= runs, and renders, exactly like sequential.
+        self.is_cycle = report.mode == "cycle" and any(e.limit is not None for e in entries)
+        # Cycling spends limit= per turn, so only limit=0 can leave a card over it.
+        self.any_limit = self.global_limit or (
+            any(e.limit_discarded for e in entries) if self.is_cycle
+            else any(e.limit is not None for e in entries))
         self.any_overlap = any(e.overlap_count for e in entries)
 
 
@@ -155,31 +193,66 @@ def _reorder_button(reordering: bool) -> str:
     return '<button type="button" class="primary" id="reorder" onclick="runReorder()">Run reorder</button>'
 
 
+def _segments_from_entries(report: ReorderReport) -> List[QueueSegment]:
+    """The sequential layout, for a report that recorded no segments of its own."""
+    segments = []
+    pos = 0
+    for e in report.entries:
+        if e.kept_count > 0:
+            segments.append(QueueSegment(kind="search", start=pos, count=e.kept_count, search=e.index))
+            pos += e.kept_count
+    if report.promoted_count > 0:
+        segments.append(QueueSegment(kind="promoted", start=pos, count=report.promoted_count))
+    return segments
+
+
+def _positions(seg: QueueSegment) -> str:
+    first, last = seg.start + 1, seg.start + seg.count
+    return str(first) if first == last else f"{first}–{last}"
+
+
 def _queue_bar(report: ReorderReport) -> str:
     total = report.total_priority_kept
     if total <= 0:
         return ""
+    queries = {e.index: e.query for e in report.entries}
     segments = []
-    for e in report.entries:
-        if e.kept_count <= 0:
-            continue
-        tip = f"[{e.index + 1}] {e.query}\n{_fmt(e.kept_count)} cards, positions {_queue_range(e)}"
-        label = str(e.index + 1) if e.kept_count / total >= _SEGMENT_LABEL_SHARE else ""
-        segments.append(
-            f'<div class="seg" style="flex:{e.kept_count}" data-row="{e.index}" '
-            f'title="{_esc(tip)}">{label}</div>'
-        )
+    kinds = set()
+    for seg in report.queue_segments or _segments_from_entries(report):
+        kinds.add(seg.kind)
+        wide = seg.count / total >= _SEGMENT_LABEL_SHARE
+        if seg.kind == "promoted":
+            segments.append(
+                f'<div class="seg promo" style="flex:{seg.count}" '
+                f'title="Promoted tier: {_fmt(seg.count)} normal cards '
+                f'lifted by normal_prioritization, positions {_positions(seg)}"></div>'
+            )
+        elif seg.kind == "cycle":
+            order = sorted(seg.cycled)
+            lines = "".join(f"\n[{i + 1}] {_fmt(seg.cycled[i])} cards" for i in order)
+            tip = f"Searches taking turns, positions {_positions(seg)}{lines}"
+            label = "·".join(str(i + 1) for i in order) if wide else ""
+            row = f' data-row="{order[0]}"' if order else ""
+            segments.append(
+                f'<div class="seg cyc" style="flex:{seg.count}"{row} '
+                f'title="{_esc(tip)}">{_esc(label)}</div>'
+            )
+        else:
+            tip = (f"[{seg.search + 1}] {queries.get(seg.search, '')}\n"
+                   f"{_fmt(seg.count)} cards, positions {_positions(seg)}")
+            label = str(seg.search + 1) if wide else ""
+            segments.append(
+                f'<div class="seg" style="flex:{seg.count}" data-row="{seg.search}" '
+                f'title="{_esc(tip)}">{label}</div>'
+            )
     legend = ""
-    if report.promoted_count > 0:
-        segments.append(
-            f'<div class="seg promo" style="flex:{report.promoted_count}" '
-            f'title="Promoted tier: {_fmt(report.promoted_count)} normal cards '
-            f'lifted by normal_prioritization"></div>'
-        )
-        legend = (
-            '<span class="legend"><span><i class="sw k"></i>searches</span>'
-            '<span><i class="sw p"></i>promoted tier</span></span>'
-        )
+    if kinds & {"promoted", "cycle"}:
+        items = ['<span><i class="sw k"></i>searches</span>']
+        if "cycle" in kinds:
+            items.append('<span><i class="sw cyc"></i>taking turns</span>')
+        if "promoted" in kinds:
+            items.append('<span><i class="sw p"></i>promoted tier</span>')
+        legend = f'<span class="legend">{"".join(items)}</span>'
     return f"""
 <div class="qbar-wrap">
   <div class="qlabel"><span>Queue, first {_fmt(total)} cards</span>{legend}</div>
@@ -193,7 +266,8 @@ def _queue_bar(report: ReorderReport) -> str:
 def _legend(flags: _Flags) -> str:
     if flags.is_mix:
         return '<div class="legend">Mix mode: all matches share one sorted pool</div>'
-    items = ['<span><i class="sw k"></i>kept</span>']
+    items = ['<span>Cycle mode: searches take turns, limit= cards per turn</span>'] if flags.is_cycle else []
+    items.append('<span><i class="sw k"></i>kept</span>')
     if flags.any_overlap:
         items.append('<span><i class="sw e"></i>taken by earlier search</span>')
     if flags.any_limit:
@@ -308,7 +382,9 @@ def _row(
         cells.append(f'<td class="n"><span class="kept">{_fmt(e.kept_count)}</span>{delta}</td>')
     cells.append(f'<td class="n sub">{_fmt(e.refined_match_count)}</td>')
     if not flags.is_mix:
-        cells.append(f'<td class="pos">{_queue_range(e)}</td>')
+        tip = _cycle_tip(e)
+        title = f' title="{_esc(tip)}"' if tip else ""
+        cells.append(f'<td class="pos"{title}>{_queue_range(e)}</td>')
 
     if empty:
         return f'<tr class="row empty" id="row-{e.index}">{"".join(cells)}</tr>'
@@ -461,6 +537,7 @@ button:focus-visible, tr.row:focus-visible, .seg:focus-visible {
 .seg:nth-child(odd) { background: var(--pr-k); }
 .seg:nth-child(even) { background: var(--pr-k2); }
 .seg.promo { background: var(--pr-p); }
+.seg.cyc, .sw.cyc { background: repeating-linear-gradient(135deg, var(--pr-k) 0 5px, var(--pr-k2) 5px 10px); }
 .seg:hover { filter: brightness(1.2); }
 .qnormal { font-size: 0.9em; color: var(--pr-sub); white-space: nowrap; }
 

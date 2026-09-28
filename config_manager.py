@@ -6,7 +6,7 @@ try:  # inside Anki: live collection available
 except ImportError:  # pytest / flat-import context (get_config is not exercised)
     mw = None
 
-_VALID_SEARCH_MODES = ("sequential", "mix")
+_VALID_SEARCH_MODES = ("sequential", "mix", "cycle")
 
 # Options are grouped into sections in config.json. `Config` itself stays flat, so
 # everything that reads a setting keeps using `config.prefix_matching` etc.; only the

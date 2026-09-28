@@ -13,6 +13,7 @@ try:  # inside Anki: isolated package namespace
     from .search import has_custom_term
     from .reorder_log import (
         PrioritySearchSummary,
+        QueueSegment,
         ReorderReport,
         append_timings_line,
         now_timestamp,
@@ -26,6 +27,7 @@ except ImportError:  # pytest / flat-import context
     from search import has_custom_term
     from reorder_log import (
         PrioritySearchSummary,
+        QueueSegment,
         ReorderReport,
         append_timings_line,
         now_timestamp,
@@ -52,6 +54,7 @@ class PriorityReorderer:
         self.data_manager = DataManager(config)
         self.trigger = trigger
         self._promoted_count = 0
+        self._queue_segments: List[QueueSegment] = []
 
     def reorder(self) -> OpChangesWithCount:
         timings: Dict[str, float] = {}
@@ -281,6 +284,7 @@ class PriorityReorderer:
         overflow: List[Card] = []
 
         is_mix = self.config.priority_search_mode == "mix"
+        cycling = False
 
         if is_mix:
             flat = [c for b in buckets for c in b]
@@ -291,7 +295,20 @@ class PriorityReorderer:
 
             bucket_kept_cards: Dict[int, List[Card]] = {i: [] for i in range(len(buckets))}
 
-            for i, bucket in enumerate(buckets):
+            # Without any limit= every search drains on its first turn, so cycling would
+            # produce the sequential order anyway. Taking the sequential path keeps the
+            # per-search position ranges too.
+            cycling = (self.config.priority_search_mode == "cycle"
+                       and any(limit is not None for _, limit in defs))
+            first_sequential = 0
+            turn_of: Dict[int, int] = {}
+            if cycling:
+                turn_of = self._cycle_buckets(
+                    defs, buckets, summaries, queue, seen, bucket_kept_cards)
+                # The promoted tier follows the whole cycle rather than taking a turn in it.
+                first_sequential = len(defs)
+
+            for i, bucket in enumerate(buckets[first_sequential:], first_sequential):
                 eligible = [c for c in bucket if c.card_id not in seen]
                 if i < len(summaries):
                     summaries[i].overlap_count += len(bucket) - len(eligible)
@@ -343,16 +360,120 @@ class PriorityReorderer:
             # Final start index in the reordered queue (sequential mode):
             # priority cards occupy positions 0..N-1, each search a contiguous
             # block, so its start = cumulative kept of preceding searches.
+            # Cycling can interleave them; _build_queue_segments places those.
             cumulative = 0
             for i in range(len(buckets)):
-                if i >= len(summaries):
+                if cycling or i >= len(summaries):
                     continue
                 if summaries[i].kept_count > 0:
                     summaries[i].final_start_index = cumulative
                     cumulative += summaries[i].kept_count
                 # searches with 0 kept leave final_start_index = None
 
+            self._queue_segments = self._build_queue_segments(
+                queue, bucket_kept_cards, len(defs), turn_of, summaries if cycling else [])
+
         return queue, overflow
+
+    def _cycle_buckets(
+        self,
+        defs: List[PriorityDef],
+        buckets: List[List[Card]],
+        summaries: List[PrioritySearchSummary],
+        queue: List[Card],
+        seen: Set[int],
+        bucket_kept_cards: Dict[int, List[Card]],
+    ) -> Dict[int, int]:
+        """Cycle mode: the searches take turns in list order, each placing its next
+        `limit=` cards per turn (all of them when it has no limit), until a full pass
+        places nothing. A card an earlier turn already placed is skipped and counted as
+        overlap, as in sequential mode. Only limit=0 leaves cards unplaced; those count
+        as over limit.
+
+        Returns the pass (1-based) that placed each card."""
+        n = len(defs)
+        turn_of: Dict[int, int] = {}
+        pass_no = 1
+        sorted_buckets = [self._sort_cards(buckets[i]) for i in range(n)]
+        pos = [0] * n
+        placed = True
+        while placed:
+            placed = False
+            for i in range(n):
+                bucket = sorted_buckets[i]
+                limit = defs[i][1]
+                p = pos[i]
+                taken = 0
+                while p < len(bucket) and (limit is None or taken < limit):
+                    c = bucket[p]
+                    p += 1
+                    if c.card_id in seen:
+                        if i < len(summaries):
+                            summaries[i].overlap_count += 1
+                        continue
+                    queue.append(c)
+                    seen.add(c.card_id)
+                    bucket_kept_cards[i].append(c)
+                    turn_of[c.card_id] = pass_no
+                    taken += 1
+                pos[i] = p
+                if taken:
+                    placed = True
+            pass_no += 1
+
+        for i in range(min(n, len(summaries))):
+            for c in sorted_buckets[i][pos[i]:]:
+                if c.card_id in seen:
+                    summaries[i].overlap_count += 1
+                else:
+                    summaries[i].limit_discarded += 1
+                    summaries[i].discarded_note_ids.append(c.note_id)
+        return turn_of
+
+    @staticmethod
+    def _build_queue_segments(
+        queue: List[Card],
+        bucket_kept_cards: Dict[int, List[Card]],
+        n_searches: int,
+        turn_of: Dict[int, int],
+        cycle_summaries: List[PrioritySearchSummary],
+    ) -> List[QueueSegment]:
+        """Run-length encode the final priority queue by where each card came from.
+        Buckets past n_searches hold the promoted tier.
+
+        In cycle mode (`cycle_summaries` given) this also records where each search's
+        cards landed: first position, first-turn size, where its later turns begin, last
+        position and turn count. Read from
+        the final queue, so a priority_limit cut is already reflected."""
+        search_of = {c.card_id: i for i, cards in bucket_kept_cards.items() for c in cards}
+        turns: Dict[int, Set[int]] = {}
+        segments: List[QueueSegment] = []
+        for pos, c in enumerate(queue):
+            i = search_of.get(c.card_id)
+            turn = turn_of.get(c.card_id, 1)
+            if i is None or i >= n_searches:
+                kind, search = "promoted", None
+            else:
+                if i < len(cycle_summaries):
+                    s = cycle_summaries[i]
+                    if s.final_start_index is None:
+                        s.final_start_index = pos
+                    s.last_index = pos
+                    if turn == 1:
+                        s.first_turn_count += 1
+                    elif s.later_start is None:
+                        s.later_start = pos
+                    turns.setdefault(i, set()).add(turn)
+                kind, search = ("cycle", None) if turn > 1 else ("search", i)
+            if not segments or segments[-1].kind != kind or segments[-1].search != search:
+                segments.append(QueueSegment(kind=kind, start=pos, search=search))
+            seg = segments[-1]
+            seg.count += 1
+            if kind == "cycle":
+                seg.cycled[i] = seg.cycled.get(i, 0) + 1
+        for i, ts in turns.items():
+            cycle_summaries[i].turns = len(ts)
+        return segments
 
     def _apply_reordering(
         self,
@@ -494,6 +615,7 @@ class PriorityReorderer:
                 timings_ms=dict(timings or {}),
                 promoted_count=self._promoted_count,
                 trigger=self.trigger,
+                queue_segments=self._queue_segments,
             )
         except Exception as e:
             import traceback

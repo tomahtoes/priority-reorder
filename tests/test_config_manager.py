@@ -33,6 +33,10 @@ def test_invalid_mode_falls_back_to_sequential():
     assert Config.from_dict({"priority_search_mode": "turbo"}).priority_search_mode == "sequential"
 
 
+def test_cycle_mode_is_accepted():
+    assert Config.from_dict({"priority_search_mode": "cycle"}).priority_search_mode == "cycle"
+
+
 def test_bad_types_are_coerced_to_defaults():
     c = Config.from_dict({"sort_reverse": "yes", "sort_field": 123})
     assert c.sort_reverse is False

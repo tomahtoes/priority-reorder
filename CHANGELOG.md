@@ -1,6 +1,7 @@
 # Changelog
 
-## 2026-09-25
+## 2026-09-28
+- New `"cycle"` value for `priority_search_mode`. The searches take turns placing their next `limit=` cards until all of them run out, so you no longer need to repeat the same searches in your config to keep them alternating.
 - Redesigned the summary window: a queue overview, and a per-search breakdown of where each search's matches went.
 - Improved speed of reorders for some queries.
 - Short aliases for the custom terms: `o:`, `k:`, `s:` and `l` for `occurrences:`, `kanji:`, `seen:` and `length`. Use the long form if a note type has a field with one of those names.

@@ -321,6 +321,164 @@ def test_mix_mode_flattens_and_sorts_all_buckets_together():
     assert overflow == []
 
 
+def test_cycle_alternates_limited_searches_until_exhausted():
+    r = reorderer(priority_search_mode="cycle")
+    st = summaries(2)
+    defs = [("q0", 2), ("q1", 1)]
+    buckets = [[card(i, i) for i in (1, 2, 3, 4, 5)], [card(i, i) for i in (11, 12)]]
+
+    queue, overflow = r._finalize_priority_queue(defs, buckets, st)
+
+    # q1 runs out after two turns; q0 keeps taking turns alone.
+    assert ids(queue) == [1, 2, 11, 3, 4, 12, 5]
+    assert overflow == []
+    assert (st[0].kept_count, st[1].kept_count) == (5, 2)
+    assert st[0].limit_discarded == st[1].limit_discarded == 0
+    # Where each search's cards landed, for the summary's Queue column.
+    assert ((st[0].final_start_index, st[0].first_turn_count, st[0].later_start, st[0].last_index, st[0].turns)
+            == (0, 2, 3, 6, 3))
+    assert ((st[1].final_start_index, st[1].first_turn_count, st[1].later_start, st[1].last_index, st[1].turns)
+            == (2, 1, 5, 5, 2))
+
+
+def test_cycle_search_placed_in_one_turn_is_not_marked_as_spread():
+    r = reorderer(priority_search_mode="cycle")
+    st = summaries(2)
+    defs = [("q0", 5), ("q1", 1)]
+    buckets = [[card(1, 1), card(2, 2)], [card(11, 11), card(12, 12)]]
+
+    r._finalize_priority_queue(defs, buckets, st)
+
+    assert (st[0].final_start_index, st[0].turns) == (0, 1)
+    assert (st[1].final_start_index, st[1].last_index, st[1].turns) == (2, 3, 2)
+
+
+def test_cycle_positions_reflect_priority_limit_cut():
+    r = reorderer(priority_search_mode="cycle", priority_limit=3)
+    st = summaries(2)
+    defs = [("q0", 1), ("q1", 1)]
+    buckets = [[card(1, 1), card(2, 2)], [card(11, 11), card(12, 12)]]
+
+    r._finalize_priority_queue(defs, buckets, st)
+
+    assert (st[0].last_index, st[0].turns) == (2, 2)
+    assert (st[1].last_index, st[1].turns) == (1, 1)
+
+
+def test_cycle_queue_segments_split_first_pass_from_later_turns():
+    r = reorderer(priority_search_mode="cycle")
+    st = summaries(3)
+    defs = [("q0", 1), ("q1", None), ("q2", 1)]
+    buckets = [[card(1, 1), card(2, 2), card(3, 3)], [card(11, 11)],
+               [card(21, 21), card(22, 22)], [card(90, 0)]]
+
+    queue, _ = r._finalize_priority_queue(defs, buckets, st)
+
+    assert ids(queue) == [1, 11, 21, 2, 22, 3, 90]
+    layout = [(s.kind, s.start, s.count, s.search, s.cycled) for s in r._queue_segments]
+    assert layout == [
+        ("search", 0, 1, 0, {}),
+        ("search", 1, 1, 1, {}),
+        ("search", 2, 1, 2, {}),
+        ("cycle", 3, 3, None, {0: 2, 2: 1}),
+        ("promoted", 6, 1, None, {}),
+    ]
+
+
+def test_sequential_queue_segments_are_one_per_search():
+    r = reorderer(priority_search_mode="sequential", priority_limit=3)
+    st = summaries(2)
+    defs = [("q0", None), ("q1", None)]
+    buckets = [[card(1, 1), card(2, 2)], [card(11, 11), card(12, 12)]]
+
+    r._finalize_priority_queue(defs, buckets, st)
+
+    assert [(s.kind, s.start, s.count, s.search) for s in r._queue_segments] == [
+        ("search", 0, 2, 0), ("search", 2, 1, 1)]
+
+
+def test_cycle_search_without_limit_drains_on_its_first_turn():
+    r = reorderer(priority_search_mode="cycle")
+    st = summaries(3)
+    defs = [("q0", 2), ("q1", None), ("q2", 1)]
+    buckets = [[card(i, i) for i in (1, 2, 3, 4)],
+               [card(i, i) for i in (11, 12, 13)],
+               [card(i, i) for i in (21, 22)]]
+
+    queue, _ = r._finalize_priority_queue(defs, buckets, st)
+
+    assert ids(queue) == [1, 2, 11, 12, 13, 21, 3, 4, 22]
+
+
+def test_cycle_shared_card_goes_to_the_first_turn_that_reaches_it():
+    r = reorderer(priority_search_mode="cycle")
+    st = summaries(2)
+    shared = card(3, 3)
+    defs = [("q0", 1), ("q1", 1)]
+    buckets = [[card(1, 1), shared], [shared, card(4, 4)]]
+
+    queue, _ = r._finalize_priority_queue(defs, buckets, st)
+
+    # q1's first turn reaches the shared card before q0's second turn does.
+    assert ids(queue) == [1, 3, 4]
+    assert st[1].kept_note_ids == [3, 4]
+    assert (st[0].overlap_count, st[1].overlap_count) == (1, 0)
+
+
+def test_cycle_places_promoted_tier_after_the_whole_cycle():
+    r = reorderer(priority_search_mode="cycle")
+    st = summaries(2)
+    defs = [("q0", 1), ("q1", 1)]
+    promoted = [card(90, 0)]
+    buckets = [[card(1, 1), card(2, 2)], [card(11, 11), card(12, 12)], promoted]
+
+    queue, _ = r._finalize_priority_queue(defs, buckets, st)
+
+    assert ids(queue) == [1, 11, 2, 12, 90]
+
+
+def test_cycle_limit_zero_counts_as_over_limit():
+    r = reorderer(priority_search_mode="cycle")
+    st = summaries(2)
+    c = card(5, 5)
+    defs = [("q0", 0), ("q1", 1)]
+    buckets = [[c, card(6, 6)], [c]]
+
+    queue, overflow = r._finalize_priority_queue(defs, buckets, st)
+
+    assert ids(queue) == [5]
+    assert ids(overflow) == [6]
+    assert (st[0].limit_discarded, st[0].overlap_count) == (1, 1)
+
+
+def test_cycle_respects_global_priority_limit():
+    r = reorderer(priority_search_mode="cycle", priority_limit=3)
+    st = summaries(2)
+    defs = [("q0", 1), ("q1", 1)]
+    buckets = [[card(1, 1), card(2, 2)], [card(11, 11), card(12, 12)]]
+
+    queue, overflow = r._finalize_priority_queue(defs, buckets, st)
+
+    assert ids(queue) == [1, 11, 2]
+    assert ids(overflow) == [12]
+    assert st[1].global_limit_discarded == 1
+
+
+def test_cycle_without_limits_matches_sequential():
+    def run(mode):
+        st = summaries(2)
+        shared = card(2, 2)
+        defs = [("q0", None), ("q1", None)]
+        buckets = [[card(1, 1), shared], [shared, card(3, 3)]]
+        queue, _ = reorderer(priority_search_mode=mode)._finalize_priority_queue(defs, buckets, st)
+        return ids(queue), st
+
+    (q_seq, st_seq), (q_cyc, st_cyc) = run("sequential"), run("cycle")
+    assert q_seq == q_cyc
+    assert st_seq == st_cyc
+    assert st_cyc[1].final_start_index == 2
+
+
 # _apply_reordering (thin integration over a fake scheduler)
 
 class _FakeSched:
