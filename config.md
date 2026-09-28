@@ -1,209 +1,107 @@
-# Priority Reorder Config
+# Priority Reorder
 
-Options are grouped into sections: the searches and sorting you tune day to day stay at the
-top level, and the rest live under `matching`, `tuning`, `sync_behavior` and `word_fields`.
-Headings below give each option's full path, e.g. `matching.prefix_matching` means:
+New cards matching `priority_search` go first, then the rest of `normal_search`. Both groups sort by `sort_field`. Every search is limited to new cards.
 
-```
-"matching": { "prefix_matching": true }
-```
+Options under a section heading go inside that section:
 
-## Core Settings
+    "matching": { "prefix_matching": true }
 
-### `priority_search` (string | list)
-- **Description**: The Anki search query used to identify cards for the Priority Queue. These cards will always be shown before the "Normal Queue". It can be a single string or a list of multiple search queries.
-- **Support**: Supports standard Anki syntax plus custom filters like `kanji:new=1`, `kanji:new[3]>=1`, `kanji:new_reading>=1`, `kanji:num=2`, `f<10000`, `length>=3`, or `occurrences:dict>5`. Each custom term also answers to its first letter (`k:new=1`, `l>=3`, `o:dict>5`, `s:7`).
-- **Default**: `""`
-- **Example**: `"deck:Japanese added:3"`
+The [README](https://github.com/tomahtoes/priority-reorder#readme) has examples and the full matching rules.
 
-### `priority_search_mode` (string)
-- **Description**: Determines how cards are handled when `priority_search` is a list of multiple queries.
-- **Options**:
-    - `"sequential"`: Processes each search in order. Cards matching the first search appear first, followed by the second, and so on.
-    - `"mix"`: Combines all cards from all priority searches into one big group before sorting.
-    - `"cycle"`: Like `"sequential"`, but the searches take turns until all of them run out. On each turn a search places its next `limit=` cards, then the next search goes. A search without `limit=` places everything on its first turn. Example: `["deck:A limit=10", "deck:B", "deck:C limit=5"]` places A's top 10, all of B, C's top 5, then A's next 10, C's next 5, and so on. With no `limit=` in any search this is the same as `"sequential"`.
-- **Default**: `"sequential"`
+## Top level
 
-### `normal_search` (string)
-- **Description**: The Anki search query for your secondary group of cards. These are shown only after all priority cards have been scheduled.
-- **Note**: The addon automatically appends `is:new` to all searches to ensure only new cards are affected.
-- **Default**: `""`
+### priority_search
+The search for the priority queue: one search, or a list of them. Default `""`.
 
-### `sort_field` (string), **Required**
-- **Description**: The name of the field on your Note Type used for numeric sorting (e.g. `"FreqSort"`, `"Frequency"`).
-- **Default**: `"FreqSort"`
+### priority_search_mode
+How a list of searches is ordered.
 
-### `sort_reverse` (bool)
-- **Description**: Controls the sorting direction of the `sort_field`.
-- **Behavior**: 
-    - `false` (Ascending): Lowest values first
-    - `true` (Descending): Highest values first
-- **Default**: `false`
+- `sequential` (default): each search's cards, one search after another.
+- `mix`: all matches pooled and sorted together.
+- `cycle`: the searches take turns, each placing its next `limit=` cards, until all run out. A search without `limit=` places everything on its first turn.
 
----
+### normal_search
+The search for the cards after the priority queue. Default `""`, meaning all new cards.
 
-## Tuning (`tuning`)
+### sort_field
+The numeric field both queues sort by, e.g. `FreqSort` (default) or `Frequency`. Cards with no number in it go last.
 
-### `tuning.priority_cutoff` (int | null)
-- **Description**: A threshold used to bump cards from the priority queue.
-- **Behavior**: If a priority card's sort value exceeds this number, it is moved to the Normal Queue.
-- **Multi-search**: Applied to each priority bucket separately. Cards bumped from any bucket go to the normal list.
-- **Note**: If the top-level `sort_reverse` is `true`, cards with values *below* the cutoff are moved instead.
-- **Default**: `null`
+### sort_reverse
+`false` (default) puts the lowest value first, `true` the highest.
 
-### `tuning.normal_prioritization` (int | null)
-- **Description**: A threshold used to promote cards from the normal list into the priority queue.
-- **Behavior**: If a normal card's sort value is below this number, it moves into the Priority Queue.
-- **Multi-search**: Promoted cards form their own tier placed *after* all priority searches (so they are exempt from any single search's `limit=`). In `mix` mode the tier is folded into the single sorted pool, so promoted cards interleave with priority matches by sort value. For stricter placement, define an explicit `priority_search` instead.
-- **Note**: If the top-level `sort_reverse` is `true`, cards with values *above* the threshold are moved instead.
-- **Default**: `null`
+## tuning
 
-### `tuning.priority_limit` (int | null)
-- **Description**: A hard cap on the total number of cards allowed in the Priority Queue.
-- **Behavior**: If the priority queue exceeds this count (after all other rules are applied), only the top N cards remain; the rest move to the Normal Queue.
-- **Default**: `null`
+### priority_cutoff
+Priority cards with a sort value above this go to the normal queue instead (below it with `sort_reverse`). Checked per search. Default `null`.
 
-### `tuning.shift_existing` (bool)
-- **Description**: Whether to shift the position of existing new cards in your deck when repositioning. If `false`, cards are simply placed at the target positions, potentially overlapping.
-- **Default**: `true`
+### normal_prioritization
+Normal cards with a sort value below this join the priority queue (above it with `sort_reverse`). They go after every priority search and ignore `limit=`. In `mix` mode they sort in with the rest. Default `null`.
 
----
+### priority_limit
+The most cards the priority queue can hold, applied last. The rest go to the normal queue. Default `null`.
 
-## Sync Behavior (`sync_behavior`)
+### shift_existing
+`true` (default) moves other new cards back to make room. `false` writes positions from 0 up without moving anything else, so two cards can share a position.
 
-### `sync_behavior.reorder_on_sync` (bool)
-- **Description**: When enabled, the addon will automatically run the reordering logic after each sync completes.
-- **Alias**: the older top-level `reorder_after_sync` / `reorder_before_sync` spellings are still accepted, and are folded into this key automatically. So is the section's former name, `automation`.
-- **Default**: `true`
+## sync_behavior
 
-### `sync_behavior.auto_update_dicts` (bool)
-- **Description**: When enabled, the addon will automatically check your Jiten-sourced occurrence dictionaries and download any updates exactly once per day on sync.
-- **Default**: `false`
+### reorder_on_sync
+Reorder after each sync, then sync again to upload the new order. Default `true`.
 
----
+### auto_update_dicts
+Check your Jiten occurrence dictionaries for updates once a day, on sync. Default `false`.
 
-## Matching (`matching`)
+## matching
 
-These flags all change how a card is credited with dictionary occurrences. They apply to
-`occurrences:`/`seen:` wherever those run, in the reorder and the Browse bar alike.
+These change how `occurrences:` and `seen:` count a card. All default to `false`.
 
-### `matching.kana_normalization` (bool)
-- **Description**: When enabled, katakana is folded to hiragana on both the card side and the dictionary index side before matching, so words that differ only by kana script are treated as equivalent.
-- **Behavior**: Applied to both the expression and reading fields. Examples of pairs that match with this flag on:
-    - Card `ギリギリ` / `ギリギリ` ↔ dict `ぎりぎり` / `ぎりぎり`
-    - Card `南京` / `ナンキン` ↔ dict `南京` / `なんきん`
-    - Card `南京錠` / `ナンキンじょう` ↔ dict `南京錠` / `なんきんじょう`
-    - Card `ネタ帳` / `ネタちょう` ↔ dict `ねた帳` / `ねたちょう`
-- **Default**: `false`
+### kana_normalization
+Treat katakana and hiragana as the same: `ギリギリ` matches `ぎりぎり`.
 
-### `matching.combine_word_forms` (bool)
-- **Description**: When enabled, occurrence lookups sum *all* readings stored under the card's expression plus any kana-only entries (㋕) attributed to the card's reading, instead of returning the count for the exact `(expression, reading)` pair only.
-- **Behavior**: For a card with expression `南京` and reading `なんきん`, the count returned is the sum of every `南京` entry in the dictionary regardless of reading, plus every kana-only `なんきん` entry. Pure kana cards (where expression == reading) are not double-counted.
-- **Note**: Independent of `matching.kana_normalization`, and both flags can be enabled together. Normalization is applied first, then the combined lookup runs against the normalized keys.
-- **Default**: `false`
+### combine_word_forms
+Count every reading of the card's expression, plus kana-only entries of its reading, not just the exact expression and reading pair.
 
-### `matching.variant_matching` (bool)
-- **Description**: Credits a card with the counts of dict entries that are another **written form** of the same word, i.e. a different okurigana or kanji spelling. Prefix/suffix matching cannot reach these: `煌く` is neither a prefix nor a suffix of `煌めく`.
-- **Rule**: an entry counts when its reading is *identical* to the card's **and** the two forms' kanji nest (every kanji of one appears in the other), with at least one kanji on each side. Requiring the kanji to nest rather than merely overlap keeps same-reading homophones apart, so `科学` is not credited by `化学`.
-- **Glyph variants**: kanji KANJIDIC2 lists as variants of each other count as one kanji here, so `燈す` is credited by `灯す` and `掻く` by `搔く`.
-- **Kana**: kana-only entries have no kanji to share and never match here; enable `matching.combine_word_forms` too if you want those credited. Entries carrying no reading never match either.
-- **Default**: `false`
+### prefix_matching
+Add longer entries that start with the word: `彫刻` gets `彫刻家`. Words of 2+ characters only. A single kanji gets only phrases whose reading confirms it: `手を貸す` for `手`/て, `屯する` for `屯`/たむろ.
 
-### `matching.prefix_matching` (bool)
-- **Description**: Also credits a card with the counts of longer dict entries that **start with** its expression (≥ 2 chars). Card `彫刻` (5) picks up `彫刻家` (100) + `彫刻品` (30) → 135.
-- **Single kanji**: excluded from the bare rule; credited only via two reading-validated carve-outs.
-  - *Particle entries*: `手を貸す`/てをかす and `俗に`/ぞくに credit `手`/て and `俗`/ぞく, but not `手`/しゅ (particles `を が の に で は も へ と`; anything after the particle is optional).
-  - *Suru verbs*: an entry that is the kanji plus `する`/`じる`/`ずる` credits it when the reading matches: `屯する`/たむろする credits `屯`/たむろ (but not `屯`/とん), `感じる`/かんじる credits `感`/かん. The regular sound change before `する` is allowed, so `察する`/さっする credits `察`/さつ. Entries carrying no reading never match here, though they still count for the bare rule above.
-- **Multi-character cards** need no carve-out: `勉強する` already starts with `勉強`, so the bare rule covers it.
-- **Default**: `false`
+### suffix_matching
+Add longer entries that end with the word: `学校` gets `小学校`, `出す` gets `思い出す`. Words of 2+ characters with a kanji only. Verbs also get entries ending in their negative or て-form (`にも拘わらず`, `急いで`). A single kanji gets only reading-confirmed phrases like `母の日`.
 
-### `matching.suffix_matching` (bool)
-- **Description**: The mirror of `matching.prefix_matching` at the **end** of a word (Japanese is head-final). Groups a head with its family: `学校` ← `小学校`/`中学校`, `出す` ← `思い出す`, `強い` ← `心強い`.
-- **Gate**: card must be **≥ 2 chars and contain a kanji** (real words like 学校/食べる/強い; excludes bare single kanji and pure kana like する/こと).
-- **Single kanji**: excluded from the bare rule; credited only via reading-validated **tail** particle phrases, so `母の日`/ははのひ credits `日`/ひ.
-- **Negative forms**: a verb card is also credited by entries ending in its 未然形 + `ず`/`ぬ`, on both the written form and the reading: `にも拘わらず` credits `拘わる`/かかわる, `思わず` credits `思う`. `ない` is not included. Counted once alongside `matching.compound_matching`.
-- **て-forms**: likewise for entries ending in its て-form: `急いで` credits `急ぐ`, `に沿って` credits `沿う`, `この期に及んで` credits `及ぶ`.
-- **Default**: `false`
+### variant_matching
+Add other spellings with the same reading, where one spelling's kanji all appear in the other: `煌めく` gets `煌く`, `灯す` gets `燈す`. Kana-only spellings don't count.
 
-### `matching.stem_matching` (bool)
-- **Description**: Credits a dictionary-form card with the counts of its **conjugated noun form**: the 連用形 (masu-stem) for verbs, and for い-adjectives the `く` form plus the `さ`/`み`/`げ` nominalizations. Card `戒める` picks up `戒め`, `遊ぶ` picks up `遊び`, `早い` picks up `早く`, `強い` picks up `強さ`/`強み`/`強げ`.
-- **Rule**: the card's final kana is edited and the result must match a dict entry on **both** expression and reading. Ichidan verbs drop `る` (`戒める`→`戒め`), godan verbs shift う-row to い-row (`待つ`→`待ち`, `話す`→`話し`). The conjugation class is not looked up. Both candidates are tried and the reading decides, so the wrong one simply finds nothing.
-- **Direction**: forward only. A `戒め` card is **not** credited by a `戒める` entry, because a rare derived form would inherit the count of a far commoner base word and jump the queue (`無げ` would absorb `無い`'s). Turn on `matching.prefix_matching` if you want that direction.
-- **Gates**: the expression and reading must end in the *same* kana (that is what makes the tail okurigana), they must differ from each other (a kana-only card has nothing to validate against, so `それる` cannot absorb `それ`), and the derived form must be ≥ 2 chars (so `見る`→`見` and `神る`→`神` are both skipped).
-- **Not covered**: `する` is irregular, so `勉強する` does not reach `勉強し`. `じる`/`ずる` verbs do work (`感じる`→`感じ`), since they inflect as ichidan. A compound *built on* the stem (`奮い立つ`) needs `matching.compound_matching` below.
-- **Default**: `false`
+### stem_matching
+Add the noun form of a dictionary-form word: `戒める` gets `戒め`, `遊ぶ` gets `遊び`, `早い` gets `早く`, `強い` gets `強さ`. Never the reverse.
 
-### `matching.compound_matching` (bool)
-- **Description**: Credits a dictionary-form card with the counts of entries that **compound on its stem**, which is where most verb vocabulary lives. Card `奮う` picks up `奮い立つ`, `取る` picks up `取り消す`/`取り扱い`, `受ける` picks up `受け入れる`, `食べる` picks up `食べ物`, `間違う` picks up `間違いない`, `少ない` picks up `少なくとも`.
-- **Rule**: same stem candidates as `matching.stem_matching`, but taken as a prefix rather than an exact match. The entry must start with the stem on **both** sides, so `抱く`/だく takes `抱きしめる`/だきしめる while `抱く`/いだく takes nothing.
-- **Compounds ending in the stem**: also credits entries that end with the stem, on both sides. Card `稼ぐ` picks up `時間稼ぎ`, `止まる` picks up `行き止まり`, `休む` picks up `夏休み`. The reading may voice the stem's first sound (`手触り`/てざわり credits `触る`/さわる).
-- **Standalone**: covers the exact stem itself as well, so this option alone is enough (`取る` gets both `取り` and `取り消す`). With `matching.stem_matching` on too, the exact stem is counted once, not twice.
-- **Overlap**: entries that start with the card as written (`食べる`←`食べるもの`) belong to `matching.prefix_matching` and are only credited when *that* option is on, so the two never double-count.
-- **Looseness**: the credit is deliberately generous. Transitive pairs cross over (`見回る`←`見回す`), idioms ride along (`当たる`←`当たり前`), and a rare base can inherit a big count (`生く`/いく, seen twice in the author's dicts, takes `生きる`'s compounds). Across 12 dictionaries it moved 942 of 9,877 eligible entries, a median of +9 counts.
-- **Default**: `false`
+### compound_matching
+Add compounds built on that stem, at either end: `取る` gets `取り消す`, `稼ぐ` gets `時間稼ぎ`. Also counts the stem itself. Deliberately loose.
 
-### `matching.honorific_folding` (bool)
-- **Description**: Credits a bare-form card with the counts of dict entries that start with an honorific (`お`/`ご`/`御`) and strip to the same word. Dict-side only, so a card `お茶` is unchanged. Card `茶` with `お茶` (50) + `茶` (10) → 60.
-- **Gate**: the stripped remainder must contain a kanji (`お金`→`金`, `お茶の間`→`茶の間`) or itself be a dict entry. Kana-only strips need the entry, which blocks junk like `おかず`→`かず`.
-- **Default**: `false`
+### honorific_folding
+Add `お`/`ご`/`御` forms to the bare word: `茶` gets `お茶`. Never the reverse.
 
----
+## word_fields
 
-## Search Syntax Cheat Sheet
+### expression_field
+The field holding the word. Default `Expression`.
 
-The `occurrences:`, `f`, `kanji:`, `seen:`, and `length` terms below are **real Anki search terms**: besides
-`priority_search`/`normal_search`, they work directly in the **Browse search bar** and through the
-collection API (`col.find_cards` / `col.find_notes`, and therefore **AnkiConnect**). This lets you
-test a priority search interactively in the browser before committing it to config. They honor the
-same `matching` settings and the configured `word_fields` / `sort_field` as the reorderer.
-Leading `-` negates a term as usual (e.g. `-occurrences:Dict>5`).
+### expression_reading_field
+The field holding its kana reading. Default `ExpressionReading`. `occurrences:`, `seen:` and `kanji:new_reading` need it. If `kanji:new_reading` matches almost every card, this field is usually wrong; the console prints a warning.
 
-Every custom term also answers to its first letter, so `occurrences:Dict>5 kanji:new=1 seen:7 length>=3`
-can be written `o:Dict>5 k:new=1 s:7 l>=3`. The two spellings are the same term. Anki reserves none of
-those letters, and each short form keeps the long form's operator or digit argument, which is what
-keeps `o:foo` or `s:word` working as ordinary field searches. Two caveats: if a note type in your
-collection has a field literally named `o`, `k`, `s` or `l`, the short form shadows a search on that
-field, so use the long form there. And the short forms only exist while this addon is enabled, so
-write the long form in a search you plan to share.
+## Search terms
 
-- **Anki Standard**: `added:3`, `deck:Japanese`, `tag:mining`, etc.
-- **Frequency**: `f<=2000`. Matches cards where the sort field value is less than or equal to 2000. Useful for prioritizing common words across different search queries. Supports any comparison operator (`=`, `!=`, `<`, `<=`, `>`, `>=`).
-- **Length**: `length>=3` (short: `l>=3`). Matches cards whose expression field is 3 or more characters long (`length=1` for single-character words). Counts Unicode characters of the raw field value (markup included; an empty field is length 0). Supports any comparison operator.
-- **Kanji i+1**: `kanji:new=1` (short: `k:new=1`). Matches words where exactly 1 character is unknown to you.
-- **Kanji target**: `kanji:new[3]>=1`. A Kanji counts as "new" until 3 of your learned words contain it; matches words with at least 1 such Kanji. `kanji:new` is equivalent to `kanji:new[1]`.
-- **New Reading**: `kanji:new_reading>=1`. Matches words where at least 1 Kanji is used in a *reading* no learned word has taught you. Once you know 食事 (しょくじ), 食べる (たべる) still matches, because 食=た is new. Takes the same bracket as `kanji:new`: `kanji:new_reading[3]>=1`. Requires `word_fields.expression_reading_field`.
-- **Kanji Count**: `kanji:num=2`. Matches words containing exactly 2 Kanji.
+These work in the searches above and in the Browse bar. Compare with `=` `!=` `<` `<=` `>` `>=`, and put `-` in front to negate.
 
-- **Occurrences**: `occurrences:銀色、遥か>5` (short: `o:銀色、遥か>5`). Matches words appearing more than 5 times in the specified dictionary.
-- **Multi-dict**: `occurrences:[Dict1,Dict2]>10`. Matches based on the combined count across multiple dictionaries.
-- **All dicts**: `occurrences:all>5`. Combines the count across every dictionary in `user_files`.
-- **Recently seen**: `seen:7` (short: `s:7`). Matches words appearing in any of the last 7 *daily* occurrence dictionaries (in `user_files/_seen/<YYYY-MM-DD>/`). It's boolean ("seen at all"). "Today" honors Anki's rollover hour. The `_seen` folder is reserved. It is never a normal occurrence dict, so `occurrences:_seen` and `occurrences:all` can't reach it, and only `seen:N` does. See the README for folder setup.
-- **`limit=X`**: Use in a search string to take only the top X cards. It has no short form; `l` belongs to `length`. **Config-only**: this is a reorder control, not a browser search term, and is ignored in the Browse bar.
-  - Example: `added:3 limit=20` (Only the top 20 most frequent recent cards).
-  - In `"cycle"` mode it is the number of cards per turn instead, and cards past it wait for the search's next turn rather than being dropped.
+- `f<=2000`: the sort field's value.
+- `length>=3`: characters in the expression field, markup included.
+- `occurrences:Name>5`: times the word appears in dictionary `Name`. `[A,B]` sums several, `all` sums every one.
+- `seen:7`: appears in a daily dictionary from the last 7 days.
+- `kanji:new=1`: number of kanji no learned word contains. `kanji:new[3]` keeps a kanji new until 3 do.
+- `kanji:new_reading>=1`: number of kanji in a reading no learned word teaches. Takes `[3]` too.
+- `kanji:num=2`: number of kanji.
+- `limit=20`: keep this search's top 20. In `cycle` mode, cards per turn. Not a Browse bar term.
 
----
+Short forms: `o:`, `k:`, `s:`, `l`. They work only while this addon is enabled, and a note type with a field named `o`, `k`, `s` or `l` needs the long form.
 
-## Occurrence Setup (`word_fields`)
+Dictionary folder names can't contain spaces.
 
-To use occurrences queries, you must configure which fields the addon should look at:
-
-### `word_fields.expression_field` (string)
-- **Description**: The field name containing the Japanese word or expression (e.g. `"Expression"`, `"Word"`).
-- **Default**: `"Expression"`
-
-### `word_fields.expression_reading_field` (string)
-- **Description**: The field name containing the reading/furigana (e.g.  `"ExpressionReading"`,`"Reading"`).
-- **Default**: `"ExpressionReading"`
-- **Note**: Required by `occurrences:`, `seen:` and `kanji:new_reading`. If `kanji:new_reading` matches nearly every card, this is almost always the cause. The addon prints a warning to the console when it can't make sense of the readings it finds.
-
----
-
-## Inspecting Results
-
-After a reorder runs, **Tools** -> **Priority Reorder** -> **Show Summary** shows, per
-`priority_search`, how many cards matched, were kept, and were dropped once these settings were
-applied, and why. It's the quickest way to tune `tuning.priority_cutoff`, `tuning.priority_limit`, and per-search
-`limit=`, you can see the effect of each, open the kept/discarded notes in the Browser, and press
-**Run reorder** to re-check after editing the config. See the README's _Summary Window_ section
-for more.
+**Tools → Priority Reorder → Show Summary** shows what each search kept and why the rest was dropped.

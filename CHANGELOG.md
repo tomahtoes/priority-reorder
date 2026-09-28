@@ -5,16 +5,17 @@
 - Redesigned the summary window: a queue overview, and a per-search breakdown of where each search's matches went.
 - Faster reorders, most of all after the first one in an Anki session, which now reuses results for words, dictionaries and seen days that haven't changed.
 - Short aliases for the custom terms: `o:`, `k:`, `s:` and `l` for `occurrences:`, `kanji:`, `seen:` and `length`. Use the long form if a note type has a field with one of those names.
-- New `compound_matching` option: credits a verb with the compounds built on its stem, at either end (`取る` ← `取り消す`, `稼ぐ` ← `時間稼ぎ`).
+- New `compound_matching` option: credits a verb or い-adjective with the compounds built on its stem, at either end (`取る` ← `取り消す`, `稼ぐ` ← `時間稼ぎ`).
 - `suffix_matching` now credits verbs from entries ending in their negative or て-form (`拘わる` ← `にも拘わらず`, `急ぐ` ← `急いで`).
 - `stem_matching` now credits い-adjectives from their `く` form (`早い` ← `早く`).
 - `variant_matching` now treats variant glyphs of a kanji as the same kanji (`燈す`/`灯す`, `掻く`/`搔く`).
 
 ## 2026-08-28
-- New `kanji:new_reading` search term. Prioritizes words that use a Kanji in a *reading* you haven't learned, not just a new Kanji, so `食べる` (た) still matches after you've learned `食事` (しょく).
+- Options are grouped into `matching`, `tuning`, `sync_behavior` and `word_fields` sections. Older configs are converted automatically.
+- New `kanji:new_reading` search term. Prioritizes words that use a kanji in a *reading* you haven't learned, not just a new kanji, so `食べる` (た) still matches after you've learned `食事` (しょく).
   - Takes the same bracketed target as `kanji:new`. `kanji:new_reading[3]>=1` counts a reading as new until 3 learned words use it.
   - Inflections share a reading (`上がる`/`上げる`), and rendaku doesn't count as new (`血`/ち covers `鼻血`/はなぢ).
-  - Jukujikun and gikun words like `火傷` (やけど) count as new for every Kanji they can't explain.
+  - Jukujikun and gikun words like `火傷` (やけど) count as new for every kanji they can't explain.
   - Requires `word_fields.expression_reading_field`.
 - New `stem_matching` occurrence option. Credits a dictionary-form card with the counts of its *conjugated noun form*: the 連用形 (masu-stem) for verbs, and the `さ`/`み`/`げ` nominalizations for い-adjectives.
   - `戒める` picks up `戒め`, `遊ぶ` picks up `遊び`, `待つ` picks up `待ち`, and `強い` picks up `強さ`/`強み`.
@@ -27,7 +28,7 @@
   - Applies to `occurrences:` and `seen:` alike.
 
 ## 2026-08-16
-- Release [Daily Occurrences addon](https://github.com/tomahtoes/daily-occurrences) to allow tracking daily seen words.
+- Released the [Daily Occurrences addon](https://github.com/tomahtoes/daily-occurrences), which writes the daily dictionaries `seen:` reads.
 - New `variant_matching` occurrence option. Credits a card with the counts of dictionary entries that are another *written form* of the same word, differing in okurigana or kanji spelling.
   - An entry counts when its reading matches the card's and the two forms' kanji nest, which keeps same-reading homophones apart.
   - Kana-only spellings never match here.
