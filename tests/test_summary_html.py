@@ -1,6 +1,6 @@
 """Tests for the summary window's page markup (summary_html), built headless."""
 
-from reorder_log import PrioritySearchSummary, QueueSegment, ReorderReport
+from reorder_log import NewLimitChange, PrioritySearchSummary, QueueSegment, ReorderReport
 from summary_html import render_summary, shared_prefix
 
 
@@ -165,6 +165,28 @@ def test_cycle_mode_without_limits_renders_like_sequential():
 def test_skipped_reorder_says_so():
     r = report([entry(0, "q0", kept=1, matched=1, start=0)], total_repositioned=0)
     assert "already in order, nothing moved" in render_summary(r)
+
+
+def test_today_limit_notes_hidden_while_the_feature_is_off():
+    r = report([entry(0, "q0", kept=1, matched=1, start=0)])
+    assert "new cards today" not in render_summary(r)
+    assert "today_new_limit" not in render_summary(r)
+
+
+def test_today_limit_notes_one_line_per_deck():
+    r = report([entry(0, "q0", kept=1, matched=1, start=0)], new_limit_enabled=True,
+               new_limit_changes=[
+                   NewLimitChange(deck="日本語", status="raised", baseline=25, target=31),
+                   NewLimitChange(deck="<b>", status="missing"),
+               ])
+    html = render_summary(r)
+    assert '<span class="sub">日本語: 25 → 31 new cards today</span>' in html
+    assert 'no deck named "&lt;b&gt;"' in html
+
+
+def test_today_limit_enabled_without_a_deck_says_so():
+    r = report([entry(0, "q0", kept=1, matched=1, start=0)], new_limit_enabled=True)
+    assert "today_new_limit is on but no deck is set" in render_summary(r)
 
 
 def test_open_rows_render_expanded():

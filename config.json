@@ -20,6 +20,11 @@
         "reorder_on_sync": true,
         "auto_update_dicts": false
     },
+    "today_new_limit": {
+        "enabled": false,
+        "decks": [],
+        "max": null
+    },
     "tuning": {
         "priority_cutoff": null,
         "normal_prioritization": null,

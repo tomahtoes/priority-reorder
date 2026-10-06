@@ -87,7 +87,7 @@ The default config prioritizes cards added in the last 3 days. To change it:
 
 The addon reorders your new cards after every sync, then syncs once more so your other devices get the new order. Press ``Ctrl+Alt+` `` to reorder by hand.
 
-The searches and sorting sit at the top level of the config. Everything else is grouped into the `matching`, `tuning`, `sync_behavior` and `word_fields` sections.
+The searches and sorting sit at the top level of the config. Everything else is grouped into the `matching`, `tuning`, `sync_behavior`, `today_new_limit` and `word_fields` sections.
 
 ## How it Works
 The addon splits your new cards into two queues:
@@ -345,6 +345,15 @@ Make `priority_search` a list, and `priority_search_mode` decides how the search
 - `tuning.priority_limit` caps the whole priority queue.
 - `tuning.priority_cutoff` sends priority cards whose sort value is past this number (the rarer words, with a frequency-rank field) to the normal queue.
 - `tuning.normal_prioritization` does the opposite: normal cards with a sort value under this number join the priority queue, after all your searches.
+
+### Fitting the day's new cards to the queue
+With `today_new_limit` on, a deck's new card limit rises for the day to fit the priority queue: 26 priority cards on a 10-a-day preset gives you 26 that day. It uses Anki's Today only limit, so the preset is never changed.
+
+```json
+"today_new_limit": { "enabled": true, "decks": ["日本語"], "max": 60 }
+```
+
+Name the deck you click to study. The limit is recalculated on each reorder until you study your first new card of the day, then holds. [config.md](config.md#today_new_limit) has the details.
 
 ## Credits
 Kanji reading and variant data is derived from **KANJIDIC2**, Copyright © the

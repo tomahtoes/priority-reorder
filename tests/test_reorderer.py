@@ -800,3 +800,82 @@ def test_report_carries_trigger_and_promoted_count(monkeypatch):
     report = get_last_report()
     assert report.trigger == "sync"
     assert report.promoted_count == 1
+
+
+# today_new_limit
+
+class _ResultWithChanges:
+    def __init__(self, count=0):
+        import types
+        self.count = count
+        self.changes = types.SimpleNamespace()
+
+
+def _run_with_today_limit(monkeypatch, fake_apply, enabled=True, current_ids=(1,)):
+    import reorderer as rmod
+    from data_manager import SearchResult
+
+    monkeypatch.setattr(rmod.mw, "col", _col(_FakeSched(), list(current_ids)), raising=False)
+    monkeypatch.setattr(rmod, "OpChangesWithCount", _ResultWithChanges)
+    monkeypatch.setattr(rmod, "apply_today_limits", fake_apply)
+
+    c1 = card(1, 1)
+
+    class _FakeDM:
+        def get_cards_from_search(self, query):
+            return SearchResult([c1], 1)
+
+        def get_cards(self, card_ids):
+            return {c1.card_id: c1}
+
+    r = PriorityReorderer(Config(priority_search="deck:X", today_limit_enabled=enabled,
+                                 today_limit_decks=["X"]))
+    r.data_manager = _FakeDM()
+    return r.reorder()
+
+
+def test_today_limit_runs_even_when_the_order_is_already_applied(monkeypatch):
+    from reorder_log import NewLimitChange, get_last_report
+    import types
+
+    calls = []
+    flags = types.SimpleNamespace(ListFields=lambda: [
+        (types.SimpleNamespace(name="study_queues"), True)])
+
+    def fake_apply(col, config, ids):
+        calls.append(list(ids))
+        return [NewLimitChange(deck="X", status="raised", baseline=10, target=26)], [flags]
+
+    result = _run_with_today_limit(monkeypatch, fake_apply)  # [1] is already in order
+
+    assert calls == [[1]]
+    assert result.count == 0
+    assert result.changes.study_queues is True
+    report = get_last_report()
+    assert report.new_limit_enabled is True
+    assert [c.status for c in report.new_limit_changes] == ["raised"]
+    assert "today_limit" in report.timings_ms
+
+
+def test_today_limit_failure_does_not_fail_the_reorder(monkeypatch):
+    from reorder_log import get_last_report
+
+    def fake_apply(col, config, ids):
+        raise RuntimeError("boom")
+
+    result = _run_with_today_limit(monkeypatch, fake_apply, current_ids=())
+
+    assert result.count == 1  # the reposition still went through
+    assert get_last_report().new_limit_changes == []
+
+
+def test_today_limit_is_not_called_when_disabled(monkeypatch):
+    from reorder_log import get_last_report
+
+    def fake_apply(col, config, ids):
+        raise AssertionError("must not run")
+
+    _run_with_today_limit(monkeypatch, fake_apply, enabled=False)
+    report = get_last_report()
+    assert report.new_limit_enabled is False
+    assert "today_limit" not in report.timings_ms

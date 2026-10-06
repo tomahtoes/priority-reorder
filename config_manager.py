@@ -38,6 +38,11 @@ _GROUPS = {
         "priority_limit": None,
         "shift_existing": True,
     },
+    "today_new_limit": {
+        "enabled": False,
+        "decks": [],
+        "max": None,
+    },
     "word_fields": {
         "expression_field": "Expression",
         "expression_reading_field": "ExpressionReading",
@@ -52,13 +57,13 @@ _LEGACY_SECTIONS = {
 }
 
 # Flat key as it appeared in pre-section configs -> (section, canonical key). Only
-# keys that were ever top-level belong here: `word_fields` has always been a section,
-# so its keys are deliberately absent and a stray top-level `expression_field` is
-# left alone rather than hoisted. The two retired sync spellings map onto
+# keys that were ever top-level belong here: `word_fields` and `today_new_limit` have
+# always been sections, so their keys are deliberately absent and a stray top-level
+# `expression_field` or `enabled` is left alone rather than hoisted. The two retired sync spellings map onto
 # reorder_on_sync, in the precedence order from_dict used to apply by hand.
 _LEGACY_FLAT_KEYS = {
     key: (group, key)
-    for group, keys in _GROUPS.items() if group != "word_fields"
+    for group, keys in _GROUPS.items() if group not in ("word_fields", "today_new_limit")
     for key in keys
 }
 _LEGACY_FLAT_KEYS["reorder_after_sync"] = ("sync_behavior", "reorder_on_sync")
@@ -111,6 +116,18 @@ def _coerce_optional_int(data: dict, key: str) -> Optional[int]:
             pass
     _warn(key, value, "expected int or null")
     return None
+
+def _coerce_str_list(data: dict, key: str) -> List[str]:
+    """A string or a list of strings, as a fresh list with blanks dropped."""
+    value = data.get(key)
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    if isinstance(value, list):
+        return [v.strip() for v in value if isinstance(v, str) and v.strip()]
+    _warn(key, value, "expected string or list of strings")
+    return []
 
 def migrate_config(data: dict) -> tuple:
     """Normalize a stored config onto the current sectioned layout, returning
@@ -201,6 +218,9 @@ class Config:
     prefix_matching: bool = False
     suffix_matching: bool = False
     honorific_folding: bool = False
+    today_limit_enabled: bool = False
+    today_limit_decks: List[str] = field(default_factory=list)
+    today_limit_max: Optional[int] = None
     search_config: SearchConfig = field(default_factory=SearchConfig)
 
     @classmethod
@@ -211,6 +231,7 @@ class Config:
         matching = data["matching"]
         sync_behavior = data["sync_behavior"]
         tuning = data["tuning"]
+        today_limit = data["today_new_limit"]
         word_fields = data["word_fields"]
 
         search_config = SearchConfig(
@@ -252,6 +273,9 @@ class Config:
             prefix_matching=_coerce_bool(matching, "prefix_matching", False),
             suffix_matching=_coerce_bool(matching, "suffix_matching", False),
             honorific_folding=_coerce_bool(matching, "honorific_folding", False),
+            today_limit_enabled=_coerce_bool(today_limit, "enabled", False),
+            today_limit_decks=_coerce_str_list(today_limit, "decks"),
+            today_limit_max=_coerce_optional_int(today_limit, "max"),
             search_config=search_config
         )
 

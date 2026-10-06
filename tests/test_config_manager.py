@@ -249,7 +249,8 @@ def test_flat_config_migrates_straight_to_current_names():
     assert migrated["matching"]["prefix_matching"] is True
     assert migrated["tuning"]["priority_limit"] == 200
     assert migrated["sync_behavior"]["reorder_on_sync"] is False
-    assert set(migrated) == {"matching", "sync_behavior", "tuning", "word_fields"}
+    assert set(migrated) == {"matching", "sync_behavior", "today_new_limit", "tuning",
+                             "word_fields"}
 
 
 def test_stray_top_level_field_key_is_not_hoisted():
@@ -257,6 +258,50 @@ def test_stray_top_level_field_key_is_not_hoisted():
     migrated, _ = migrate_config({"expression_field": "Word"})
     assert migrated["word_fields"]["expression_field"] == "Expression"
     assert migrated["expression_field"] == "Word"  # left alone, not ours to move
+
+
+def test_stray_top_level_today_limit_key_is_not_hoisted():
+    # today_new_limit was always a section too; a top-level `enabled` is not its switch.
+    migrated, _ = migrate_config({"enabled": True})
+    assert migrated["today_new_limit"]["enabled"] is False
+    assert migrated["enabled"] is True
+    assert Config.from_dict({"enabled": True}).today_limit_enabled is False
+
+
+def test_today_new_limit_defaults_off():
+    c = Config.from_dict({})
+    assert c.today_limit_enabled is False
+    assert c.today_limit_decks == []
+    assert c.today_limit_max is None
+
+
+def test_today_new_limit_parses():
+    c = Config.from_dict({"today_new_limit": {"enabled": True, "decks": ["日本語", " 漢字 "],
+                                              "max": 60}})
+    assert c.today_limit_enabled is True
+    assert c.today_limit_decks == ["日本語", "漢字"]
+    assert c.today_limit_max == 60
+
+
+def test_today_new_limit_decks_accepts_a_single_string():
+    c = Config.from_dict({"today_new_limit": {"decks": "日本語"}})
+    assert c.today_limit_decks == ["日本語"]
+    assert Config.from_dict({"today_new_limit": {"decks": "  "}}).today_limit_decks == []
+
+
+def test_today_new_limit_bad_values_fall_back():
+    c = Config.from_dict({"today_new_limit": {"enabled": "yes", "decks": 5, "max": "lots"}})
+    assert c.today_limit_enabled is False
+    assert c.today_limit_decks == []
+    assert c.today_limit_max is None
+    mixed = Config.from_dict({"today_new_limit": {"decks": ["A", 3, None, ""]}})
+    assert mixed.today_limit_decks == ["A"]
+
+
+def test_today_new_limit_section_is_backfilled():
+    migrated, changed = migrate_config({"today_new_limit": {"enabled": True}})
+    assert changed
+    assert migrated["today_new_limit"] == {"enabled": True, "decks": [], "max": None}
 
 
 def test_shipped_defaults_contain_no_legacy_names():

@@ -9,9 +9,11 @@ try:  # inside Anki: isolated package namespace
     from .models import Card
     from .config_manager import Config, get_config
     from .data_manager import DataManager
+    from .new_limit import apply_today_limits, merge_op_changes
     from .rules import parse_rule_string
     from .search import has_custom_term
     from .reorder_log import (
+        NewLimitChange,
         PrioritySearchSummary,
         QueueSegment,
         ReorderReport,
@@ -23,9 +25,11 @@ except ImportError:  # pytest / flat-import context
     from models import Card
     from config_manager import Config, get_config
     from data_manager import DataManager
+    from new_limit import apply_today_limits, merge_op_changes
     from rules import parse_rule_string
     from search import has_custom_term
     from reorder_log import (
+        NewLimitChange,
         PrioritySearchSummary,
         QueueSegment,
         ReorderReport,
@@ -55,6 +59,7 @@ class PriorityReorderer:
         self.trigger = trigger
         self._promoted_count = 0
         self._queue_segments: List[QueueSegment] = []
+        self._new_limit_changes: List[NewLimitChange] = []
 
     def reorder(self) -> OpChangesWithCount:
         timings: Dict[str, float] = {}
@@ -95,6 +100,13 @@ class PriorityReorderer:
 
         result = self._apply_reordering(final_priority_queue, final_normal_list, timings)
 
+        # After the reposition, and even when it was skipped: the limit depends on the
+        # queue, not on whether its order changed.
+        if self.config.today_limit_enabled:
+            t_limit = time.perf_counter()
+            self._apply_today_limits(final_priority_queue, result)
+            timings["today_limit"] = round((time.perf_counter() - t_limit) * 1000, 1)
+
         # Sub-stage accumulators from the data manager (find_cards, bulk load,
         # per-term filters, kanji scan, ...). getattr: tests inject bare fakes.
         dm_stage_ms = getattr(self.data_manager, "stage_ms", None)
@@ -112,6 +124,19 @@ class PriorityReorderer:
         self._write_log(summaries, final_priority_queue, final_normal_list, result, timings)
 
         return result
+
+    def _apply_today_limits(self, priority_queue: List[Card], result: OpChangesWithCount) -> None:
+        """Run today_new_limit and fold its deck writes into `result`. A failure here
+        is logged and never fails the reorder, whose repositioning already happened."""
+        try:
+            changes, op_changes = apply_today_limits(
+                mw.col, self.config, (c.card_id for c in priority_queue))
+            self._new_limit_changes = changes
+            merge_op_changes(result, op_changes)
+        except Exception as e:
+            import traceback
+            print(f"[priority-reorder] Failed to apply today_new_limit: {e}")
+            traceback.print_exc()
 
     def _print_reading_diagnostics(self) -> None:
         """Report how much of the collection the kanji reading table could
@@ -616,6 +641,8 @@ class PriorityReorderer:
                 promoted_count=self._promoted_count,
                 trigger=self.trigger,
                 queue_segments=self._queue_segments,
+                new_limit_enabled=self.config.today_limit_enabled,
+                new_limit_changes=self._new_limit_changes,
             )
         except Exception as e:
             import traceback

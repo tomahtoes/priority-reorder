@@ -1,5 +1,8 @@
 # Changelog
 
+## 2026-10-05
+- New `today_new_limit` option, off by default. It raises a deck's new card limit for the day to fit the priority queue, using Anki's Today only limit, so your preset stays as it is. It keeps up with reorders until you study your first new card of the day, then holds. See config.md.
+
 ## 2026-09-28
 - New `"cycle"` value for `priority_search_mode`. The searches take turns placing their next `limit=` cards until all of them run out, so you no longer need to repeat the same searches in your config to keep them alternating.
 - Redesigned the summary window: a queue overview, and a per-search breakdown of where each search's matches went.

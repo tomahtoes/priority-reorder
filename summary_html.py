@@ -12,10 +12,12 @@ from datetime import datetime
 from typing import Dict, Iterable, List, Optional, Set
 
 try:
-    from .reorder_log import PrioritySearchSummary, QueueSegment, ReorderReport
+    from .reorder_log import (NewLimitChange, PrioritySearchSummary, QueueSegment,
+                              ReorderReport)
     from .search_colors import colorize_query_html
 except ImportError:  # pytest / flat-import context
-    from reorder_log import PrioritySearchSummary, QueueSegment, ReorderReport
+    from reorder_log import (NewLimitChange, PrioritySearchSummary, QueueSegment,
+                             ReorderReport)
     from search_colors import colorize_query_html
 
 # Same tokenizer as search_colors: quoted blocks stay one token.
@@ -178,13 +180,37 @@ def _header(report: ReorderReport, reordering: bool) -> str:
 <div class="top">
   <div class="kpis">{kpis}</div>
   <div class="right">
-    <div class="when">{when}<span class="sub">{" · ".join(notes)}</span></div>
+    <div class="when">{when}<span class="sub">{" · ".join(notes)}</span>{_new_limit_notes(report)}</div>
     <div class="actions">
       <button type="button" onclick="pycmd('config')">Edit config</button>
       {_reorder_button(reordering)}
     </div>
   </div>
 </div>"""
+
+
+def _new_limit_note(c: NewLimitChange) -> str:
+    deck = _esc(c.deck)
+    if c.status == "raised":
+        return f"{deck}: {c.baseline} → {c.target} new cards today"
+    if c.status == "frozen":
+        return f"{deck}: {c.target} new cards today, kept since studying started"
+    if c.status == "hand_set":
+        return f"{deck}: Today-only limit of {c.target} was set by hand, left alone"
+    if c.status == "cleared":
+        return f"{deck}: back to {c.baseline} new cards today"
+    if c.status == "not_needed":
+        return f"{deck}: queue fits in {c.baseline} new cards today"
+    return f'no deck named "{deck}" for today_new_limit'
+
+
+def _new_limit_notes(report: ReorderReport) -> str:
+    if not report.new_limit_enabled:
+        return ""
+    if not report.new_limit_changes:
+        return '<span class="sub">today_new_limit is on but no deck is set</span>'
+    return "".join(f'<span class="sub">{_new_limit_note(c)}</span>'
+                   for c in report.new_limit_changes)
 
 
 def _reorder_button(reordering: bool) -> str:

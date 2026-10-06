@@ -49,6 +49,25 @@ class QueueSegment:
 
 
 @dataclass
+class NewLimitChange:
+    """What today_new_limit did to one deck's Today-only new card limit.
+
+    status is one of:
+      raised      the addon's limit is in place at `target`
+      cleared     the addon's limit was removed; the queue fits under `baseline` again
+      frozen      a new card was studied today, so the addon's limit stays at `target`
+      hand_set    a Today-only limit the addon didn't write; left at `target`
+      not_needed  the queue fits under `baseline`; nothing written
+      missing     no normal deck by that name"""
+    deck: str
+    status: str
+    baseline: int = 0
+    target: int = 0
+    priority_count: int = 0
+    studied: int = 0
+
+
+@dataclass
 class ReorderReport:
     timestamp: str
     mode: str
@@ -66,6 +85,9 @@ class ReorderReport:
     timings_ms: Dict[str, float] = field(default_factory=dict)
     # Layout of the priority queue for the summary's queue bar. Empty in mix mode.
     queue_segments: List[QueueSegment] = field(default_factory=list)
+    # today_new_limit. Enabled with no changes means no deck is configured.
+    new_limit_enabled: bool = False
+    new_limit_changes: List[NewLimitChange] = field(default_factory=list)
 
 
 def now_timestamp() -> str:

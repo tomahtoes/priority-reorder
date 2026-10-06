@@ -51,6 +51,27 @@ Reorder after each sync, then sync again to upload the new order. Default `true`
 ### auto_update_dicts
 Check your Jiten occurrence dictionaries for updates once a day, on sync. Default `false`.
 
+## today_new_limit
+
+Raises a deck's new card limit for the day when the priority queue holds more cards than it allows. With a limit of 10 and 26 priority cards, you get 26 new cards that day. It sets the deck's Today only limit (the third tab in deck options), which Anki drops at the next day rollover. Your preset is never changed.
+
+### enabled
+Turns this on. Default `false`.
+
+### decks
+The deck you click to study, or a list of them. Default `[]`.
+
+Name the deck you click, not the one the cards are in: Anki caps a study session at the clicked deck's limit. If you click `日本語` and the cards live in `日本語::Mining`, name `日本語`. A subdeck holding priority cards gets raised too when its own limit would hold them back.
+
+### max
+The highest the limit can go. Default `null`, no ceiling.
+
+The new limit is the priority cards in the deck plus the new cards you've already studied today. It only goes up: if the queue fits under the deck's usual limit, nothing changes.
+
+Each reorder recalculates it until you study your first new card in that deck. After that it stays put for the day, so cards you add in the afternoon don't keep raising it. A Today only limit you set yourself is left alone.
+
+New cards also count toward the review limit unless the preset has "New cards ignore review limit" on. If you study on your phone before your computer has reordered that day, you get the usual limit until it does.
+
 ## matching
 
 These change how `occurrences:` and `seen:` count a card. All default to `false`.
