@@ -77,6 +77,13 @@ def test_dict_dirs_ignore_all_and_dot_dirs(updater, tmp_path):
     assert updater.get_dictionary_count() == 1
 
 
+def test_user_agent_names_the_project():
+    # Jiten blocks browser-imitating agents with 418, so this must never regress to "Mozilla/5.0".
+    ua = JitenUpdater().session.headers["User-Agent"]
+    assert ua.startswith("priority-reorder/")
+    assert "Mozilla" not in ua
+
+
 # skip gates
 
 def test_non_jiten_dict_is_skipped_without_network(updater, tmp_path):

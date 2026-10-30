@@ -17,12 +17,16 @@ except ImportError:  # pytest / flat-import context
     from dictionary_manager import get_occurrence_index, get_combined_occurrence_index, SEEN_FOLDER
     from search import clear_resolution_caches
 
+# Jiten answers 418 to clients that imitate a browser (a bare "Mozilla/5.0" included). It
+# requires the form <project>/<version> (<website or email>).
+USER_AGENT = "priority-reorder/2026-10-30 (https://github.com/tomahtoes/priority-reorder)"
+
 class JitenUpdater:
     def __init__(self) -> None:
         self.user_files_dir = os.path.join(os.path.dirname(__file__), "user_files")
         self.api_base = "https://api.jiten.moe/api/media-deck"
         self.session = requests.Session()
-        self.session.headers.update({'User-Agent': 'Mozilla/5.0'})
+        self.session.headers.update({'User-Agent': USER_AGENT})
         retry_strategy = Retry(
             total=3,
             backoff_factor=1,
