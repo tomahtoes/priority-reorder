@@ -2,6 +2,7 @@
 
 ## 2026-10-30
 - Fixed Jiten dictionary updates failing.
+- The [Daily Occurrences addon](https://github.com/tomahtoes/daily-occurrences) can now read text from Hoshi Reader on desktop.
 
 ## 2026-10-05
 - New `today_new_limit` option, off by default. It raises a deck's new card limit for the day to fit the priority queue, using Anki's Today only limit, so your preset stays as it is. It keeps up with reorders until you study your first new card of the day, then holds. See config.md.
